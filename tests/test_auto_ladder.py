@@ -38,11 +38,22 @@ class AutoLadderTests(unittest.TestCase):
         levels=make_plan(BASE,1300)
         self.assertEqual([(l.trigger,l.quantity) for l in levels if l.side=='BUY'],
                          [(1323.25,100),(1346.50,100),(1369.75,100),(1393.00,100)])
-    def test_final_limit_no_more_than_half_percent_below_strike(self):
+    def test_each_buy_limit_two_percent_above_its_trigger(self):
         levels=make_plan(BASE,1300)
-        self.assertEqual(levels[-2].trigger,1393.0)
-        self.assertEqual(levels[-2].limit,1393.0)
-        self.assertTrue(all(v.limit<=1393.0 for v in levels if v.side=='BUY'))
+        buys=[v for v in levels if v.side=='BUY']
+        self.assertEqual([v.trigger for v in buys],[1323.25,1346.50,1369.75,1393.0])
+        self.assertEqual([v.limit for v in buys],[1349.75,1373.45,1397.15,1420.90])
+        # Only the trigger is required to be 0.5% below the CE strike.
+        self.assertEqual(buys[-1].trigger,1393.0)
+        self.assertGreater(buys[-1].limit,BASE['strike'])
+
+    def test_buy_limit_is_fixed_and_sell_buffer_still_configurable(self):
+        from logic import price_limit
+        cfg={**BASE,'limit_buffer_pct':0.1}
+        plan=make_plan(cfg,1300)
+        self.assertEqual([x.limit for x in plan if x.side=='BUY'],
+                         [1349.75,1373.45,1397.15,1420.90])
+        self.assertEqual(plan[-1].limit,price_limit(1280,'SELL',0.05,0.1))
     def test_profit_ceiling_and_strict_50_percent_advisory(self):
         self.assertEqual(projected_profit(BASE),36750.0)
         below=profit_advisory(BASE,18375.0)

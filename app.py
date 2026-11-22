@@ -9,14 +9,14 @@ from dotenv import load_dotenv
 from kiteconnect import KiteConnect
 from store import ROOT, read, write, settings, log
 from broker import kite, snapshot
-from logic import validate, make_plan, ladder, final_buy_price, projected_profit, profit_advisory
+from logic import validate, make_plan, ladder, final_buy_price, projected_profit, profit_advisory, BUY_LIMIT_BUFFER_PCT, price_limit
 from manager import ready,stage_live,stop_and_cancel,fingerprint
 
 load_dotenv(ROOT/'.env')
 IST=ZoneInfo('Asia/Kolkata')
 st.set_page_config(page_title='Kite Trade Manager V4',page_icon='📈',layout='centered')
 st.title('Kite Trade Manager')
-st.caption('V4 · Last BUY 0.5% below CE · 50% profit advisory · Free Kite Personal API · Your first cash BUY and short CE are manual · Windows PC')
+st.caption('V4.1 · Last BUY trigger 0.5% below CE · BUY limits +2% · 50% profit advisory · Free Kite Personal API · Windows PC')
 st.warning('A short call can remain partially uncovered. GTTs are NOT guaranteed fills; delivery/expiry and losses must be managed in Kite. This is an unverified pilot, not a live-ready release.',icon='⚠️')
 cfg=settings()
 state=read('runtime.json',{}) or {}
@@ -120,7 +120,8 @@ with rules:
         downsell=b.number_input('Sell shares at downside',min_value=1,value=int(cfg['down_sell_qty']))
         a,b=st.columns(2)
         tick=a.number_input('NSE price tick size ₹',min_value=.01,value=float(cfg['tick_size']),step=.01,format='%.2f')
-        buffer=b.number_input('GTT limit slippage buffer %',min_value=.1,max_value=2.0,value=float(cfg['limit_buffer_pct']),step=.1)
+        buffer=b.number_input('Downside SELL limit buffer %',min_value=.1,max_value=2.0,value=float(cfg['limit_buffer_pct']),step=.1)
+        st.caption(f'Every BUY GTT uses a fixed +{BUY_LIMIT_BUFFER_PCT:.0f}% limit above its trigger (rounded UP to a valid tick). This is NOT a guarantee of execution.')
         mode=st.radio('Execution mode',['PAPER','LIVE'],index=['PAPER','LIVE'].index(cfg['mode']),horizontal=True)
         save=st.form_submit_button('Save rules',disabled=active,use_container_width=True)
     if save:
@@ -147,12 +148,14 @@ with rules:
         st.write('**Automatically calculated buy ladder**')
         st.caption(f'{cfg["max_shares"]-cfg["initial_shares"]} remaining shares · first average ₹{cfg["base_price"]:,.2f} · strike ₹{cfg["strike"]:,.2f} · final buy ₹{final_buy_price(cfg):,.2f}')
         for i,p,q in ladder(cfg):
-            st.write(f'₹{p:,.2f} → BUY {q} {cfg["stock_symbol"]}')
+            limit=price_limit(p,'BUY',cfg['tick_size'],BUY_LIMIT_BUFFER_PCT)
+            st.write(f'₹{p:,.2f} → BUY {q} {cfg["stock_symbol"]} (LIMIT up to ₹{limit:,.2f})')
         st.write(f'₹{cfg["down_price"]:,.2f} → SELL {cfg["down_sell_qty"]} shares; cancel remaining buys and require review')
         gross=projected_profit(cfg)
         st.metric('Projected full-lot gross profit at strike (conditional)',money(gross))
         st.metric('Consider Booking Profit when combined P&L >',money(gross*0.5))
-        st.caption('Illustrative only: strike-price expiry payoff + manually entered call premium, assuming every share buy fills exactly at its trigger. Not a guaranteed maximum while partially uncovered. Costs, slippage and earlier exits change results. BUY order LIMIT prices are capped at the last 0.5%-below-strike level, so fast moves may cause non-fills. API P&L can be stale, so the alert is advisory only; ALL exits remain manual.')
+        st.warning('The final BUY TRIGGER is 0.5% below strike, but its +2% LIMIT may be ABOVE strike. A fill at the limit can reduce covered-call profit. Best available exchange price can be lower; no fill is guaranteed.')
+        st.caption('Projected full-lot profit assumes trigger-price fills, NOT +2% limit-price fills, so it can overstate actual profit. Indicative free-API P&L may be stale; the 50% booking alert is advisory only, and ALL exits remain manual.')
     except Exception as exc:
         st.warning('Complete rules: '+str(exc))
     st.divider()
@@ -183,7 +186,10 @@ with rules:
                 st.table([{'Role':x.role,'Side':x.side,'Trigger':x.trigger,
                            'Qty':x.quantity,'Limit':x.limit} for x in plan])
                 st.caption('Reference Kite LTP: '+money(p['price'])+f'; checked {int(age)} seconds ago. Preview expires in 60 seconds.')
-                tp=st.checkbox('I have authorised equity sells (DDPI/PoA or CDSL TPIN), verified the option lot and expiry, and accept gap/partial-fill risk')
+                last_buy=next((x for x in reversed(plan) if x.side=='BUY'),None)
+                if last_buy and last_buy.limit > float(cfg['strike']):
+                    st.warning(f'IMPORTANT: final BUY trigger ₹{last_buy.trigger:,.2f} has a limit of ₹{last_buy.limit:,.2f}, ABOVE the ₹{float(cfg["strike"]):,.2f} CE strike. This is a maximum allowable price, not the expected fill.')
+                tp=st.checkbox('I have authorised equity sells (DDPI/PoA or CDSL TPIN), verified option lot and expiry, and accept that BUY orders can execute up to 2% ABOVE their triggers (possibly above CE strike), may partially fill or fail')
                 confirm=st.text_input('Type CREATE LIVE GTTS to authorise real broker triggers',key='live_confirm')
                 unlocked=os.getenv('ENABLE_LIVE_GTTS')=='YES_I_ACCEPT_RISK'
                 if not unlocked:

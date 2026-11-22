@@ -131,6 +131,15 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(len(s['owned']),5)
         self.assertEqual(self.k.places,5)
         self.assertEqual([x['trigger'] for x in s['owned']],[1323.25,1346.50,1369.75,1393.00,1280])
+    def test_stage_sends_two_percent_buy_limits_and_old_sell_buffer(self):
+        s=self.stage()
+        self.assertEqual([x['limit'] for x in s['owned'] if x['side']=='BUY'],
+                         [1349.75,1373.45,1397.15,1420.90])
+        self.assertEqual([self.k.gtts[x['id']]['orders'][0]['price']
+                          for x in s['owned'] if x['side']=='BUY'],
+                         [1349.75,1373.45,1397.15,1420.90])
+        self.assertEqual(s['owned'][-1]['limit'],1273.60)
+
     def test_stage_does_not_repeat_existing(self):
         self.stage()
         with self.assertRaises(RuntimeError):self.stage()
