@@ -1,0 +1,25 @@
+.env
+session.json
+settings.json
+runtime.json
+*.lock
+*.tmp
+events.log
+.venv/
+__pycache__/
+.pytest_cache/
+
+# Local credentials, order state, databases, logs and backups must stay on the PC
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.log
+*.pid
+*.bak
+backups/
+backup/
+logs/
+.streamlit/secrets.toml
+.env.*
+!.env.example
