@@ -6,6 +6,11 @@ from zoneinfo import ZoneInfo
 
 IST = ZoneInfo('Asia/Kolkata')
 
+# Fixed BUY execution-protection range. Applied to each GTT trigger, not
+# to the reference LTP supplied when the GTT is first staged. A BUY limit
+# can fill at the best offer up to (and including) this upper bound.
+BUY_LIMIT_BUFFER_PCT = 2.0
+
 @dataclass(frozen=True)
 class Level:
     role: str
@@ -165,10 +170,10 @@ def make_plan(cfg, reference_ltp, today=None):
         raise ValueError('Current LTP must be above downside and below first BUY level. Already crossed? Review manually.')
     tick=float(cfg['tick_size'])
     b=float(cfg['limit_buffer_pct'])
-    # All BUY LIMIT prices are capped at the final 0.5%-below-strike level.
-    # This prevents slippage above the desired ceiling, but increases non-fill risk.
-    cap=final_buy_price(cfg)
-    raw=[Level(f'UP-{i}','BUY',p,qty,min(price_limit(p,'BUY',tick,b),cap)) for i,p,qty in ladder(cfg)]
+    # The last BUY *trigger* stays 0.5% below strike. Its LIMIT, like every
+    # BUY limit, is +2% above its own trigger, tick-rounded upward. This
+    # increases fill probability but may allow a fill ABOVE the call strike.
+    raw=[Level(f'UP-{i}','BUY',p,qty,price_limit(p,'BUY',tick,BUY_LIMIT_BUFFER_PCT)) for i,p,qty in ladder(cfg)]
     raw.append(Level('DOWN','SELL',float(cfg['down_price']),int(cfg['down_sell_qty']),price_limit(cfg['down_price'],'SELL',tick,b)))
     for lv in raw:
         # Zerodha validation: prices > 50: trigger >= 0.25% away from observed LTP.
