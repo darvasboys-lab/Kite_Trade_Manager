@@ -1,7 +1,7 @@
-"""Windows-local, DEMO-only Dhan covered-call strategy chart dashboard.
+"""Sensibull-style covered-call payoff studio: offline-only Windows prototype.
 
-No Dhan credentials, broker writes, service startup, or external network calls.
-The chart is a UI preview, not account P&L or an executable order plan.
+No broker credentials, trading engine imports, server exposure, or order buttons.
+All market data and fills are user-adjustable hypothetical DEMO inputs.
 """
 import sys
 from decimal import Decimal
@@ -11,148 +11,161 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import plotly.graph_objects as go
 import streamlit as st
-from dhan_visual.strategy import Position, plan, current_closeout, expiry_payoff, exposure_after_fills
+from dhan_visual.strategy import Position, plan, exposure_after_fills, current_closeout
+from dhan_visual.payoff import current_expiry_payoff, expiry_breakevens, theoretical_today_payoff
 
-st.set_page_config(page_title="Covered Call | Strategy Studio", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Covered Call | Payoff Studio", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""
 <style>
-.stApp {background: #0c1018; color: #e9eef5;}
-.block-container {padding-top: 1.6rem; max-width: 1380px; padding-bottom: 3rem;}
-h1, h2, h3 {letter-spacing: -0.035em !important;}
-[data-testid="stMetric"] {background:#141b26; border:1px solid #283343; border-radius:15px; padding:18px 19px;}
-[data-testid="stMetricLabel"] {color:#9caec4;}
-[data-testid="stMetricValue"] {color:#f5f8fc;}
-[data-testid="stTabs"] [data-baseweb="tab-list"] {gap:8px;}
-[data-testid="stTabs"] button {background:#141b26; border-radius:10px 10px 0 0;}
-[data-testid="stTabs"] button[aria-selected="true"] {color:#44c9b4; border-bottom: 2px solid #44c9b4;}
-div.stAlert {border-radius: 12px;}
-.hero {border-radius:20px; padding:26px 28px; background:linear-gradient(110deg,#142d35 0%,#131c2b 68%,#101723 100%);border:1px solid #2a4050;margin-bottom:14px;}
-.eyebrow {font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:#55d2c0;font-weight:700;}
-.hero-title {font-size:35px;font-weight:780;letter-spacing:-.04em;margin:7px 0 5px;line-height:1.1;}
-.hero-sub {color:#aebccc;font-size:14px;}
-.tag {display:inline-block;padding:5px 9px;border-radius:8px;background:#24313e;color:#b7efea;font-size:11px;font-weight:700;margin:0 6px 0 0;}
-.mini {color:#8798ab;font-size:12px;}
-hr {border-color:#223042;}
-</style>
-""", unsafe_allow_html=True)
+.stApp {background:#0b111a; color:#e8f1fa}
+.block-container {max-width:1470px; padding-top:1.2rem; padding-bottom:3rem}
+header[data-testid="stHeader"] {background:transparent}
+[data-testid="stMetric"] {background:#151f2c; border:1px solid #29394b; border-radius:15px; padding:16px 18px}
+[data-testid="stMetricLabel"] {color:#8fa5bc}
+[data-testid="stMetricValue"] {font-size:25px; color:#f0f7fe}
+[data-testid="stTabs"] button {font-weight:650; font-size:14px}
+[data-testid="stExpander"] {background:#111b27; border:1px solid #29394b; border-radius:13px}
+.hdr {padding:26px 30px; margin-bottom:15px; background:linear-gradient(115deg,#142c32,#152133 75%,#101823);border:1px solid #294653;border-radius:19px}
+.hdr .kicker {font-size:11px;color:#66d8c9;letter-spacing:.16em;font-weight:800}
+.hdr h1 {margin:4px 0 7px; font-size:36px; font-weight:800;letter-spacing:-.035em}
+.hdr p {color:#9eb2c6; margin:0; font-size:14px}
+.pill {display:inline-block;border:1px solid #44605f;color:#9be3da;border-radius:7px;padding:4px 10px;font-size:11px;font-weight:750;margin:14px 7px 0 0}
+.section-note {font-size:12px; color:#98a9bc; padding-bottom:9px}
+</style>""",unsafe_allow_html=True)
+st.markdown('''<div class="hdr"><span class="kicker">COVERED CALL · STRATEGY ANALYZER</span>
+<h1>Payoff <span style="color:#6ee3d1">Studio</span></h1>
+<p>Position risk, expiry payoff, stage-buy accumulation and 50% profit threshold — all in one workspace.</p>
+<span class="pill">OFFLINE DEMO</span><span class="pill">NO LIVE DHAN DATA</span><span class="pill">NO BROKER ORDERS</span></div>''', unsafe_allow_html=True)
 
-st.markdown('''<div class="hero"><div class="eyebrow">ResultBot technology · New independent strategy</div>
-<div class="hero-title">Covered Call <span style="color:#67d6c7">Strategy Studio</span></div>
-<div class="hero-sub">Search a stock. Discover your manual first batch. Plan the remaining equity buys. Track the entire equity + short-call outcome.</div>
-<div style="margin-top:16px"><span class="tag">DEMO / SIMULATION</span><span class="tag">BUY-ONLY PLANNER</span><span class="tag">NO BROKER ORDERS</span></div></div>''', unsafe_allow_html=True)
+search, manage = st.tabs(["⌕ Search Stock", "▥ Manage Trade"])
 
-search_tab, manage_tab = st.tabs(["⌕  Search Stock", "▥  Manage Trade & Strategy Charts"])
+with search:
+    st.subheader("Search Stock")
+    st.caption("Read-only Dhan stock and option lookup will be integrated here. No quote displayed in this version is live.")
+    symbol = st.text_input("Search NSE F&O symbol",placeholder="Enter symbol (e.g., ABC)")
+    a,b,c=st.columns(3)
+    a.metric("Broker", "Not connected")
+    b.metric("Spot / live BID", "Unavailable")
+    c.metric("Expiry / OTM calls", "Unavailable")
+    if symbol:
+        st.info(f"{symbol.upper()}: awaiting verified Dhan instrument master, option quotes and position-reader integration.")
+    st.warning("The Search Stock tab has no order placement. Your first equity buy and short call remain manual.")
 
-with search_tab:
-    st.subheader("Stock discovery")
-    st.caption("This is a local UI prototype. Stock lookup and live Dhan market data are not yet connected. No quote on this screen is live.")
-    ticker = st.text_input("Search NSE F&O stock", placeholder="Enter a stock symbol to inspect after connecting Dhan", value="", key="ticker")
-    a,b,c = st.columns(3)
-    a.metric("Dhan connection", "Not connected")
-    b.metric("Live stock price", "Not available")
-    c.metric("Available calls / strikes", "Not available")
-    if ticker.strip():
-        st.info(f"{ticker.strip().upper()}: quote, option-chain and contract-size lookup will appear here when the read-only Dhan adapter is verified.")
-    st.markdown("**Planned live discovery:** Dhan holdings + current-day positions + trade history + instrument master + timestamp-verified quote feed. Positions will require review before activation.")
-
-with manage_tab:
-    st.info("SIMULATION ONLY · Numbers below are editable sample inputs, NOT your Dhan holdings, live quotes, confirmed fills or trading instructions.", icon="🧪")
-    with st.expander("Strategy assumptions and inputs", expanded=True):
-        a,b,c,d = st.columns(4)
-        manual_avg = a.number_input("Manual first-batch average (₹)", min_value=0.05, max_value=1000000.0, value=1000.0, step=1.0)
-        manual_shares = b.number_input("Manual shares owned", min_value=1, max_value=1000000, value=100, step=1)
-        strike = c.number_input("Sold CALL strike (₹)", min_value=0.05, max_value=1000000.0, value=1200.0, step=1.0)
-        option_qty = d.number_input("Shares in short call(s)", min_value=1, max_value=1000000, value=500, step=1)
-        e,f,g,h = st.columns(4)
-        batch_count = e.selectbox("Automatic buying batches", list(range(1,21)), index=2)
-        premium = f.number_input("Total call premium received (₹)", min_value=0.01, value=10000.0, step=100.0)
-        tick = g.number_input("Stock tick size (₹)", min_value=0.01, value=0.05, format="%.2f", step=0.01)
-        estimated_costs = h.number_input("Est. total expenses (₹)", min_value=0.0, value=0.0, step=50.0)
+with manage:
+    st.info("DEMO ONLY: Example positions and quotes are simulated. No Dhan account is connected; no order can be placed.")
+    with st.expander("Edit example position & scenario inputs",expanded=True):
+        p1,p2,p3,p4=st.columns(4)
+        avg=p1.number_input("First MANUAL batch average (₹)",min_value=0.05,value=1000.0,step=1.0)
+        qty=p2.number_input("Manually owned shares",min_value=1,value=100,step=1)
+        strike=p3.number_input("Short CALL strike (₹)",min_value=0.05,value=1200.0,step=1.0)
+        contract=p4.number_input("Total short-call shares",min_value=1,value=500,step=1)
+        q1,q2,q3,q4=st.columns(4)
+        batches=q1.selectbox("Auto buying batches",options=list(range(1,21)),index=2)
+        premium=q2.number_input("Actual call credit (DEMO ₹)",min_value=0.01,value=10000.0,step=100.0)
+        tick=q3.number_input("Stock tick size (₹)",min_value=0.01,value=0.05,step=0.01,format="%.2f")
+        full_costs=q4.number_input("Expected total strategy costs (₹)",min_value=0.0,value=0.0,step=25.0)
 
     try:
-        position = Position(Decimal(str(manual_avg)), int(manual_shares), Decimal(str(strike)),
-                            int(option_qty), Decimal(str(premium)), Decimal(str(tick)))
-        result = plan(position, int(batch_count), estimated_costs)
+        position=Position(Decimal(str(avg)),int(qty),Decimal(str(strike)),int(contract),Decimal(str(premium)),Decimal(str(tick)))
+        pv=plan(position,int(batches),full_costs)
     except ValueError as exc:
-        st.error(f"Plan unavailable: {exc}. Please correct the illustrative inputs.")
+        st.error(f"No valid buying schedule: {exc}")
         st.stop()
 
-    st.markdown("### Strategy overview")
-    a,b,c,d = st.columns(4)
-    a.metric("Manual purchase average", f"₹{manual_avg:,.2f}")
-    b.metric("Final buying trigger", f"₹{float(result.final_trigger):,.2f}", help="No closer than 0.5% below the sold call strike")
-    c.metric("Shares left to accumulate", f"{result.remaining:,}")
-    d.metric("Buying intervals", f"{batch_count} batches")
+    with st.expander("Hypothetical market prices & fill progress",expanded=True):
+        a,b,c,d=st.columns(4)
+        spot=a.number_input("Stock BID / indicative spot (₹)",min_value=0.05,value=1100.0,step=1.0)
+        option_ask=b.number_input("Short call buyback ASK (₹ per share)",min_value=0.0,value=18.0,step=1.0)
+        done=c.slider("Simulated completed auto batches",min_value=0,max_value=len(pv.stages),value=0)
+        exit_cost=d.number_input("Costs to close NOW (₹)",min_value=0.0,value=0.0,step=25.0)
 
-    st.markdown("### Market & strategy P&L scenario")
-    a,b,c,d = st.columns(4)
-    stock_bid = a.number_input("Illustrative stock BID / CMP (₹)", min_value=0.05, max_value=1000000.0, value=1100.0, step=1.0)
-    call_ask = b.number_input("Illustrative call buyback ASK (₹/share)", min_value=0.0, max_value=1000000.0, value=18.0, step=1.0)
-    filled = c.slider("Simulated completed automatic batches", min_value=0, max_value=len(result.stages), value=0)
-    closing_costs = d.number_input("Estimated closeout expenses (₹)", min_value=0.0, value=0.0, step=50.0)
-    owned, paid = exposure_after_fills(position, result, filled)
-    remaining = option_qty - owned
-    indicative_pnl = current_closeout(position, result, filled, stock_bid, call_ask, closing_costs)
-    total_unfilled_at_trigger = sum(s.shares*s.trigger for s in result.stages[filled:])
-    current_target = result.profit_target
-    a,b,c,d = st.columns(4)
-    a.metric("Indicative combined closeout P&L", f"₹{indicative_pnl:,.2f}", help="Simulated stock BID minus paid cash plus collected option premium minus option buyback ASK × short quantity minus costs")
-    b.metric("Conditional payoff at strike", f"₹{result.projected_profit_at_strike:,.2f}", help="Hypothetical net payoff if all remaining purchases fill at planned trigger prices and call reaches expiry")
-    c.metric("50% profit threshold", f"₹{current_target:,.2f}")
-    d.metric("Additional cash at planned triggers", f"₹{total_unfilled_at_trigger:,.2f}")
-    if remaining > 0:
-        st.warning(f"Coverage gap: {remaining:,} shares remain against the short call. The position is NOT fully covered and can have substantial losses or delivery obligations. Simulation is not an execution guarantee.")
-    else:
-        st.success("The simulated equity share count matches the short-call quantity. Confirm actual positions separately with Dhan.")
-    if indicative_pnl >= current_target:
-        st.info("DEMO 50% TARGET CROSSED · This is not a live trade alert. Actual profit booking remains manual and requires verified quotes, fills and costs.")
+    shares, invested=exposure_after_fills(position,pv,done)
+    closeout=current_closeout(position,pv,done,spot,option_ask,exit_cost)
+    remaining=contract-shares
+    future_cash=sum(stage.shares*stage.trigger for stage in pv.stages[done:])
+    target=pv.profit_target
+    be=expiry_breakevens(position,pv,done,full_costs)
 
-    st.markdown("### Strategy price chart")
-    st.caption("Step curve shows total shares AFTER simulated fill at each trigger. Dashed spot line shows the editable illustrative stock price, not a live feed.")
-    steps = [(float(position.manual_avg), manual_shares)]
-    cumulative = manual_shares
-    for stage in result.stages:
-        cumulative += stage.shares
-        steps.append((float(stage.trigger), cumulative))
-    x = [p[0] for p in steps]
-    y = [p[1] for p in steps]
-    ladder_chart = go.Figure()
-    ladder_chart.add_trace(go.Scatter(x=x, y=y, mode="lines+markers+text", line=dict(color="#59d5be", width=3, shape="hv"),
-             marker=dict(size=10, color="#8ae7d6"), text=["Manual"]+[f"B{i}" for i in range(1,len(steps))], textposition="top center", name="Projected shares"))
-    ladder_chart.add_hline(y=option_qty, line_dash="dot", line_color="#7e91af", annotation_text="Call lot coverage")
-    ladder_chart.add_vline(x=float(strike), line_dash="dot", line_color="#e6a85c", annotation_text="Call strike")
-    ladder_chart.add_vline(x=float(stock_bid), line_dash="dash", line_color="#9ea7fa", annotation_text="Illustrative CMP")
-    ladder_chart.update_layout(template="plotly_dark", paper_bgcolor="#101824", plot_bgcolor="#101824", height=390,
-             margin=dict(l=12,r=12,b=16,t=35), xaxis_title="Underlying stock price (₹)", yaxis_title="Shares held after stage fill",
-             showlegend=False, font=dict(color="#aebfd0"), hovermode="x unified")
-    st.plotly_chart(ladder_chart, use_container_width=True)
+    a,b,c,d=st.columns(4)
+    a.metric("Current closeout P&L · DEMO",f"₹{closeout:,.0f}",help="Simulated stock BID and option buyback ASK after current shares' assumed fills and closeout costs")
+    b.metric("Conditional capped payoff",f"₹{pv.projected_profit_at_strike:,.0f}",help="Only if all remaining shares fill at planned prices and call payoff is assessed at expiry")
+    c.metric("50% booking target",f"₹{target:,.0f}")
+    d.metric("Shares / contract",f"{shares:,} / {contract:,}")
 
-    st.markdown("### Conditional expiry profit profile")
-    st.caption("Assumes ALL planned equity batches fill at their triggers and the short call is held to expiry. Not a prediction of stock price or today's option value.")
-    lo = max(float(position.manual_avg)*0.75, float(position.strike)*0.6)
-    hi = max(float(position.strike)*1.25, float(position.manual_avg)*1.3)
-    px = [lo+(hi-lo)*i/120 for i in range(121)]
-    py = [float(expiry_payoff(position, result, q, estimated_costs)) for q in px]
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=px, y=py, mode="lines", name="Conditional P&L at expiry", line=dict(color="#59d5be",width=3), fill="tozeroy", fillcolor="rgba(89,213,190,0.09)"))
-    fig.add_hline(y=0, line_color="#6c778b", line_width=1)
-    fig.add_hline(y=float(current_target), line_dash="dash", line_color="#f0b66d", annotation_text="50% profit target")
-    fig.add_vline(x=float(strike), line_dash="dot", line_color="#e6a85c", annotation_text="Call strike")
-    fig.update_layout(template="plotly_dark", paper_bgcolor="#101824", plot_bgcolor="#101824", height=370,
-                      margin=dict(l=12,r=12,b=16,t=35), xaxis_title="Hypothetical expiry stock price (₹)",
-                      yaxis_title="Strategy payoff (₹)", showlegend=False, font=dict(color="#aebfd0"), hovermode="x unified")
-    st.plotly_chart(fig, use_container_width=True)
+    payoff_tab, stage_tab, details_tab = st.tabs(["▤ Payoff Graph", "▦ Buy Stages", "☷ Position Details"])
+    with payoff_tab:
+        left,right=st.columns([3,1],gap="large")
+        with right:
+            st.markdown("#### Chart controls")
+            model_today=st.checkbox("Show theoretical today",value=True)
+            show_current=st.checkbox("Show current-position expiry",value=True)
+            show_target=st.checkbox("Show 50% threshold",value=True)
+            iv=st.slider("Model IV (%)",5,120,28,1,disabled=not model_today)
+            dte=st.slider("Days to expiry (model)",0,180,21,1,disabled=not model_today)
+            st.caption("Theoretical today uses Black–Scholes with an illustrative volatility and 6% annual risk-free rate. It is NOT a broker option quote or a guaranteed current P&L curve.")
+            if remaining:
+                st.error(f"UNCOVERED: {remaining:,} short-call shares. Current expiry loss can grow as the stock rises.")
+            else:
+                st.success("Simulated share quantity matches short-call quantity; actual coverage still unverified.")
+            if closeout >= target:
+                st.warning("DEMO target exceeded. This is not a live notification or sell signal.")
+        with left:
+            st.markdown("### Strategy payoff")
+            st.caption("X = hypothetical underlying price · Y = combined profit/loss. Solid = conditional fully covered at expiry; dashed = current shares at expiry.")
+            lo=max(0.05,min(float(avg),float(spot),float(strike))*0.60)
+            hi=max(float(strike),float(spot),float(avg))*1.50
+            xs=[lo+(hi-lo)*i/240 for i in range(241)]
+            ys=[float(current_expiry_payoff(position,pv,done,x,full_costs)) for x in xs]
+            conditional=[float(current_expiry_payoff(position,pv,len(pv.stages),x,full_costs)) for x in xs]
+            chart=go.Figure()
+            chart.add_trace(go.Scatter(x=xs,y=[max(y,0) for y in conditional],mode="lines",line=dict(width=0),fill="tozeroy",fillcolor="rgba(37,181,129,.16)",showlegend=False,hoverinfo="skip"))
+            chart.add_trace(go.Scatter(x=xs,y=[min(y,0) for y in conditional],mode="lines",line=dict(width=0),fill="tozeroy",fillcolor="rgba(238,92,105,.17)",showlegend=False,hoverinfo="skip"))
+            chart.add_trace(go.Scatter(x=xs,y=conditional,mode="lines",line=dict(color="#42d7a5",width=3.6),name="Full coverage · expiry",hovertemplate="Stock ₹%{x:,.2f}<br>Planned P&L ₹%{y:,.0f}<extra></extra>"))
+            if show_current:
+                chart.add_trace(go.Scatter(x=xs,y=ys,mode="lines",line=dict(color="#9b9dff",width=2.8,dash="dash"),name="Current position · expiry",hovertemplate="Stock ₹%{x:,.2f}<br>Current position expiry P&L ₹%{y:,.0f}<extra></extra>"))
+            if model_today:
+                today=[float(theoretical_today_payoff(position,pv,done,max(x,0.01),iv,dte)) for x in xs]
+                chart.add_trace(go.Scatter(x=xs,y=today,mode="lines",line=dict(color="#f7bd68",width=2.0,dash="dot"),name="Modelled today · hypothetical",hovertemplate="Stock ₹%{x:,.2f}<br>Modelled P&L ₹%{y:,.0f}<extra></extra>"))
+            chart.add_trace(go.Scatter(x=[spot],y=[float(closeout)],mode="markers",marker=dict(color="#ffffff",size=12,line=dict(color="#2f3545",width=3)),name="Current input quote P&L",hovertemplate="Input stock BID ₹%{x:,.2f}<br>Input closeout P&L ₹%{y:,.0f}<extra></extra>"))
+            chart.add_hline(y=0,line_color="#8291a5",line_width=1.2)
+            chart.add_vline(x=float(strike),line_color="#ffca79",line_dash="dot",annotation_text="Short call strike",annotation_position="top right")
+            chart.add_vline(x=float(spot),line_color="#90c8fa",line_dash="dot",annotation_text="Input stock price",annotation_position="top left")
+            if show_target:
+                chart.add_hline(y=float(target),line_color="#ffd184",line_dash="dash",annotation_text="50% target",annotation_position="top right")
+            for i,val in enumerate(be.planned_expiry):
+                if lo<=float(val)<=hi:
+                    chart.add_vline(x=float(val),line_dash="dash",line_color="#35bb96",opacity=.55)
+            chart.update_layout(template="plotly_dark",height=500,margin=dict(l=12,r=12,t=28,b=12),paper_bgcolor="#111a27",plot_bgcolor="#111a27",font=dict(color="#a9bacd"),legend=dict(orientation="h",yanchor="bottom",y=1.02,x=0,font=dict(size=11)),xaxis_title="Underlying stock price (₹)",yaxis_title="P&L (₹)",hovermode="x unified")
+            chart.update_xaxes(showgrid=True,gridcolor="#223142",zeroline=False)
+            chart.update_yaxes(showgrid=True,gridcolor="#223142",zeroline=False,tickformat=",")
+            st.plotly_chart(chart,use_container_width=True)
+            st.caption("The coloured curve assumes every pending equity order fills at its planned trigger before expiry. Unfilled stages are **not** owned. Options mark-to-market can differ from the theoretical model; current P&L above is based only on your editable sample BID/ASK.")
 
-    st.markdown("### Complete buying plan")
-    stages = [{"Batch":"Initial · Manual", "Trigger price (₹)": f"{manual_avg:,.2f}",
-               "Shares":manual_shares,"Est. purchase (₹)":f"{manual_avg*manual_shares:,.2f}","Simulated status":"Already purchased"}]
-    for stage in result.stages:
-        stages.append({"Batch":f"Auto {stage.index}", "Trigger price (₹)":f"{stage.trigger:,.2f}",
-             "Shares":stage.shares,"Est. purchase (₹)":f"{stage.trigger*stage.shares:,.2f}",
-             "Simulated status":"Filled (demo)" if stage.index <= filled else "Planned (demo)"})
-    st.dataframe(stages, use_container_width=True, hide_index=True)
-    a,b,c = st.columns(3)
-    a.metric("Simulated equity shares", f"{owned:,} / {option_qty:,}")
-    b.metric("Simulated equity invested", f"₹{paid:,.2f}")
-    c.metric("Reference price gap / batch", f"₹{result.price_interval:,.2f}")
-    st.caption("No order buttons are present in this preview. Live Dhan integration will require account-specific identity checks, tradebook reconciliation, durable per-batch fills, real-time source timestamps, execution safety gates, and explicit activation.")
+    with stage_tab:
+        st.markdown("### Buying-stage map")
+        st.caption("The first batch is manually bought. The selected number of **automatic** batches divide the remaining price difference up to 0.5% below strike.")
+        a,b,c,d=st.columns(4)
+        a.metric("Original average",f"₹{avg:,.2f}")
+        b.metric("Final trigger",f"₹{pv.final_trigger:,.2f}")
+        c.metric("Price interval",f"₹{pv.price_interval:,.2f}")
+        d.metric("Remaining planned cash",f"₹{future_cash:,.0f}")
+        staged=[{"Batch":"First · MANUAL","Trigger":"—","Avg / target (₹)":f"{avg:,.2f}","Shares":qty,"Estimated cost (₹)":f"{avg*qty:,.2f}","Status":"Manual first buy (demo)"}]
+        for s in pv.stages:
+            staged.append({"Batch":f"Automatic {s.index}","Trigger":f"₹{s.trigger:,.2f}","Avg / target (₹)":f"{s.trigger:,.2f}","Shares":s.shares,"Estimated cost (₹)":f"{s.trigger*s.shares:,.2f}","Status":"Filled (demo)" if s.index<=done else "Pending (demo)"})
+        st.dataframe(staged,hide_index=True,use_container_width=True)
+        st.progress(min(shares/contract,1.0),text=f"Simulated coverage {shares}/{contract} shares ({shares/contract:.0%})")
+        st.warning("A price trigger is NOT a guarantee that the order fills. Production activation requires Dhan order/holding reconciliation, risk checks and duplicate-buy protection.")
+
+    with details_tab:
+        st.markdown("### Position economics")
+        r1,r2,r3=st.columns(3)
+        r1.metric("Initial manual equity cost",f"₹{pv.initial_cost:,.0f}")
+        r2.metric("Simulated equity invested",f"₹{invested:,.0f}")
+        r3.metric("Projected total equity cost",f"₹{pv.projected_all_in_cost:,.0f}")
+        r4,r5,r6=st.columns(3)
+        r4.metric("Call premium credit",f"₹{premium:,.0f}")
+        r5.metric("Input short-call buyback",f"₹{option_ask*contract:,.0f}")
+        r6.metric("Current expiry breakevens",", ".join(f"₹{v:,.2f}" for v in be.current_expiry) or "None in range")
+        st.markdown("**Conditional fully covered expiry breakeven:** " + (", ".join(f"₹{v:,.2f}" for v in be.planned_expiry) or "No positive breakeven below strike"))
+        st.warning("The partially uncovered short-call exposure can have substantial downside and upside risk. The conditional profit cap only applies if all required shares actually fill. Profit target is an advisory; no closing order is ever sent.")
+        st.caption("Before any future Dhan connection, reconcile original first-batch fills, options transaction credit, expiry/lot size, holdings and today's tradebook, mark-data freshness, account funds and service isolation from ResultBot.")

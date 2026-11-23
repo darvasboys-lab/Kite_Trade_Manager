@@ -27,3 +27,16 @@ This separate module is a **read-only DEMO** within the existing Kite Trade Mana
 - The hypothetical expiry curve is a conditional scenario only, not the actual position payoff before planned buys fill; quote- and fill-verified current P&L is a separate calculation.
 - No live pricing or option chain exists until Dhan's feed and instrument master are wired in and independently validated.
 - No Kite GTT, Kite account, or ResultBot VM changes are made by this module.
+
+
+## Payoff Studio V2 — options-strategy-analyzer-style graph
+
+The default launcher (`run_dhan_preview.bat`) launches `dhan_visual/app.py`.
+
+- Primary chart plots hypothetical underlying price against combined P&L with solid **fully covered conditional expiry** payoff, dashed **existing shares + current short-call expiry** payoff, and optional dotted **theoretical current-date** curve (Black–Scholes IV and days-to-expiry assumptions).
+- Shaded green/red profit/loss regions apply to the hypothetical **fully covered conditional expiry** curve, not the actual partially uncovered position.
+- Vertical price markers show entered stock price and short-call strike. The planned expiry breakeven is marked. Horizontal guides show zero P&L and the 50% profit threshold.
+- A separate marker shows indicative **current closeout P&L** based on the user's own entered stock BID and option buyback ASK. The theoretical today curve can differ from this quote point: it is not calibrated to the market and is NOT live data.
+- **Buy Stages** lists quantities, triggers, estimated remaining investment, and simulated fill status. **Position Details** shows original investment, conditional all-in equity cost, call premium, buyback estimate and two-sided breakevens for the partially uncovered case.
+- No broker connection or order execution is present. No service restarts, live strategy activation, or changes to Kite `app.py` or working ResultBot.
+- Verification: `py -m unittest discover -s tests -p "test_dhan_*.py" -v`; GitHub CI also runs the standalone tests across Python versions. The live browser rendering must still be checked on Windows.
