@@ -345,7 +345,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
         self.assertFalse(app.exception,[str(x.message) for x in app.exception])
         frame=app.dataframe[0].value
         tcs=frame.loc[frame["Symbol"]=="TCS"].iloc[0]
-        self.assertEqual(tcs["EMA 200"],"✅ ₹99.00")
+        self.assertEqual(tcs["EMA 200"],"☑ ₹99.00")
         self.assertEqual(tcs["EMA 50"],"—")
         self.assertEqual(tcs["EMA 20"],"—")
         self.assertEqual(tcs["Monthly R1"],"—")
@@ -355,7 +355,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
         self.assertEqual(
             app.dataframe[0].value.loc[
                 app.dataframe[0].value["Symbol"]=="TCS", "EMA 50"
-            ].iloc[0], "✅ ₹100.00"
+            ].iloc[0], "☑ ₹100.00"
         )
         self.assertEqual(
             app.dataframe[0].value.loc[
@@ -447,7 +447,14 @@ class PayoffStudioStartupTests(unittest.TestCase):
 
     def test_no_manual_list_upload_or_50_stock_hard_cap(self):
         source = (APP.parent / "screener_ui.py").read_text(encoding="utf-8")
-        self.assertNotIn("file_uploader", source)
+        # No manual stock-list upload: the optional uploader is ONLY for
+        # a user-provided NSE daily derivatives (option premium) report.
+        list_loader = source.split("def _auto_universe():", 1)[1].split(
+            "@st.cache_resource\ndef _market_pool()", 1
+        )[0]
+        self.assertNotIn("file_uploader", list_loader)
+        self.assertEqual(source.count("st.file_uploader("), 1)
+        self.assertIn("NSE F&O daily ZIP or CSV", source)
         self.assertNotIn("First 50 stocks", source)
         self.assertIn("load_fast_catalogue", source)
         self.assertIn("load_yahoo_all", source)
