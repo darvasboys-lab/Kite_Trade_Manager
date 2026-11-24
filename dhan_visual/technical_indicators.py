@@ -160,6 +160,8 @@ def format_level(level: Decimal | None, cmp: float | None) -> str:
         price = Decimal(str(cmp))
         if not price.is_finite() or price <= 0:
             return f"— ₹{level:,.2f}"
-        return f"{'✓' if price > level else '✕'} ₹{level:,.2f}"
+        # A green check is an affirmative signal ONLY. An at/below-CMP
+        # level stays neutral (no red cross or misleading negative badge).
+        return f"✅ ₹{level:,.2f}" if price > level else f"₹{level:,.2f}"
     except (ValueError, TypeError, ArithmeticError):
         return f"— ₹{level:,.2f}"
