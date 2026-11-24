@@ -13,8 +13,8 @@ import os
 import pandas as pd
 import streamlit as st
 
-from dhan_visual.dhan_market import DhanDataError, fetch_dhan_ltp
-from dhan_visual.fast_universe import load_fast_catalogue
+from dhan_visual.dhan_market import DhanDataError, DhanUnderlying, fetch_dhan_ltp
+from dhan_visual.fast_universe import load_fast_catalogue, resolve_equity_ids, _write_cache
 from dhan_visual.screener import choose_expiry, expiry_options, fetch_yahoo_quotes, screen_rows
 
 
@@ -142,26 +142,63 @@ def _fetch_prices(source, available):
             key="fno_dhan_batch",
             help="The entire F&O universe normally fits in one Dhan 1000-security market quote request.",
         )
+        # If the small official NSE lot CSV was sufficient for the list,
+        # it has no Dhan NSE_EQ IDs. Resolve those only when prices are asked for.
+        cached_ids = st.session_state.get("fno_resolved_cash_ids") or {}
+        available = [
+            DhanUnderlying(x.entry, cached_ids.get(x.entry.symbol, x.equity_security_id))
+            for x in available
+        ]
         if st.session_state.pop("fno_refresh_requested", False):
             if not cid.strip() or not token.strip():
                 st.warning("Enter your Dhan ID and access token to fetch market prices.")
             else:
+                if any(x.equity_security_id <= 0 for x in available):
+                    with st.spinner("Finding Dhan cash-equity IDs automatically (no upload)..."):
+                        try:
+                            ids = resolve_equity_ids()
+                            cached_ids = {**cached_ids, **ids}
+                            st.session_state["fno_resolved_cash_ids"] = cached_ids
+                            available = [
+                                DhanUnderlying(x.entry, ids.get(x.entry.symbol, x.equity_security_id))
+                                for x in available
+                            ]
+                            # Persist *public* IDs beside the validated NSE lot data.
+                            original = st.session_state.get("fno_universe_data")
+                            if original:
+                                original_items, old_source = original
+                                updated = [
+                                    DhanUnderlying(x.entry, ids.get(x.entry.symbol, x.equity_security_id))
+                                    for x in original_items
+                                ]
+                                source_label = "NSE lots + verified Dhan NSE_EQ cash IDs"
+                                _write_cache(updated, source_label)
+                                st.session_state["fno_universe_data"] = (updated, source_label)
+                        except DhanDataError as exc:
+                            st.error(f"Dhan equity ID lookup failed: {exc}. "
+                                     "The F&O stock list and Yahoo backup remain available.")
                 by_id = stored.get("ids", {})
                 previous = stored.get("quotes", {})
+                eligible = [x for x in available if x.equity_security_id > 0]
                 if control == "All stocks":
-                    requested, carry = available, False
+                    requested, carry = eligible, False
                 else:
-                    remaining = [row for row in available
-                                 if row.entry.symbol not in previous
-                                 or by_id.get(row.entry.symbol) != row.equity_security_id]
+                    remaining = [
+                        x for x in eligible
+                        if x.entry.symbol not in previous
+                        or by_id.get(x.entry.symbol) != x.equity_security_id
+                    ]
                     requested = remaining[:100 if "100" in control else 250]
                     carry = True
-                if not requested:
-                    st.info("All symbols in this expiry already have prices. Choose All stocks to refresh.")
-                elif any(row.equity_security_id <= 0 for row in requested):
-                    st.error("Verified NSE_EQ IDs unavailable; refresh the automatic Dhan instrument list.")
+                if not eligible:
+                    st.warning(
+                        "No Dhan NSE_EQ security IDs are currently verified. "
+                        "Prices cannot be requested from Dhan; switch to Yahoo backup."
+                    )
+                elif not requested:
+                    st.info("All eligible symbols already have prices. Use All stocks to refresh.")
                 else:
-                    with st.spinner(f"Fetching {len(requested)} Dhan equity market prices..."):
+                    with st.spinner(f"Fetching {len(requested)} Dhan cash-stock prices..."):
                         try:
                             result, errors = fetch_dhan_ltp(requested, cid, token)
                         except DhanDataError as exc:
@@ -169,17 +206,19 @@ def _fetch_prices(source, available):
                         oldquotes = dict(previous) if carry else {}
                         oldquotes.update(result)
                         oldids = dict(by_id) if carry else {}
-                        oldids.update({row.entry.symbol: row.equity_security_id for row in requested})
+                        oldids.update({x.entry.symbol: x.equity_security_id for x in requested})
                         stored = {
                             "quotes": oldquotes, "ids": oldids,
                             "errors": errors, "fingerprint": fingerprint,
                             "requested_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
                         }
                         st.session_state["fno_dhan_snapshot"] = stored
-        prices = {r.entry.symbol: stored.get("quotes", {})[r.entry.symbol]
-                  for r in available if
-                  r.entry.symbol in stored.get("quotes", {}) and
-                  stored.get("ids", {}).get(r.entry.symbol) == r.equity_security_id}
+        prices = {
+            item.entry.symbol: stored.get("quotes", {})[item.entry.symbol]
+            for item in available
+            if item.entry.symbol in stored.get("quotes", {})
+            and stored.get("ids", {}).get(item.entry.symbol) == item.equity_security_id
+        }
         st.caption("Dhan NSE_EQ LTP snapshot · requested "
                    + stored.get("requested_at", "not yet")
                    + " · a snapshot is not an exchange last-trade timestamp.")
@@ -218,8 +257,8 @@ def _fetch_prices(source, available):
 def render_screener():
     st.subheader("Stock F&O Screener")
     st.caption(
-        "Complete NSE stock F&O lot list loads automatically · "
-        "Dhan prices by default, Yahoo Finance optional backup · "
+        "NSE stock F&O lots load automatically, even without Dhan credentials. "
+        "Dhan equity IDs are fetched only when prices are requested; Yahoo is backup. "
         "Contract value = stock price × selected-expiry lot size."
     )
     universe = _auto_universe()
