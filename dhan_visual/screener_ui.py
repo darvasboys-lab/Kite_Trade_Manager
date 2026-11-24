@@ -546,6 +546,10 @@ def _free_ce5_panel(expiry, dhan_count=0):
             "[Open official NSE derivatives reports]"
             "(https://www.nseindia.com/all-reports-derivatives)"
         )
+        st.button(
+            "↻ Check Downloads again", key="fno_ce5_recheck_downloads",
+            help="Recheck your Windows Downloads folder for an NSE official daily F&O report.",
+        )
         uploaded = st.file_uploader(
             "Optional: choose NSE F&O daily ZIP or CSV",
             type=["zip", "csv"],
