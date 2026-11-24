@@ -27,6 +27,13 @@ def _straddle_pool():
     return ThreadPoolExecutor(max_workers=2, thread_name_prefix="dhan-straddle-scan")
 
 
+def available_otm_calls(available, expiry: str) -> dict:
+    """Read valid +5% CE snapshots without new option-chain calls."""
+    history = st.session_state.get("fno_straddle_snapshots") or {}
+    snap = history.get(_scan_key(available, expiry)) or {}
+    return snap.get("otm_calls") or {}
+
+
 def _scan_key(available, expiry: str) -> str:
     symbols = "|".join(sorted(
         f"{x.entry.symbol}:{x.entry.lots[expiry]}"
@@ -35,9 +42,10 @@ def _scan_key(available, expiry: str) -> str:
     return sha256((expiry + "|" + symbols).encode()).hexdigest()
 
 
-def straddle_dataframe(rows) -> pd.DataFrame:
+def straddle_dataframe(rows, otm_calls=None) -> pd.DataFrame:
     """Sort numeric percentages descending; no lexicographic percentage strings."""
     ranked = rank_straddles(rows)
+    otm_calls = otm_calls or {}
     return pd.DataFrame([
         {
             "Rank": index,
@@ -51,6 +59,10 @@ def straddle_dataframe(rows) -> pd.DataFrame:
             "Gross credit/lot (₹)": float(item.gross_lot_premium),
             "Bid-based (%)": float(item.combined_bid_pct)
             if item.combined_bid_pct is not None else None,
+            "5%+ CE premium (%)": float(otm_calls[item.symbol].premium_pct)
+            if item.symbol in otm_calls else None,
+            "5%+ CE strike (₹)": float(otm_calls[item.symbol].strike)
+            if item.symbol in otm_calls else None,
             "Expiry": item.expiry,
         }
         for index, item in enumerate(ranked, 1)
@@ -70,6 +82,8 @@ def _drain_events(snap):
             snap["status"] = event.status
         if event.symbol:
             snap["processed"] = event.completed
+            if event.otm_call is not None:
+                snap.setdefault("otm_calls", {})[event.symbol] = event.otm_call
             if event.row is not None:
                 snap["rows"][event.symbol] = event.row
                 snap["errors"].pop(event.symbol, None)
@@ -103,19 +117,23 @@ def render_straddle_panel(available, expiry):
     if snap is None:
         snap = {
             "key": key, "month": expiry, "total": total,
-            "rows": {}, "errors": {}, "processed": 0,
+            "rows": {}, "otm_calls": {}, "errors": {}, "processed": 0,
             "status": "", "fatal": "", "started": False,
         }
         history[key] = snap
-    _drain_events(snap)
+    changed = _drain_events(snap)
+    if changed:
+        # A full-script refresh updates the main stock table's OTM column.
+        st.rerun(scope="app")
     active = st.session_state.get("fno_straddle_job")
     busy = bool(active and not active["future"].done())
     our_job = busy and active["key"] == key
 
     st.markdown("#### ATM short-straddle screener")
     st.caption(
-        "**Ranked highest to lowest:** (ATM CE LTP + ATM PE LTP) ÷ "
-        "underlying LTP × 100. Uses the same strike and exact monthly expiry."
+        "ATM straddle % = (CE+PE) ÷ Dhan CMP ×100 · "
+        "+5% CE % = CE LTP at first strike ≥ CMP×1.05 ÷ CMP ×100 · "
+        "one read-only option-chain response per stock."
     )
     with st.container(border=True):
         left, right = st.columns([2.1, 1])
@@ -143,7 +161,7 @@ def render_straddle_panel(available, expiry):
         with right:
             if snap["started"] and not our_job and not busy:
                 if st.button("Reset results", key="fno_straddle_reset", use_container_width=True):
-                    snap.update(rows={}, errors={}, processed=0,
+                    snap.update(rows={}, otm_calls={}, errors={}, processed=0,
                                 status="", fatal="", started=False)
                     st.rerun()
 
@@ -226,7 +244,7 @@ def render_straddle_panel(available, expiry):
             )
 
     if snap["rows"]:
-        df = straddle_dataframe(snap["rows"])
+        df = straddle_dataframe(snap["rows"], snap.get("otm_calls", {}))
         st.caption(
             f"Dhan option chain · {len(df)} ranked / {total} · "
             "percentage based on option LTP (not guaranteed sale price)"
@@ -251,6 +269,13 @@ def render_straddle_panel(available, expiry):
                 "Bid-based (%)": st.column_config.NumberColumn(
                     "Bid % (indicative)", format="%.2f%%",
                     help="CE bid + PE bid as % of underlying, where both bids exist",
+                ),
+                "5%+ CE premium (%)": st.column_config.NumberColumn(
+                    "CE ≥5% OTM", format="%.2f%%",
+                    help="First listed CE strike ≥ Dhan spot ×1.05. CE last price ÷ spot ×100.",
+                ),
+                "5%+ CE strike (₹)": st.column_config.NumberColumn(
+                    "5%+ CE strike", format="₹%.2f",
                 ),
                 "Expiry": st.column_config.TextColumn("Expiry"),
             },
