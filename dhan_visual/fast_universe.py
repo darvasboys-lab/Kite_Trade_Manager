@@ -260,12 +260,26 @@ def load_fast_catalogue(refresh: bool = False, progress=None, cache_path: Path =
         report("3/3 · Writing small, public-metadata-only local cache...")
         _write_cache(catalogue, method, cache_path)
         return catalogue, f"{method} · loaded in {time.monotonic()-started:.1f} seconds"
-    except (DhanDataError, ValueError) as exc:
-        if cached:
-            data, age, stamp, method = cached
-            report("Network unavailable; using a clearly marked stale cache")
-            return data, f"STALE CACHE ({age/3600:.1f}h; {method}). Refresh recommended."
-        raise DhanDataError(
-            f"Fast NSE F&O universe unavailable: {exc}. "
-            "No lot sizes or security IDs were fabricated."
-        ) from exc
+    except (DhanDataError, ValueError) as primary_error:
+        # Dhan's segment endpoints can be blocked even when the documented
+        # public detailed CSV is accessible. Try that automatic fallback before
+        # ever asking a user to do anything by hand.
+        try:
+            report("Automatic fallback · downloading Dhan's public detailed master once...")
+            from .dhan_market import fetch_dhan_master
+            catalogue, _ = fetch_dhan_master()
+            _validate_catalogue(catalogue)
+            method = "Dhan public detailed master (automatic fallback)"
+            _write_cache(catalogue, method, cache_path)
+            return catalogue, f"{method} · loaded in {time.monotonic()-started:.1f} seconds"
+        except (DhanDataError, ValueError) as backup_error:
+            if cached:
+                data, age, stamp, method = cached
+                report("Automatic sources unavailable; existing cache is labelled STALE")
+                return data, f"STALE CACHE ({age/3600:.1f}h; {method}). Refresh recommended."
+            raise DhanDataError(
+                "All automatic instrument sources were unavailable or invalid. "
+                f"Segment/NSE: {type(primary_error).__name__}; "
+                f"public detailed master: {type(backup_error).__name__}. "
+                "Use Retry after checking your internet connection. No file upload is needed."
+            ) from backup_error

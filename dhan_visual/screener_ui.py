@@ -1,260 +1,303 @@
-"""Read-only Dhan stock-F&O contract screener. No order endpoints exist here."""
+"""Automatic F&O list + Dhan/Yahoo read-only price sources.
+
+No file upload, no order endpoints, no exchange-credential persistence.
+F&O list starts fetching in a worker and survives restarts as public-only cache.
+"""
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from hashlib import sha256
 import csv
 import io
 import os
-from datetime import datetime, timezone
 
 import pandas as pd
 import streamlit as st
 
-from dhan_visual.dhan_market import (
-    DHAN_MASTER_URL, DhanDataError, fetch_dhan_ltp, fetch_dhan_master,
-    parse_dhan_master,
-)
-from dhan_visual.screener import choose_expiry, expiry_options, screen_rows
+from dhan_visual.dhan_market import DhanDataError, fetch_dhan_ltp
 from dhan_visual.fast_universe import load_fast_catalogue
+from dhan_visual.screener import choose_expiry, expiry_options, fetch_yahoo_quotes, screen_rows
 
 
-def _cached_dhan_master(refresh=False, progress=None):
-    # A compact validated on-disk universe survives Streamlit/python restarts.
-    # Full Dhan instrument master is NOT downloaded on ordinary screen visits.
-    return load_fast_catalogue(refresh=refresh, progress=progress)
+@st.cache_resource
+def _universe_pool():
+    return ThreadPoolExecutor(max_workers=1, thread_name_prefix="stock-fno-list")
 
 
-def _handle_master():
-    if st.button("Load stock F&O universe from Dhan", type="primary", key="dhan_load_catalogue"):
-        st.session_state["dhan_screener_loaded"] = True
-    if not st.session_state.get("dhan_screener_loaded"):
+def _start_universe(force=False):
+    """Start exactly one network/cache load; no Streamlit API inside worker."""
+    current = st.session_state.get("fno_universe_future")
+    if current is not None and not current.done():
+        return
+    st.session_state.pop("fno_universe_error", None)
+    st.session_state["fno_universe_future"] = _universe_pool().submit(
+        load_fast_catalogue, refresh=force
+    )
+
+
+@st.fragment(run_every="2s")
+def _load_status():
+    """Refresh loading status without blocking the rest of Streamlit."""
+    future = st.session_state.get("fno_universe_future")
+    if future is None:
+        st.caption("Preparing automatic instrument download...")
+        return
+    if not future.done():
         st.info(
-            "Click **Load stock F&O universe from Dhan** to download Dhan's "
-            "official instrument master. No client ID or access token is required "
-            "to load the public list. Prices are requested separately."
+            "Loading the NSE stock F&O list automatically. The dashboard remains usable; "
+            "no CSV download or upload is necessary."
         )
-        return None, None
-
-    force = st.button("Force re-download instrument list", key="dhan_refresh_master")
-    if force:
-        st.session_state.pop("dhan_price_snapshot", None)
+        return
     try:
-        progress = st.empty()
-        with st.spinner("Loading fast F&O universe (cache → small files → segment fallback)..."):
-            universe, stamp = _cached_dhan_master(
-                refresh=force, progress=lambda message: progress.caption(message)
-            )
-        progress.empty()
-        return universe, stamp
-    except Exception:
-        st.warning(
-            "Dhan's public instrument master could not be downloaded or verified. "
-            "You can download the detailed CSV from Dhan and upload it below. "
-            "No missing security IDs or lot sizes will be guessed."
+        catalogue, provenance = future.result()
+        st.session_state["fno_universe_data"] = (catalogue, provenance)
+        st.session_state.pop("fno_universe_error", None)
+    except Exception as exc:
+        st.session_state["fno_universe_error"] = (
+            f"{type(exc).__name__}: {exc}"
         )
-        st.markdown(f"[Download detailed Dhan instrument master]({DHAN_MASTER_URL})")
-        uploaded = st.file_uploader("Upload detailed Dhan instrument master CSV",
-                                    type=["csv"], key="dhan_upload_master")
-        if uploaded is None:
-            return None, None
-        try:
-            universe = parse_dhan_master(uploaded.getvalue())
-            if len(universe) < 100:
-                st.warning(f"Uploaded master has only {len(universe)} verified underlyings. Check its completeness.")
-            return universe, "Manually uploaded Dhan CSV (provenance not independently verified)"
-        except DhanDataError as exc:
-            st.error(f"The uploaded Dhan master cannot be used: {exc}")
-            return None, None
+    finally:
+        st.session_state.pop("fno_universe_future", None)
+    st.rerun()
 
 
-def _credential_input():
-    with st.expander("Dhan market-data credentials · entered locally only", expanded=False):
+def _auto_universe():
+    """Render immediately from memory, otherwise transparently fetch/retry."""
+    data = st.session_state.get("fno_universe_data")
+    future = st.session_state.get("fno_universe_future")
+    error = st.session_state.get("fno_universe_error")
+    if data:
+        a, b = st.columns([4, 1])
+        a.caption(f"**F&O list:** {data[1]}")
+        if b.button("Refresh list", key="fno_refresh_universe"):
+            _start_universe(force=True)
+            st.rerun()
+        if future:
+            _load_status()
+        elif error:
+            st.warning("Could not refresh the list; displaying last successfully verified stocks.")
+        return data[0]
+    if future is not None:
+        _load_status()
+        return None
+    if error:
+        st.error(
+            "The automatic NSE/Dhan downloads could not be completed. No file upload "
+            "is required. Check internet access to Dhan/NSE and retry."
+        )
+        with st.expander("Technical details", expanded=False):
+            st.code(error)
+        if st.button("Retry automatic loading", key="fno_retry_load"):
+            _start_universe(force=True)
+            st.rerun()
+        return None
+    _start_universe()
+    _load_status()
+    return None
+
+
+@st.cache_data(ttl=15 * 60, show_spinner=False)
+def _cached_yahoo(symbols):
+    # The Yahoo source is user-selected and never mixed with Dhan LTP.
+    return fetch_yahoo_quotes(list(symbols))
+
+
+def _dhan_credentials():
+    with st.expander("Dhan account · local market-data access", expanded=False):
         st.caption(
-            "Enter your Dhan Client ID and current DhanHQ access token **here on "
-            "your own laptop**, never in ChatGPT or GitHub. This preview sends them "
-            "only to Dhan's documented marketfeed/ltp endpoint over HTTPS. "
-            "They remain in this local Streamlit session; no token is saved to the repository."
+            "Enter credentials only on your own laptop, never in ChatGPT or GitHub. "
+            "Only the Dhan marketfeed/ltp API is contacted. Neither credential "
+            "is written into the stock catalogue cache."
         )
         cid = st.text_input("Dhan Client ID", value=os.environ.get("DHAN_CLIENT_ID", ""),
                             key="dhan_local_cid")
-        token = st.text_input("DhanHQ access token", value=os.environ.get("DHAN_ACCESS_TOKEN", ""),
+        token = st.text_input("Dhan access token", value=os.environ.get("DHAN_ACCESS_TOKEN", ""),
                               type="password", key="dhan_local_access_token")
-        st.caption(
-            "You can also set DHAN_CLIENT_ID and DHAN_ACCESS_TOKEN as local "
-            "environment variables before starting Streamlit. Do not reuse "
-            "ResultBot's production VM credentials or files."
-        )
     return cid, token
 
 
-def render_screener():
-    st.subheader("NSE Stock F&O · Contract Value Screener")
-    st.caption(
-        "Dhan broker instrument master + Dhan NSE_EQ market-data snapshots. "
-        "Lot sizes are expiry-specific. Contract value = Stock LTP × F&O lot. "
-        "Read-only: no broker trading or ResultBot connection."
-    )
-    universe, source = _handle_master()
-    if universe is None:
-        return
-    entries = [item.entry for item in universe]
-    months = expiry_options(entries)
-    expiry = st.selectbox(
-        "F&O expiry month", months, index=months.index(choose_expiry(entries)),
-        key="dhan_fno_expiry",
-    )
-    available = [item for item in universe if expiry in item.entry.lots]
-    st.caption(f"**Universe:** {source} · **Dhan API quote rate:** maximum 1 request/second.")
-    cid, token = _credential_input()
-    previous_cid = st.session_state.get("dhan_snapshot_cid")
-    if previous_cid is not None and previous_cid != cid.strip():
-        st.session_state.pop("dhan_price_snapshot", None)
-    a, b = st.columns([1, 1.7])
-    mode = b.selectbox(
-        "Price-loading mode",
-        ["All stocks (complete scan, usually one request)",
-         "Next 100 unpriced stocks (quick patch)",
-         "Next 250 unpriced stocks"],
-        key="dhan_quote_patch_mode",
-        help="All stocks is fastest for a complete contract-size ranking. Patches help diagnose slow networks. Dhan permits 1000 instruments per request.",
-    )
-    refresh = a.button(
-        "Fetch / refresh Dhan prices", key="dhan_refresh_ltps", type="primary",
-        help="One manual NSE_EQ market-data snapshot; never place orders.",
-    )
-    st.caption(
-        "Dhan's market-data API supports 1,000 instrument IDs per request. "
-        "A complete stock F&O screen typically needs one quote request. "
-        "Patch mode retrieves only the next missing symbols for troubleshooting."
-    )
-    if refresh:
-        if not cid.strip() or not token.strip():
-            st.error("Enter your own Dhan Client ID and access token in the credentials panel.")
-        else:
-            prior = st.session_state.get("dhan_price_snapshot") or {}
-            prior_ids = prior.get("ids", {}) if st.session_state.get("dhan_snapshot_cid") == cid.strip() else {}
-            prior_quotes = prior.get("quotes", {}) if st.session_state.get("dhan_snapshot_cid") == cid.strip() else {}
-            if mode.startswith("All"):
-                requested = available
-                preserve = False
-            else:
-                missing = [x for x in available if
-                           x.entry.symbol not in prior_quotes or
-                           prior_ids.get(x.entry.symbol) != x.equity_security_id]
-                size = 100 if "100" in mode else 250
-                requested = missing[:size]
-                preserve = True
-            if not requested:
-                st.info("All selected stocks already have a snapshot. Use the All mode to refresh them.")
-            else:
-                with st.spinner(f"Requesting {len(requested)} NSE_EQ prices from Dhan..."):
-                    try:
-                        new_prices, errors = fetch_dhan_ltp(requested, cid, token)
-                        merged = dict(prior_quotes) if preserve else {}
-                        merged.update(new_prices)
-                        ids = dict(prior_ids) if preserve else {}
-                        ids.update({x.entry.symbol: x.equity_security_id for x in requested})
-                        st.session_state["dhan_price_snapshot"] = {
-                            "quotes": merged,
-                            "errors": errors,
-                            "request_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
-                            "ids": ids,
-                        }
-                        st.session_state["dhan_snapshot_cid"] = cid.strip()
-                        if errors:
-                            st.warning(f"{len(errors)} Dhan quote request errors; old/missing quotes are not fabricated.")
-                    except DhanDataError as exc:
-                        st.error(f"Dhan data error: {exc}")
+def _fetch_prices(source, available):
+    st.markdown("#### Market prices")
+    a, b = st.columns([2, 1])
+    with a:
+        provider = st.radio(
+            "Price source", ["Dhan", "Yahoo Finance"], index=0,
+            horizontal=True, key="fno_price_provider",
+            help="Dhan is the default. Yahoo is a manually selected backup and "
+                 "may return delayed prices or rate-limit requests.",
+        )
+    with b:
+        if st.button("Refresh prices", key="fno_refresh_prices", type="primary"):
+            st.session_state["fno_refresh_requested"] = True
 
-    snapshot = st.session_state.get("dhan_price_snapshot") or {}
-    raw_prices = snapshot.get("quotes", {})
-    snapshot_ids = snapshot.get("ids", {})
-    prices = {item.entry.symbol: raw_prices[item.entry.symbol] for item in available
-              if item.entry.symbol in raw_prices
-              and snapshot_ids.get(item.entry.symbol) == item.equity_security_id}
-    errors = snapshot.get("errors", [])
+    symbols = tuple(sorted(item.entry.symbol for item in available))
+    if provider == "Dhan":
+        cid, token = _dhan_credentials()
+        fingerprint = sha256((cid.strip() + ":" + token.strip()).encode()).hexdigest()
+        stored = st.session_state.get("fno_dhan_snapshot") or {}
+        if stored.get("fingerprint") != fingerprint:
+            st.session_state.pop("fno_dhan_snapshot", None)
+            stored = {}
+        control = st.selectbox(
+            "Dhan request size", ["All stocks", "Next 100 missing", "Next 250 missing"],
+            key="fno_dhan_batch",
+            help="The entire F&O universe normally fits in one Dhan 1000-security market quote request.",
+        )
+        if st.session_state.pop("fno_refresh_requested", False):
+            if not cid.strip() or not token.strip():
+                st.warning("Enter your Dhan ID and access token to fetch market prices.")
+            else:
+                by_id = stored.get("ids", {})
+                previous = stored.get("quotes", {})
+                if control == "All stocks":
+                    requested, carry = available, False
+                else:
+                    remaining = [row for row in available
+                                 if row.entry.symbol not in previous
+                                 or by_id.get(row.entry.symbol) != row.equity_security_id]
+                    requested = remaining[:100 if "100" in control else 250]
+                    carry = True
+                if not requested:
+                    st.info("All symbols in this expiry already have prices. Choose All stocks to refresh.")
+                elif any(row.equity_security_id <= 0 for row in requested):
+                    st.error("Verified NSE_EQ IDs unavailable; refresh the automatic Dhan instrument list.")
+                else:
+                    with st.spinner(f"Fetching {len(requested)} Dhan equity market prices..."):
+                        try:
+                            result, errors = fetch_dhan_ltp(requested, cid, token)
+                        except DhanDataError as exc:
+                            result, errors = {}, [str(exc)]
+                        oldquotes = dict(previous) if carry else {}
+                        oldquotes.update(result)
+                        oldids = dict(by_id) if carry else {}
+                        oldids.update({row.entry.symbol: row.equity_security_id for row in requested})
+                        stored = {
+                            "quotes": oldquotes, "ids": oldids,
+                            "errors": errors, "fingerprint": fingerprint,
+                            "requested_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+                        }
+                        st.session_state["fno_dhan_snapshot"] = stored
+        prices = {r.entry.symbol: stored.get("quotes", {})[r.entry.symbol]
+                  for r in available if
+                  r.entry.symbol in stored.get("quotes", {}) and
+                  stored.get("ids", {}).get(r.entry.symbol) == r.equity_security_id}
+        st.caption("Dhan NSE_EQ LTP snapshot · requested "
+                   + stored.get("requested_at", "not yet")
+                   + " · a snapshot is not an exchange last-trade timestamp.")
+        errors = stored.get("errors", [])
+    else:
+        st.caption(
+            "Yahoo Finance backup: free historical bar closes; prices may be delayed, "
+            "stale or unavailable. These quotes are never combined with Dhan quotes."
+        )
+        size = st.selectbox(
+            "Yahoo batch", ["First 50 stocks", "First 100 stocks", "All stocks (slow)"],
+            key="fno_yahoo_batch",
+        )
+        cache = st.session_state.get("fno_yahoo_snapshot") or {}
+        if st.session_state.pop("fno_refresh_requested", False):
+            target = symbols if size.startswith("All") else symbols[:50 if "50" in size else 100]
+            with st.spinner(f"Requesting Yahoo closes for {len(target)} stocks..."):
+                quotes, errors = _cached_yahoo(target)
+            cache = {
+                "quotes": quotes, "errors": errors,
+                "requested_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            }
+            st.session_state["fno_yahoo_snapshot"] = cache
+        prices = {s: q for s, q in cache.get("quotes", {}).items() if s in symbols}
+        st.caption("Yahoo bar prices · fetched " + cache.get("requested_at", "not yet"))
+        errors = cache.get("errors", [])
+
     if errors:
         st.warning(
-            f"Dhan quote retrieval had {len(errors)} errors. Missing quotes remain "
-            f"unknown; nothing is replaced by Yahoo: {'; '.join(errors[:3])}"
+            f"{len(errors)} {provider} data requests failed; prices are not fabricated. "
+            + "; ".join(errors[:2])
         )
-    if snapshot.get("request_at"):
+    return provider, prices
+
+
+def render_screener():
+    st.subheader("Stock F&O Screener")
+    st.caption(
+        "Complete NSE stock F&O lot list loads automatically · "
+        "Dhan prices by default, Yahoo Finance optional backup · "
+        "Contract value = stock price × selected-expiry lot size."
+    )
+    universe = _auto_universe()
+    if not universe:
+        return
+
+    entries = [row.entry for row in universe]
+    months = expiry_options(entries)
+    expiry = st.selectbox(
+        "F&O expiry", months, index=months.index(choose_expiry(entries)),
+        key="fno_expiry",
+    )
+    available = [x for x in universe if expiry in x.entry.lots]
+    source, prices = _fetch_prices("Dhan", available)
+
+    a, b, c = st.columns(3)
+    a.metric("F&O stocks", f"{len(available):,}")
+    b.metric("Prices available", f"{len(prices):,}")
+    c.metric("No price", f"{len(available)-len(prices):,}")
+    if len(prices) != len(available):
         st.caption(
-            f"**Dhan quote request finished:** {snapshot['request_at']} · "
-            "Quote age is measured from the request, NOT the exchange's actual "
-            "last-trade time. Use Refresh to get a new market-data snapshot."
+            "Not all stocks have quotes. Contract-value ranking covers the priced "
+            "symbols only; unpriced stocks are listed last without invented values."
         )
-    else:
-        st.info("The complete symbol/lot list is loaded. Add credentials and fetch Dhan LTPs to calculate contract values.")
-
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Stock F&O underlyings", f"{len(available):,}")
-    k2.metric("Dhan prices available", f"{len(prices):,}")
-    k3.metric("Missing prices", f"{len(available) - len(prices):,}")
-    k4.metric("Selected expiry", expiry)
-    if len(prices) < len(available):
-        st.warning(
-            f"Partial price coverage: {len(prices)}/{len(available)} stock prices. "
-            "Contract-value sorting and min/max filters are complete ONLY for "
-            "the priced rows. Use All stocks to scan the full list."
+    with st.container(border=True):
+        x, y, z = st.columns([1.5, 1.2, 1.5])
+        query = x.text_input("Find stock", placeholder="TCS / RELIANCE", key="fno_symbol_find")
+        ordering = y.radio("Contract value order", ["Low → high", "High → low"],
+                           horizontal=True, key="fno_value_sort")
+        preset = z.selectbox(
+            "Value filter",
+            ["Custom", "Below ₹5 lakh", "Below ₹6 lakh", "Below ₹7 lakh",
+             "Below ₹8 lakh", "Above ₹5 lakh", "Above ₹8 lakh"], key="fno_value_preset",
         )
-
-    st.markdown("#### Filter by stock and contract value")
-    a, b, c = st.columns([1.4, 1.2, 1.5])
-    query = a.text_input("Stock symbol or company", placeholder="RELIANCE, TCS, INFY...", key="fno_symbol_find")
-    order = b.radio(
-        "Sort estimated contract value", ["Low → high", "High → low"],
-        horizontal=True, key="fno_value_sort",
-    )
-    quick = c.selectbox(
-        "Quick contract value filter",
-        ["Custom", "Below ₹5 lakh", "Below ₹6 lakh", "Below ₹7 lakh",
-         "Below ₹8 lakh", "Above ₹5 lakh", "Above ₹8 lakh"], key="fno_value_preset",
-    )
-    a, b = st.columns(2)
-    min_l = a.number_input("Minimum value (₹ lakh)", min_value=0.0, step=0.5, value=0.0, key="fno_min_lakh")
-    max_l = b.number_input("Maximum value (₹ lakh; 0 = no upper limit)",
-                            min_value=0.0, step=0.5, value=0.0, key="fno_max_lakh")
-    presets = {
+        mincol, maxcol = st.columns(2)
+        min_l = mincol.number_input("Minimum (₹ lakh)", min_value=0.0, value=0.0,
+                                    step=0.5, key="fno_min_lakh")
+        max_l = maxcol.number_input("Maximum (₹ lakh; 0 = no limit)", min_value=0.0,
+                                    value=0.0, step=0.5, key="fno_max_lakh")
+    caps = {
         "Below ₹5 lakh": (0, 5), "Below ₹6 lakh": (0, 6),
         "Below ₹7 lakh": (0, 7), "Below ₹8 lakh": (0, 8),
         "Above ₹5 lakh": (5, 0), "Above ₹8 lakh": (8, 0),
     }
-    low, high = presets.get(quick, (min_l, max_l))
+    low, high = caps.get(preset, (min_l, max_l))
     try:
-        selected = screen_rows(
-            [x.entry for x in available], expiry, prices, query,
-            min_value=low * 100000, max_value=high * 100000,
-            descending=order == "High → low",
-        )
+        rows = screen_rows(entries, expiry, prices, query, min_value=low * 100000,
+                           max_value=high * 100000,
+                           descending=ordering == "High → low")
     except ValueError as exc:
         st.error(str(exc))
         return
-    if not selected:
-        st.info("No available quotes or underlyings match this filter. Widen the range or refresh Dhan LTPs.")
+    st.markdown(f"**{len(rows):,} matching stocks**")
+    if not rows:
+        st.info("No stocks match. Try adjusting contract value or refreshing prices.")
         return
-    st.markdown(f"**{len(selected)} matching stocks** · "
-                f"{sum(row['Last price (₹)'] is not None for row in selected)} with a Dhan LTP")
-    st.caption(
-        "**Contract value** is underlying notional, not required broker margin or option premium. "
-        "Prices absent from Dhan are shown as N/A and excluded from numerical contract-value filters."
-    )
-    df = pd.DataFrame(selected)
+    frame = pd.DataFrame(rows)
     st.dataframe(
-        df, use_container_width=True, hide_index=True, height=620,
+        frame, hide_index=True, use_container_width=True, height=560,
         column_config={
             "Symbol": st.column_config.TextColumn("Stock"),
-            "Company": st.column_config.TextColumn("Underlying", width="medium"),
-            "Last price (₹)": st.column_config.NumberColumn("Dhan LTP (₹)", format="₹%.2f"),
-            "Lot size": st.column_config.NumberColumn("Lot", format="%d"),
+            "Last price (₹)": st.column_config.NumberColumn("Stock price (₹)", format="₹%.2f"),
+            "Lot size": st.column_config.NumberColumn("Lot size", format="%d"),
             "Contract value (₹)": st.column_config.NumberColumn("Contract value (₹)", format="₹%.2f"),
-            "Quote time": st.column_config.TextColumn("Snapshot request (UTC)", width="medium"),
-            "Price source": st.column_config.TextColumn("Price source"),
-        },
+            "Quote time": st.column_config.TextColumn("Quote date/time"),
+            "Price source": st.column_config.TextColumn("Source"),
+        }
     )
-    buff = io.StringIO()
-    writer = csv.DictWriter(buff, fieldnames=list(selected[0].keys()))
+    st.caption(
+        f"Prices from **{source}** only. Contract value is indicative underlying "
+        "notional—not option premium, required broker margin or a trading signal."
+    )
+    exported = io.StringIO()
+    writer = csv.DictWriter(exported, fieldnames=list(rows[0]))
     writer.writeheader()
-    writer.writerows(selected)
+    writer.writerows(rows)
     st.download_button(
-        "Export filtered results to CSV", data=buff.getvalue(),
-        file_name=f"dhan_fno_contract_value_{expiry}.csv", mime="text/csv",
-        key="dhan_export_contracts",
+        "Export filtered CSV", data=exported.getvalue(),
+        file_name=f"stock_fno_{expiry}_{source.lower().replace(' ', '_')}.csv",
+        mime="text/csv", key="fno_export",
     )
