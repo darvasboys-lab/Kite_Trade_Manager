@@ -220,7 +220,24 @@ QUOTE_LIMITER = _RateLimiter()
 
 def parse_dhan_ltp_response(payload: dict, id_to_symbol: dict[int, str], timestamp: str) -> dict[str, Quote]:
     if not isinstance(payload, dict) or payload.get("status") != "success":
-        raise DhanDataError("Dhan LTP request was not successful")
+        # Dhan returns failure codes inside JSON, sometimes with HTTP 200.
+        # Report only short error identifiers: never print raw response data.
+        codes = []
+        if isinstance(payload, dict):
+            for key in ("errorCode", "error_code", "code"):
+                value = payload.get(key)
+                if isinstance(value, (str, int)) and re.fullmatch(r"[A-Za-z0-9-]{1,32}", str(value)):
+                    codes.append(str(value))
+            data = payload.get("data")
+            if isinstance(data, dict):
+                for key in data:
+                    if re.fullmatch(r"[A-Za-z0-9-]{1,32}", str(key)):
+                        codes.append(str(key))
+                    if len(codes) >= 3:
+                        break
+        suffix = " · codes: " + ", ".join(codes[:3]) if codes else ""
+        raise DhanDataError("Dhan rejected LTP request" + suffix + "; "
+                            "check token, Client ID and Data API entitlement")
     data = payload.get("data")
     market = data.get("NSE_EQ") if isinstance(data, dict) else None
     if not isinstance(market, dict):
@@ -276,10 +293,20 @@ def fetch_dhan_ltp(underlyings: list[DhanUnderlying], client_id: str,
             if status == 429:
                 raise DhanDataError("Dhan quote rate limit encountered (HTTP 429); refresh later")
             response.raise_for_status()
+            try:
+                packet = response.json()
+            except ValueError as exc:
+                raise DhanDataError("Dhan LTP response was not valid JSON") from exc
             stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
             quotes = parse_dhan_ltp_response(
-                response.json(), {sid: unique_ids[sid] for sid in ids}, stamp,
+                packet, {sid: unique_ids[sid] for sid in ids}, stamp,
             )
+            if not quotes:
+                errors.append(
+                    f"Batch {offset // batch_size + 1}: Dhan returned no valid NSE_EQ "
+                    f"prices for {len(ids)} requested IDs. Check cash-ID mapping "
+                    "or market-data entitlement; no quote is fabricated."
+                )
             output.update(quotes)
         except DhanDataError as exc:
             errors.append(f"Batch {offset // batch_size + 1}: {exc}")
