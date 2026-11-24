@@ -48,6 +48,16 @@ class PayoffStudioStartupTests(unittest.TestCase):
         self.assertGreaterEqual(len(app.dataframe), 1)
         self.assertNotIn("Company", app.dataframe[0].value.columns)
         self.assertIn("Symbol", app.dataframe[0].value.columns)
+        self.assertIn("TradingView chart", app.dataframe[0].value.columns)
+        from urllib.parse import parse_qs, urlsplit
+        df = app.dataframe[0].value
+        for _, item in df.iterrows():
+            url = item["TradingView chart"]
+            self.assertEqual(urlsplit(url).netloc, "www.tradingview.com")
+            self.assertEqual(
+                parse_qs(urlsplit(url).query)["symbol"],
+                ["NSE:" + item["Symbol"]],
+            )
         self.assertIsNotNone(app.button(key="ccs_autofit_all_button"))
         for col in ("EMA 200", "EMA 50", "EMA 20", "EMA 10", "Monthly R1",
                     "5%+ CE premium (%)"):
@@ -58,6 +68,25 @@ class PayoffStudioStartupTests(unittest.TestCase):
         self.assertIsNotNone(app.text_input(key="fno_symbol_find"))
         self.assertIsNotNone(app.button(key="fno_manual_price_refresh"))
         self.assertIsNotNone(app.button(key="fno_refresh_universe"))
+
+    def test_clickable_stock_column_is_link_not_duplicate_company(self):
+        app = app_with_catalogue()
+        with patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()):
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            frame = app.dataframe[0].value
+            self.assertEqual(
+                frame.columns.tolist()[:2], ["TradingView chart", "Symbol"]
+            )
+            self.assertNotIn("Company", frame.columns)
+            self.assertTrue(frame["TradingView chart"].str.startswith(
+                "https://www.tradingview.com/chart/?symbol=NSE%3A"
+            ).all())
+        # Raw stock symbols remain the same for search, sorting and CSV.
+        source = (APP.parent / "screener_ui.py").read_text(encoding="utf-8")
+        self.assertIn('config["Symbol"] = None', source)
+        self.assertIn("st.column_config.LinkColumn(", source)
+        self.assertIn("display_text=TRADINGVIEW_SYMBOL_DISPLAY", source)
 
     def test_one_click_autofits_every_table_without_changing_stock_data(self):
         from dhan_visual.table_layout import dataframe_key
