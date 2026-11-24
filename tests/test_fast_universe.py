@@ -8,7 +8,8 @@ from unittest.mock import patch
 
 from dhan_visual.dhan_market import DhanDataError, DhanUnderlying
 from dhan_visual.fast_universe import (
-    EQ_SEGMENT_URL, FNO_SEGMENT_URL, MAX_CACHE_AGE_SECONDS,
+    EQ_SEGMENT_URL, FNO_SEGMENT_URL, COMPACT_MASTER_URL, MAX_CACHE_AGE_SECONDS,
+    resolve_equity_ids, _download_csv,
     _read_cache, _write_cache, load_fast_catalogue,
     map_nse_lots_to_cash_security_ids, parse_dhan_equities, parse_dhan_fno_segment,
 )
@@ -74,7 +75,7 @@ class FastUniverseTests(unittest.TestCase):
     def test_prefers_two_small_files_before_fno(self):
         eq, lots, _ = make_inputs(125)
         requests = []
-        def download(url, cap):
+        def download(url, cap, **kwargs):
             requests.append(url)
             if url == EQ_SEGMENT_URL:
                 return eq
@@ -85,13 +86,14 @@ class FastUniverseTests(unittest.TestCase):
             with patch("dhan_visual.fast_universe._download_csv", side_effect=download):
                 rows, source = load_fast_catalogue(cache_path=Path(tmp)/"universe.json")
         self.assertEqual(len(rows), 125)
-        self.assertEqual(len(requests), 2)
+        self.assertEqual(len(requests), 1)
+        self.assertTrue(all(x.equity_security_id == 0 for x in rows))
         self.assertIn("NSE official", source)
 
     def test_fallback_is_segment_only_when_nse_unavailable(self):
         eq, _, fno = make_inputs(125)
         requests = []
-        def download(url, cap):
+        def download(url, cap, **kwargs):
             requests.append(url)
             if url == EQ_SEGMENT_URL:
                 return eq
@@ -103,7 +105,7 @@ class FastUniverseTests(unittest.TestCase):
                 rows, source = load_fast_catalogue(cache_path=Path(tmp)/"universe.json")
         self.assertEqual(len(rows), 125)
         self.assertEqual(requests[-1], FNO_SEGMENT_URL)
-        self.assertIn("segment masters", source)
+        self.assertIn("segment files", source)
 
     def test_stale_cache_is_explicit_after_failure(self):
         eq, lots, _ = make_inputs(105)
@@ -129,9 +131,65 @@ class FastUniverseTests(unittest.TestCase):
                  patch("dhan_visual.dhan_market.fetch_dhan_master", return_value=(records, "test")) as public:
                 actual, source = load_fast_catalogue(cache_path=path)
             self.assertEqual(len(actual), 115)
-            self.assertIn("automatic fallback", source)
+            self.assertIn("Dhan official detailed master", source)
             public.assert_called_once()
             self.assertIsNotNone(_read_cache(path))
+
+    def test_nse_list_appears_with_no_dhan_service(self):
+        _, lots, _ = make_inputs(125)
+        called = []
+        def download(url, cap, **kwargs):
+            called.append(url)
+            if "fo_mktlots" in url:
+                return lots
+            raise AssertionError("NSE-only list must not depend on Dhan")
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("dhan_visual.fast_universe._download_csv", side_effect=download):
+                stocks, source = load_fast_catalogue(cache_path=Path(tmp) / "universe.json")
+                self.assertEqual(len(stocks), 125)
+                self.assertTrue(all(x.equity_security_id == 0 for x in stocks))
+                self.assertEqual(len(called), 1)
+                self.assertIn("NSE official F&O lots", source)
+                again, label = load_fast_catalogue(cache_path=Path(tmp) / "universe.json")
+                self.assertEqual(len(again), 125)
+                self.assertIn("Local cache", label)
+
+    def test_cash_id_compact_fallback_is_on_demand(self):
+        eq, _, _ = make_inputs(105)
+        called = []
+        def get_source(url, cap, **kwargs):
+            called.append(url)
+            if url == EQ_SEGMENT_URL:
+                raise DhanDataError("HTTP 403")
+            if url == COMPACT_MASTER_URL:
+                return eq
+            raise AssertionError("Detailed source must not be needed")
+        with patch("dhan_visual.fast_universe._download_csv", side_effect=get_source):
+            ids = resolve_equity_ids()
+        self.assertEqual(len(ids), 105)
+        self.assertEqual(ids["FO0001"], 100001)
+        self.assertEqual(called, [EQ_SEGMENT_URL, COMPACT_MASTER_URL])
+
+    @patch("requests.get")
+    def test_https_redirect_for_public_csv_is_allowed(self, get):
+        response = unittest.mock.MagicMock()
+        response.status_code = 200
+        response.url = "https://public-files.example-cdn.com/signed-download.csv"
+        response.iter_content.return_value = [b"EXCH_ID,SEGMENT\nNSE,E\n"]
+        get.return_value = response
+        data = _download_csv(EQ_SEGMENT_URL, 1_000)
+        self.assertIn(b"NSE,E", data)
+        get.assert_called_once()
+        response.close.assert_called_once()
+
+    @patch("requests.get")
+    def test_http_errors_have_source_and_status(self, get):
+        response = unittest.mock.MagicMock()
+        response.status_code = 403
+        response.url = EQ_SEGMENT_URL
+        get.return_value = response
+        with self.assertRaisesRegex(DhanDataError, r"api.dhan.co: HTTP 403"):
+            _download_csv(EQ_SEGMENT_URL, 1_000)
 
     def test_reject_malformed_cache_and_no_fabrication(self):
         with tempfile.TemporaryDirectory() as tmp:
