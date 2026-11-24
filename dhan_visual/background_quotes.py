@@ -16,6 +16,7 @@ from typing import Mapping
 from .dhan_market import DhanDataError, DhanUnderlying, fetch_dhan_ltp
 from .fast_universe import match_cash_ids, resolve_equity_ids
 from .screener import Quote, fetch_yahoo_quotes
+from .load_priority import strongest_first
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,7 @@ def priority_order(
     prior_quotes: Mapping[str, Quote] | None = None,
     expiry: str | None = None,
     threshold: Decimal = Decimal("700000"),
+    technical_levels=None,
 ) -> list[str]:
     """Prioritize only *previously quoted* under-threshold stocks.
 
@@ -124,7 +126,12 @@ def priority_order(
             focused.append((old.price * lot, sym))
         else:
             other.append(sym)
-    return [sym for _, sym in sorted(focused)] + sorted(other)
+    ordered = [sym for _, sym in sorted(focused)] + sorted(other)
+    # With reliable cached EMA/R1 levels, prioritize trend strength above
+    # contract-value preference. Preserve historic ordering without a cache.
+    if technical_levels:
+        return strongest_first(ordered, technical_levels, prior_quotes)
+    return ordered
 
 
 def load_yahoo_all(
@@ -133,6 +140,7 @@ def load_yahoo_all(
     prior_quotes: Mapping[str, Quote] | None = None,
     expiry: str | None = None,
     batch_size: int = 25,
+    technical_levels=None,
 ) -> tuple[int, int]:
     """Stream all Yahoo stock quotes as independently completed batches.
 
@@ -141,7 +149,8 @@ def load_yahoo_all(
     """
     if not 1 <= batch_size <= 50:
         raise ValueError("Yahoo chunk size must be 1–50 stocks")
-    ordered = priority_order(underlyings, prior_quotes, expiry)
+    ordered = priority_order(underlyings, prior_quotes, expiry,
+                             technical_levels=technical_levels)
     total = len(ordered)
     completed = 0
     for start in range(0, total, batch_size):
