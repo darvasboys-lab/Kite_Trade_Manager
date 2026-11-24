@@ -56,13 +56,17 @@ class NseEodCeTests(unittest.TestCase):
         self.assertEqual(quote.call_close, 2.5)
         self.assertEqual(quote.expiry, "2026-11-27")
 
-    def test_first_eligible_zero_volume_is_unavailable(self):
+    def test_zero_volume_is_explicit_untraded_eod_reference_not_live_ltp(self):
         snap = parse_nse_fo_eod(make_csv([
             row(symbol="AAA", strike="105", volume="0", price="3"),
             row(symbol="AAA", strike="110", volume="12", price="2"),
             row(symbol="BBB", strike="105", volume="4", price="1"),
+            row(symbol="CCC", strike="105", volume="0", price="0"),
         ]))
-        self.assertNotIn("AAA", snap.quotes["NOV-26"])
+        self.assertEqual(snap.quotes["NOV-26"]["AAA"].volume, 0)
+        self.assertEqual(snap.quotes["NOV-26"]["AAA"].strike, 105)
+        self.assertEqual(snap.quotes["NOV-26"]["AAA"].premium_pct, 3)
+        self.assertNotIn("CCC", snap.quotes["NOV-26"])
         self.assertIn("BBB", snap.quotes["NOV-26"])
 
     def test_inconsistent_underlying_is_not_guessed(self):

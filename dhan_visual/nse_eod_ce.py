@@ -97,7 +97,9 @@ def parse_nse_fo_eod(payload: bytes) -> NseEodSnapshot:
 
     If multiple expiries exist within a month for one stock, omit that stock
     rather than silently select a contract that may not match the user's month.
-    Non-trading first-eligible strikes are left unavailable, not substituted.
+    A non-trading first-eligible strike with a positive published close is
+    retained as an explicitly UNTRADED EOD reference, not an executable quote.
+    Missing/zero closing prices remain unavailable, never substitute strikes.
     """
     raw = _load_csv_bytes(payload)
     try:
@@ -160,8 +162,8 @@ def parse_nse_fo_eod(payload: bytes) -> NseEodSnapshot:
         if len(at_strike) != 1:
             continue
         close, volume = at_strike[0]
-        if volume <= 0 or close <= 0:
-            continue
+        if close <= 0:
+            continue  # The report has no valid published close for this strike.
         quote = NseEodCall(
             symbol=symbol, expiry=expiry.isoformat(), strike=first_strike,
             underlying_close=spot, call_close=close,

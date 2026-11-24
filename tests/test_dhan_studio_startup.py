@@ -3,6 +3,8 @@ import hashlib
 import unittest
 from concurrent.futures import Future
 from decimal import Decimal
+from datetime import datetime
+from dhan_visual.ce_eod_remote import EodDownloadResult, IST
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,6 +25,11 @@ def app_with_catalogue():
     from streamlit.testing.v1 import AppTest
     app = AppTest.from_file(str(APP), default_timeout=35)
     app.session_state["fno_universe_data"] = (example(), "Verified unit fixture")
+    # No exchange or Dhan HTTP in offline CI tests.
+    app.session_state["fno_ce5_remote_attempt_key"] = datetime.now(IST).date().isoformat()
+    app.session_state["fno_ce5_remote_snapshot"] = EodDownloadResult(
+        None, "", "Offline fixture: no remote report requested", ()
+    )
     return app
 
 
@@ -398,6 +405,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
         app.session_state["dhan_local_cid"] = cid
         app.session_state["dhan_local_access_token"] = token
         app.session_state["fno_price_provider"] = "Dhan"
+        app.session_state["fno_ce5_mode"] = "Live"
         symbols = ",".join(sorted(x.entry.symbol for x in example()))
         universe_key = hashlib.sha256(symbols.encode()).hexdigest()
         key = hashlib.sha256((cid + ":" + token + ":" + universe_key).encode()).hexdigest()
@@ -455,6 +463,35 @@ class PayoffStudioStartupTests(unittest.TestCase):
                 self.assertEqual(source, "NSE EOD 2026-11-23")
                 self.assertTrue(df.loc[df["Symbol"] == "SBIN",
                                        "5%+ CE premium (%)"].isna().all())
+                scan.assert_not_called()
+
+    def test_eod_default_is_explicit_and_live_never_uses_eod_close(self):
+        """The EOD/Live switch must not silently mix the two prices."""
+        from tempfile import TemporaryDirectory
+        from test_ce_eod_local import save_nse_zip
+        with TemporaryDirectory() as folder:
+            file = save_nse_zip(folder, "20261123")
+            app = app_with_catalogue()
+            app.session_state["fno_expiry"] = "DEC-26"
+            with patch("dhan_visual.screener_ui.recent_nse_fo_reports", return_value=[file]), \
+                 patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()), \
+                 patch("dhan_visual.straddle_panel.scan_all_straddles") as scan:
+                app.run()
+                self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+                self.assertEqual(app.radio(key="fno_ce5_mode").value, "EOD")
+                frame = app.dataframe[0].value
+                self.assertEqual(frame.loc[frame["Symbol"] == "TCS",
+                                           "5%+ CE premium (%)"].iloc[0], 2.0)
+                app.radio(key="fno_ce5_mode").set_value("Live").run()
+                self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+                frame = app.dataframe[0].value
+                self.assertTrue(frame["5%+ CE premium (%)"].isna().all())
+                app.radio(key="fno_ce5_mode").set_value("EOD").run()
+                self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+                self.assertEqual(app.dataframe[0].value.loc[
+                    app.dataframe[0].value["Symbol"] == "TCS",
+                    "5%+ CE premium (%)"
+                ].iloc[0], 2.0)
                 scan.assert_not_called()
 
     def test_compact_search_and_filters_retain_all_prior_actions(self):
