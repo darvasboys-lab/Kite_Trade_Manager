@@ -45,30 +45,47 @@ def _csv_rows(payload: bytes):
     return reader
 
 
-def _download_csv(url: str, cap_bytes: int) -> bytes:
-    import requests
+def _download_csv(url: str, cap_bytes: int, timeout: tuple = (5, 14)) -> bytes:
+    """Download only known public URLs. HTTPS redirects are normal for CSV/CDNs.
 
+    No Dhan credential is attached to these public instrument-list GETs.
+    Errors report the stage + HTTP status or exception type, never tokens.
+    """
+    import requests
+    from urllib.parse import urlparse
+
+    host = urlparse(url).hostname or "instrument source"
     try:
-        resp = requests.get(url, timeout=(6, 25),
-                            headers={"Accept": "text/csv,*/*", "User-Agent": "DhanPayoffStudio/2.0"},
-                            stream=True)
-        resp.raise_for_status()
-        if resp.url != url:
-            raise DhanDataError("Unexpected source redirect")
-        size = 0
-        chunks = []
+        resp = requests.get(
+            url, timeout=timeout, allow_redirects=True, stream=True,
+            headers={"Accept": "text/csv,application/octet-stream,*/*",
+                     "User-Agent": "Mozilla/5.0 (compatible; DhanPayoffStudio/3.0)"},
+        )
+        if resp.status_code != 200:
+            raise DhanDataError(f"{host}: HTTP {resp.status_code}")
+        final = urlparse(resp.url)
+        if final.scheme != "https" or not final.hostname:
+            raise DhanDataError(f"{host}: instrument redirect was not HTTPS")
+        size, chunks = 0, []
         for chunk in resp.iter_content(chunk_size=256 * 1024):
             if not chunk:
                 continue
             size += len(chunk)
             if size > cap_bytes:
-                raise DhanDataError("Instrument response exceeded safe maximum size")
+                raise DhanDataError(f"{host}: exceeded {cap_bytes // 1_000_000} MB safety limit")
             chunks.append(chunk)
         if not chunks:
-            raise DhanDataError("Empty instrument file")
-        return b"".join(chunks)
+            raise DhanDataError(f"{host}: empty CSV response")
+        data = b"".join(chunks)
+        if data.lstrip().lower().startswith((b"<html", b"<!doctype html")):
+            raise DhanDataError(f"{host}: returned an HTML page instead of a CSV")
+        return data
+    except requests.exceptions.SSLError as exc:
+        raise DhanDataError(f"{host}: SSL certificate validation failed") from exc
+    except requests.exceptions.Timeout as exc:
+        raise DhanDataError(f"{host}: download timed out") from exc
     except requests.RequestException as exc:
-        raise DhanDataError(f"Instrument source unavailable ({type(exc).__name__})") from exc
+        raise DhanDataError(f"{host}: network error ({type(exc).__name__})") from exc
     finally:
         if "resp" in locals():
             resp.close()
