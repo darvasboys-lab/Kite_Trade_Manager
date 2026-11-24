@@ -130,7 +130,7 @@ def _drain(job, snap):
 @st.fragment(run_every="5s")
 def render_r1_today_panel(available, expiry: str, technicals,
                           compact: bool, technically_ready: bool,
-                          priority_quotes=None):
+                          priority_quotes=None, ce_calls=None):
     today = datetime.now(IST).date()
     key = _r1_key(available, expiry, technicals, today)
     history = st.session_state.setdefault("ccs_r1_today_snapshots", {})
@@ -222,7 +222,7 @@ def render_r1_today_panel(available, expiry: str, technicals,
             if snap["crossed"]:
                 df = crossed_r1_frame(
                     available, expiry, snap["crossed"], technicals,
-                    available_otm_calls(available, expiry),
+                    ce_calls if ce_calls is not None else available_otm_calls(available, expiry),
                     compact=compact,
                 )
                 if not df.empty:
