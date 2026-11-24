@@ -26,7 +26,7 @@ import time
 from dhan_visual.screener import choose_expiry, expiry_options, screen_rows
 from dhan_visual.option_panel import render_atm_panel
 from dhan_visual.straddle_panel import render_straddle_panel, available_otm_calls
-from dhan_visual.technical_ui import technical_values_for_table, attach_technical_columns
+from dhan_visual.technical_ui import technical_values_for_table, technical_visible_stage, attach_technical_columns
 
 
 @st.cache_resource
@@ -599,7 +599,9 @@ def render_screener():
 
     # Technical download is separate from cash quotes and covers the full F&O
     # universe, not just the ₹7 lakh/selected-symbol table subset.
-    technicals = technical_values_for_table([item.entry.symbol for item in universe])
+    technical_symbols = [item.entry.symbol for item in universe]
+    technicals = technical_values_for_table(technical_symbols)
+    visible_stage = technical_visible_stage(technical_symbols)
     st.markdown(f"**{len(rows):,} displayed stocks** · {filled:,} with {provider} prices")
     if not rows:
         st.info("No stocks match the selected value filter. The source may also have missing prices.")
@@ -629,7 +631,9 @@ def render_screener():
             )
         # Keep source/quote time in CSV and expandable notes, not the wide table.
         frame = frame.drop(columns=["Quote time", "Price source"], errors="ignore")
-        frame = attach_technical_columns(frame, technicals)
+        frame = attach_technical_columns(
+            frame, technicals, stage=visible_stage,
+        )
         otm_calls = available_otm_calls(available, expiry)
         # Single numeric column. A missing option-chain snapshot remains N/A.
         frame["5%+ CE premium (%)"] = [
@@ -656,8 +660,9 @@ def render_screener():
         )
     st.caption(
         f"{provider} · {filled}/{len(available)} prices · "
-        "✓ CMP > level · ✕ CMP ≤ level · — waiting/unavailable · "
-        "EMAs/R1 from Yahoo history · CE ≥5% uses Dhan chain CMP and needs ATM scan"
+        "✅ CMP above level · no tick = at/below · — waiting/unavailable · "
+        "Yahoo indicators reveal EMA200 → EMA50 → EMA20 → EMA10 → R1 · "
+        "CE ≥5% from opt-in Dhan scan"
     )
     with st.expander("Source details and timestamps", expanded=False):
         st.caption(f"Instrument list: {(st.session_state.get('fno_universe_data') or (None, 'Unknown'))[1]}")
@@ -674,7 +679,9 @@ def render_screener():
     render_straddle_panel(available, expiry)
     render_atm_panel(available, rows, expiry)
     if rows:
-        exported = attach_technical_columns(pd.DataFrame(rows), technicals)
+        # Export fully computed cached levels without waiting for visual
+        # stage animation; no extra Yahoo requests are made.
+        exported = attach_technical_columns(pd.DataFrame(rows), technicals, stage=4)
         otm_calls = available_otm_calls(available, expiry)
         exported["5%+ CE premium (%)"] = [
             float(otm_calls[sym].premium_pct) if sym in otm_calls else None

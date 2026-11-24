@@ -6,6 +6,7 @@ from datetime import datetime, timezone, timedelta
 from hashlib import sha256
 from queue import SimpleQueue
 from threading import Event
+import time
 
 import streamlit as st
 
@@ -13,6 +14,35 @@ from .technical_indicators import TechnicalLevels, format_level
 from .technical_worker import (
     _today_ist, load_all_technicals, read_cached_technicals,
 )
+
+
+# Reveal only one technical category at a time, after all Yahoo history
+# batches have finished. The Yahoo price history is fetched ONCE per stock.
+TECHNICAL_STAGES = (
+    ("EMA 200", "ema200"),
+    ("EMA 50", "ema50"),
+    ("EMA 20", "ema20"),
+    ("EMA 10", "ema10"),
+    ("Monthly R1", "monthly_r1"),
+)
+STAGE_REVEAL_INTERVAL_SECONDS = 3.0
+
+
+def advance_technical_stage(snap: dict, now: float) -> bool:
+    """Advance exactly one column on its scheduled time, never skip stages."""
+    if snap.get("status") != "revealing":
+        return False
+    stage = max(0, min(int(snap.get("stage", 0)), len(TECHNICAL_STAGES)-1))
+    if stage >= len(TECHNICAL_STAGES) - 1:
+        snap["status"] = "complete"
+        return False
+    if now < snap.get("stage_next_at", float("inf")):
+        return False
+    snap["stage"] = stage + 1
+    snap["stage_next_at"] = now + STAGE_REVEAL_INTERVAL_SECONDS
+    if snap["stage"] == len(TECHNICAL_STAGES) - 1:
+        snap["status"] = "complete"
+    return True
 
 
 @st.cache_resource
@@ -35,6 +65,8 @@ def _get_snapshot(symbols: list[str]) -> dict:
         snap = {
             "key": key, "values": available, "processed": len(available),
             "total": len(symbols), "failed": 0, "status": "queued",
+            # EMA200 appears first, others unlock one-by-one after download.
+            "stage": 0, "stage_next_at": float("inf"),
         }
         st.session_state["fno_technicals"] = snap
     return snap
@@ -59,11 +91,16 @@ def _tech_heartbeat(symbols):
             try:
                 processed, _ = job["future"].result()
                 snap["processed"] = max(snap["processed"], processed)
-                snap["status"] = "complete"
+                snap["status"] = "revealing"
             except Exception:
-                snap["status"] = "error"
+                # Even on a partial Yahoo failure, reveal whatever legitimate
+                # values succeeded in earlier batches without inventing data.
+                snap["status"] = "revealing"
+            snap["stage_next_at"] = time.monotonic() + STAGE_REVEAL_INTERVAL_SECONDS
             st.session_state.pop("fno_technical_job", None)
             changed = True
+    if advance_technical_stage(snap, time.monotonic()):
+        changed = True
     if changed:
         st.rerun(scope="app")
 
@@ -87,9 +124,12 @@ def _tech_heartbeat(symbols):
         snap["status"] = "loading"
     if job and job.get("key") == key:
         st.caption(
-            f"Yahoo technicals · {snap['processed']}/{snap['total']} checked · "
-            f"{len(snap['values'])} usable · slow background download"
+            f"Yahoo indicators · EMA 200 first · "
+            f"{snap['processed']}/{snap['total']} checked"
         )
+    elif snap.get("status") == "revealing":
+        current = TECHNICAL_STAGES[snap.get("stage", 0)][0]
+        st.caption(f"Indicator stages · {current} ready · revealing next in order")
 
 
 def technical_values_for_table(symbols: list[str]) -> dict[str, TechnicalLevels]:
@@ -99,23 +139,28 @@ def technical_values_for_table(symbols: list[str]) -> dict[str, TechnicalLevels]
     return snap["values"]
 
 
-def attach_technical_columns(frame, levels: dict[str, TechnicalLevels]):
+def technical_visible_stage(symbols: list[str]) -> int:
+    """The currently unlocked index, from EMA200 to monthly R1."""
+    snap = _get_snapshot(symbols)
+    return max(0, min(int(snap.get("stage", 0)), len(TECHNICAL_STAGES)-1))
+
+
+def attach_technical_columns(frame, levels: dict[str, TechnicalLevels],
+                             *, stage: int = 4):
     """Keep each indicator value and above-CMP status in one compact cell."""
     if "Symbol" not in frame.columns:
         return frame
-    cols = [
-        ("EMA 200", "ema200"),
-        ("EMA 50", "ema50"),
-        ("EMA 20", "ema20"),
-        ("EMA 10", "ema10"),
-        ("Monthly R1", "monthly_r1"),
-    ]
-    for header, attr in cols:
-        frame[header] = [
-            format_level(
-                getattr(levels[symbol], attr, None) if symbol in levels else None,
-                cmp,
-            )
-            for symbol, cmp in zip(frame["Symbol"], frame["Last price (₹)"])
-        ]
+    for index, (header, attr) in enumerate(TECHNICAL_STAGES):
+        # Headings always exist to avoid a jumping table. An unrevealed
+        # stage stays blank even if the values are already in local cache.
+        if index > stage:
+            frame[header] = ["—"] * len(frame)
+        else:
+            frame[header] = [
+                format_level(
+                    getattr(levels[symbol], attr, None) if symbol in levels else None,
+                    cmp,
+                )
+                for symbol, cmp in zip(frame["Symbol"], frame["Last price (₹)"])
+            ]
     return frame

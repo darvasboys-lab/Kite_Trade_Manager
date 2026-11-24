@@ -19,7 +19,10 @@ from dhan_visual.technical_worker import (
     read_cached_technicals, save_cached_technicals, load_all_technicals,
     BATCH_DELAY_SECONDS, BATCH_SIZE,
 )
-from dhan_visual.technical_ui import attach_technical_columns
+from dhan_visual.technical_ui import (
+    attach_technical_columns, advance_technical_stage, TECHNICAL_STAGES,
+    STAGE_REVEAL_INTERVAL_SECONDS,
+)
 
 
 def daily_history(n=260, end="2026-11-23"):
@@ -127,16 +130,70 @@ class EMAMonthlyPivotTests(unittest.TestCase):
 
     def test_compact_cells_display_numeric_level_and_check_vs_displayed_cmp(self):
         price=Decimal("100.25")
-        self.assertEqual(format_level(price,101),"✓ ₹100.25")
-        self.assertEqual(format_level(price,100),"✕ ₹100.25")
-        self.assertEqual(format_level(price,100.25),"✕ ₹100.25")
+        self.assertEqual(format_level(price,101),"✅ ₹100.25")
+        self.assertEqual(format_level(price,100),"₹100.25")
+        self.assertEqual(format_level(price,100.25),"₹100.25")
         self.assertEqual(format_level(price,None),"— ₹100.25")
         self.assertEqual(format_level(None,100),"—")
         frame=pd.DataFrame([{"Symbol":"TCS","Last price (₹)":101.},
                             {"Symbol":"SBIN","Last price (₹)":90.}])
         decorated=attach_technical_columns(frame,{"TCS":fixed_levels()})
-        self.assertEqual(decorated["EMA 200"].tolist(),["✓ ₹97.00","—"])
-        self.assertEqual(decorated["Monthly R1"].tolist(),["✕ ₹105.00","—"])
+        self.assertEqual(decorated["EMA 200"].tolist(),["✅ ₹97.00","—"])
+        self.assertEqual(decorated["Monthly R1"].tolist(),["₹105.00","—"])
+
+
+class SequentialIndicatorPresentationTests(unittest.TestCase):
+    def test_columns_reveal_in_requested_order_without_extra_fetches(self):
+        self.assertEqual(
+            [name for name, _ in TECHNICAL_STAGES],
+            ["EMA 200", "EMA 50", "EMA 20", "EMA 10", "Monthly R1"],
+        )
+        input_frame = pd.DataFrame([
+            {"Symbol": "TCS", "Last price (₹)": 101.0},
+        ])
+        data = {"TCS": fixed_levels()}
+        expected = [
+            ["✅ ₹97.00", "—", "—", "—", "—"],
+            ["✅ ₹97.00", "✅ ₹98.00", "—", "—", "—"],
+            ["✅ ₹97.00", "✅ ₹98.00", "✅ ₹99.00", "—", "—"],
+            ["✅ ₹97.00", "✅ ₹98.00", "✅ ₹99.00", "✅ ₹100.00", "—"],
+            ["✅ ₹97.00", "✅ ₹98.00", "✅ ₹99.00", "✅ ₹100.00", "₹105.00"],
+        ]
+        for stage, expected_values in enumerate(expected):
+            table = attach_technical_columns(input_frame.copy(), data, stage=stage)
+            found = [table[name].iloc[0] for name, _ in TECHNICAL_STAGES]
+            self.assertEqual(found, expected_values)
+
+    def test_stage_changes_one_at_a_time_after_fetch_finishes(self):
+        self.assertGreaterEqual(STAGE_REVEAL_INTERVAL_SECONDS, 2.0)
+        snap = {"stage": 0, "status": "loading", "stage_next_at": 3.0}
+        self.assertFalse(advance_technical_stage(snap, 500.0))
+        self.assertEqual(snap["stage"], 0)
+
+        snap["status"] = "revealing"
+        self.assertFalse(advance_technical_stage(snap, 2.99))
+        self.assertTrue(advance_technical_stage(snap, 3.0))
+        self.assertEqual(snap["stage"], 1)
+        # Repeated rerenders at the same timestamp must not unlock all stages.
+        self.assertFalse(advance_technical_stage(snap, 3.0))
+        for target in range(2, 5):
+            when = 3.0 + STAGE_REVEAL_INTERVAL_SECONDS * (target - 1)
+            self.assertTrue(advance_technical_stage(snap, when))
+            self.assertEqual(snap["stage"], target)
+        self.assertEqual(snap["status"], "complete")
+        self.assertFalse(advance_technical_stage(snap, 1000.0))
+
+    def test_below_or_equal_level_has_no_cross_and_no_green_check(self):
+        frame = pd.DataFrame([
+            {"Symbol": "TCS", "Last price (₹)": 97.0},
+            {"Symbol": "SBIN", "Last price (₹)": 100.0},
+        ])
+        same = {"TCS": fixed_levels(), "SBIN": fixed_levels()}
+        data = attach_technical_columns(frame, same, stage=4)
+        self.assertEqual(data["EMA 200"].tolist(), ["₹97.00", "✅ ₹97.00"])
+        self.assertEqual(data["Monthly R1"].tolist(), ["₹105.00", "₹105.00"])
+        self.assertNotIn("✕", data.to_string())
+        self.assertNotIn("❌", data.to_string())
 
 
 class TechnicalWorkerTests(unittest.TestCase):

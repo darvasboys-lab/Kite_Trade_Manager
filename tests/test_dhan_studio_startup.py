@@ -231,16 +231,37 @@ class PayoffStudioStartupTests(unittest.TestCase):
                 )
             },
             "processed":1,"total":2,"failed":0,"status":"loading",
+            "stage":0,"stage_next_at":float("inf"),
         }
         app.run()
         self.assertFalse(app.exception,[str(x.message) for x in app.exception])
         frame=app.dataframe[0].value
         tcs=frame.loc[frame["Symbol"]=="TCS"].iloc[0]
-        self.assertEqual(tcs["EMA 200"],"✓ ₹99.00")
-        self.assertEqual(tcs["EMA 50"],"✓ ₹100.00")
-        self.assertEqual(tcs["EMA 20"],"✕ ₹102.00")
-        self.assertEqual(tcs["Monthly R1"],"✕ ₹110.00")
+        self.assertEqual(tcs["EMA 200"],"✅ ₹99.00")
+        self.assertEqual(tcs["EMA 50"],"—")
+        self.assertEqual(tcs["EMA 20"],"—")
+        self.assertEqual(tcs["Monthly R1"],"—")
         self.assertEqual(frame.loc[frame["Symbol"]=="SBIN"].iloc[0]["EMA 200"],"—")
+        app.session_state["fno_technicals"]["stage"]=1
+        app.run()
+        self.assertEqual(
+            app.dataframe[0].value.loc[
+                app.dataframe[0].value["Symbol"]=="TCS", "EMA 50"
+            ].iloc[0], "✅ ₹100.00"
+        )
+        self.assertEqual(
+            app.dataframe[0].value.loc[
+                app.dataframe[0].value["Symbol"]=="TCS", "EMA 20"
+            ].iloc[0], "—"
+        )
+        app.session_state["fno_technicals"]["stage"]=4
+        app.run()
+        frame=app.dataframe[0].value
+        tcs=frame.loc[frame["Symbol"]=="TCS"].iloc[0]
+        self.assertEqual(tcs["EMA 20"],"₹102.00")
+        self.assertEqual(tcs["EMA 10"],"₹103.00")
+        self.assertEqual(tcs["Monthly R1"],"₹110.00")
+        self.assertNotIn("✕", frame.to_string())
 
     def test_technical_history_starts_only_after_yahoo_quote_loader_finishes(self):
         from dhan_visual.technical_ui import _tech_key
