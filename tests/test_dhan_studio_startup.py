@@ -494,6 +494,50 @@ class PayoffStudioStartupTests(unittest.TestCase):
                 ].iloc[0], 2.0)
                 scan.assert_not_called()
 
+    def test_tejhq_optional_eod_is_quiet_without_key(self):
+        """No paid-provider calls on launch; user controls paid usage."""
+        app = app_with_catalogue()
+        with patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()), \
+             patch("dhan_visual.screener_ui.scan_tej_eod") as paid:
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(app.radio(key="fno_ce5_mode").value, "EOD")
+            self.assertIsNotNone(app.button(key="fno_tej_eod_scan"))
+            self.assertTrue(app.button(key="fno_tej_eod_scan").disabled)
+            paid.assert_not_called()
+
+    def test_explicit_tejhq_eod_snapshot_populates_column_without_live_crossmix(self):
+        """A real-shaped paid EOD snapshot is never labelled as Dhan LIVE."""
+        from dhan_visual.ce_tejhq import TejEodCall
+        app = app_with_catalogue()
+        app.session_state["fno_expiry"] = "DEC-26"
+        q = TejEodCall(
+            symbol="TCS", expiry="2026-12-29",
+            strike=Decimal("105"), underlying_close=Decimal("100"),
+            call_close=Decimal("2"), premium_pct=Decimal("2"),
+            report_date="2026-11-23", volume=12,
+        )
+        app.session_state["fno_tej_eod_state"] = {
+            "month": "DEC-26", "quotes": {"TCS": q}, "errors": {},
+            "asof": "2026-11-23", "processed": 1,
+            "total": 2, "status": "Completed",
+        }
+        with patch("dhan_visual.screener_ui.recent_nse_fo_reports",
+                   return_value=[]), \
+             patch("dhan_visual.screener_ui._market_pool",
+                   return_value=FakePool()), \
+             patch("dhan_visual.screener_ui.scan_tej_eod") as paid:
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            df = app.dataframe[0].value
+            tcs = df.loc[df["Symbol"] == "TCS"].iloc[0]
+            self.assertEqual(tcs["5%+ CE premium (%)"], 2.0)
+            self.assertEqual(tcs["CE source"], "TejHQ EOD 2026-11-23")
+            app.radio(key="fno_ce5_mode").set_value("Live").run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertTrue(app.dataframe[0].value["5%+ CE premium (%)"].isna().all())
+            paid.assert_not_called()
+
     def test_compact_search_and_filters_retain_all_prior_actions(self):
         app = app_with_catalogue()
         pool = FakePool()
