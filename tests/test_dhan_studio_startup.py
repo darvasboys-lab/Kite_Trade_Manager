@@ -38,10 +38,12 @@ class FakePool:
 
 class PayoffStudioStartupTests(unittest.TestCase):
     def test_main_dashboard_executes_without_exception(self):
-        app = app_with_catalogue().run()
+        pool = FakePool()
+        with patch("dhan_visual.screener_ui._market_pool", return_value=pool):
+            app = app_with_catalogue().run()
         self.assertFalse(app.exception, [str(x.message) for x in app.exception])
         self.assertGreaterEqual(len(app.tabs), 2)
-        self.assertEqual(app.radio(key="fno_price_provider").value, "Dhan")
+        self.assertEqual(app.radio(key="fno_price_provider").value, "Yahoo Finance")
         self.assertEqual(app.selectbox(key="fno_value_preset").value, "Below ₹7 lakh")
         self.assertGreaterEqual(len(app.dataframe), 1)
 
@@ -49,6 +51,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
         app = app_with_catalogue()
         app.session_state["dhan_local_cid"] = "1234567890"
         app.session_state["dhan_local_access_token"] = "FAKE_LONG_TOKEN_FOR_TEST_ONLY"
+        app.session_state["fno_price_provider"] = "Dhan"
         pool = FakePool()
         with patch("dhan_visual.screener_ui._market_pool", return_value=pool):
             app.run()
@@ -66,6 +69,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
         cid, token = "1234567890", "FAKE_LONG_TOKEN_FOR_TEST_ONLY"
         app.session_state["dhan_local_cid"] = cid
         app.session_state["dhan_local_access_token"] = token
+        app.session_state["fno_price_provider"] = "Dhan"
         symbols = ",".join(sorted(x.entry.symbol for x in example()))
         universe_key = hashlib.sha256(symbols.encode()).hexdigest()
         key = hashlib.sha256((cid + ":" + token + ":" + universe_key).encode()).hexdigest()
@@ -83,12 +87,18 @@ class PayoffStudioStartupTests(unittest.TestCase):
         self.assertFalse(app.exception, [str(x.message) for x in app.exception])
         frame = app.dataframe[0].value
         self.assertEqual(frame["Symbol"].tolist(), ["SBIN", "TCS"])
-        self.assertEqual(frame["Contract value (₹)"].tolist(), [450000., 675000.])
+        self.assertEqual(frame["Contract value (₹L)"].tolist(), [4.5, 6.75])
+        app.toggle(key="fno_compact_contract_value").set_value(False).run()
+        self.assertEqual(
+            app.dataframe[0].value["Contract value (₹)"].tolist(),
+            [450000., 675000.]
+        )
         app.selectbox(key="fno_value_preset").set_value("All stocks").run()
         self.assertEqual(len(app.dataframe[0].value), 2)
 
     def test_switching_to_yahoo_starts_full_universe_in_background(self):
         app = app_with_catalogue()
+        app.session_state["fno_price_provider"] = "Dhan"
         app.run()
         pool = FakePool()
         with patch("dhan_visual.screener_ui._market_pool", return_value=pool):
@@ -99,6 +109,45 @@ class PayoffStudioStartupTests(unittest.TestCase):
             self.assertEqual(args[0].__name__, "load_yahoo_all")
             self.assertEqual(len(args[1]), len(example()))
             self.assertEqual(args[-1], 25)
+
+    def test_atm_option_chain_not_called_until_load_button(self):
+        app = app_with_catalogue()
+        pool = FakePool()
+        with patch("dhan_visual.screener_ui._market_pool", return_value=pool), \
+             patch("dhan_visual.option_panel.load_atm_options") as atm:
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            atm.assert_not_called()
+            self.assertGreaterEqual(len(app.expander), 1)
+            self.assertIsNotNone(app.button(key="fno_atm_load"))
+            # Clicking without authentication should still never send requests.
+            app.button(key="fno_atm_load").click().run()
+            atm.assert_not_called()
+
+    def test_atm_load_one_selected_stock_only(self):
+        from dhan_visual.atm_options import AtmOptionQuote, OptionLeg
+        app = app_with_catalogue()
+        app.session_state["dhan_local_cid"] = "1234567890"
+        app.session_state["dhan_local_access_token"] = "TEST_TOKEN_DO_NOT_USE_REAL"
+        expected = AtmOptionQuote(
+            "SBIN", "2026-11-26", Decimal("600"), Decimal("603"), 750,
+            OptionLeg(Decimal("12"), Decimal("11"), Decimal("13")),
+            OptionLeg(Decimal("14"), Decimal("13"), Decimal("15")), "mock",
+        )
+        pool = FakePool()
+        with patch("dhan_visual.screener_ui._market_pool", return_value=pool), \
+             patch("dhan_visual.option_panel.read_client_id", return_value="1234567890"), \
+             patch("dhan_visual.option_panel.load_atm_options", return_value=expected) as load:
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            app.selectbox(key="fno_atm_symbol").set_value("SBIN").run()
+            load.assert_not_called()
+            app.button(key="fno_atm_load").click().run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            load.assert_called_once()
+            self.assertEqual(load.call_args.args[:2], ("SBIN", "NOV-26"))
+            self.assertEqual(load.call_args.args[3], 1333)
+            self.assertEqual(app.session_state["fno_atm_result"]["quote"].ce.ltp, Decimal("12"))
 
     def test_no_manual_list_upload_or_50_stock_hard_cap(self):
         source = (APP.parent / "screener_ui.py").read_text(encoding="utf-8")
