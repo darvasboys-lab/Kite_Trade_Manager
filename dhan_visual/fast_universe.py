@@ -284,12 +284,16 @@ def _write_cache(catalogue, method: str, path: Path = CACHE_FILE):
 COMPACT_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
 
 
-def resolve_equity_ids() -> dict[str, int]:
-    """Get only public NSE equity security IDs when Dhan LTP is actually requested.
+def resolve_equity_ids(required_symbols: set[str] | None = None) -> dict[str, int]:
+    """Resolve Dhan NSE_EQ security IDs with a stock-universe overlap check.
 
-    The stock F&O list is deliberately not dependent on these data sources.
+    A segment CSV with hundreds of rows is not automatically a *usable* match.
+    If a source has no matching stock symbols, try the next official source
+    instead of returning a mapping that would make every LTP appear as N/A.
     """
+    required = {x.strip().upper() for x in (required_symbols or set()) if x.strip()}
     diagnostics = []
+    best_ids, best_overlap = {}, 0
     for name, url, limit in [
         ("Dhan NSE_EQ segment", EQ_SEGMENT_URL, 12_000_000),
         ("Dhan compact master", COMPACT_MASTER_URL, 40_000_000),
@@ -298,11 +302,24 @@ def resolve_equity_ids() -> dict[str, int]:
         try:
             ids = parse_dhan_equities(_download_csv(url, limit, timeout=(5, 18)))
             if len(ids) < 100:
-                raise DhanDataError(f"Only {len(ids)} NSE equities were found")
+                raise DhanDataError(f"Only {len(ids)} NSE cash-equity symbols parsed")
+            overlap = len(required.intersection(ids)) if required else len(ids)
+            if overlap > best_overlap:
+                best_ids, best_overlap = ids, overlap
+            if required and overlap < max(1, len(required) // 2):
+                diagnostics.append(
+                    f"{name}: matched only {overlap}/{len(required)} F&O symbols"
+                )
+                continue
             return ids
         except (DhanDataError, ValueError) as exc:
             diagnostics.append(f"{name}: {exc}")
-    raise DhanDataError("Cash-equity ID mapping unavailable. " + " | ".join(diagnostics))
+    if best_overlap >= max(1, len(required) // 4):
+        return best_ids  # Show partial coverage rather than hide usable quotes.
+    raise DhanDataError(
+        "NSE cash-stock ID mapping unavailable or mismatched. "
+        + " | ".join(diagnostics)[:900]
+    )
 
 
 def _save_catalogue(catalogue, label, path):
