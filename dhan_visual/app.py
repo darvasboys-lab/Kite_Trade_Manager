@@ -1,4 +1,4 @@
-"""Sensibull-style covered-call payoff studio: offline-only Windows prototype.
+"""Covered Call Strategy Builder: read-only Windows strategy and F&O screener.
 
 The Search Stock screen uses a read-only local Dhan market-data connection; no trading functions or order buttons.
 All market data and fills are user-adjustable hypothetical DEMO inputs.
@@ -14,7 +14,7 @@ import streamlit as st
 from dhan_visual.strategy import Position, plan, exposure_after_fills, current_closeout
 from dhan_visual.payoff import current_expiry_payoff, expiry_breakevens, theoretical_today_payoff
 
-st.set_page_config(page_title="Covered Call | Payoff Studio", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Covered Call Strategy Builder", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""
 <style>
 /* Original light options workspace, inspired by the spacious structure of
@@ -170,14 +170,14 @@ st.markdown(
     """<section class="ps-header" aria-label="Payoff Studio workspace">
       <div class="ps-topbar">
         <div class="ps-brand"><div class="ps-mark">↗</div>
-          <h1>Payoff <span>Studio</span></h1></div>
+          <h1>Covered Call <span>Strategy Builder</span></h1></div>
         <div class="ps-chips">
           <span class="ps-chip safe">● Market-data only</span>
           <span class="ps-chip">Stock F&O</span>
           <span class="ps-chip">Strategy demo</span>
         </div>
       </div>
-      <p class="ps-sub">F&O stock screener · contract-size filters · covered-call payoff simulation</p>
+      <p class="ps-sub">NSE F&O screening · EMA signals · monthly R1 · ATM straddles · covered-call payoff</p>
     </section>""", unsafe_allow_html=True
 )
 
