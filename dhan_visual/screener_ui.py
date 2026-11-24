@@ -172,7 +172,7 @@ def _fetch_prices(source, available):
                 if missing_ids or repair_ids:
                     with st.spinner("Matching official NSE cash security IDs (read-only)..."):
                         try:
-                            ids = resolve_equity_ids()
+                            ids = resolve_equity_ids({item.entry.symbol for item in available})
                             updated, matched = match_cash_ids(available, ids)
                             if matched == 0:
                                 raise DhanDataError(
