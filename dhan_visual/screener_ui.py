@@ -77,11 +77,7 @@ def _auto_universe():
     future = st.session_state.get("fno_universe_future")
     error = st.session_state.get("fno_universe_error")
     if data:
-        a, b = st.columns([4, 1])
-        a.caption(f"F&O list · {len(data[0])} stocks loaded")
-        if b.button("Refresh list", key="fno_refresh_universe"):
-            _start_universe(force=True)
-            st.rerun()
+        # No large list-status row above the compact screener toolbar.
         if future:
             _load_status()
         elif error:
@@ -553,6 +549,9 @@ def render_screener():
                 help="Yahoo is default; Dhan needs a valid local data token.",
             )
             manual = st.button("↻ Refresh prices", key="fno_manual_price_refresh")
+            if st.button("↻ Refresh stock list", key="fno_refresh_universe"):
+                _start_universe(force=True)
+                st.rerun()
             st.caption("Yahoo bars may be delayed.")
 
     available = [row for row in universe if expiry in row.entry.lots]
