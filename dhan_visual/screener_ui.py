@@ -698,8 +698,30 @@ def render_screener():
             help="Click the NSE stock symbol to open its TradingView chart.",
             width="small",
         )
+        # Positive EMA signals get distinct, softly tinted checkbox cells.
+        # This is display-only; raw technical values and CSV are unchanged.
+        ema_checkbox_palette = {
+            "EMA 200": ("#916900", "#FFF3BD"),  # yellow
+            "EMA 50": ("#B43E87", "#FCE1F0"),   # pink
+            "EMA 20": ("#C75E62", "#FDE5E5"),   # light red
+            "EMA 10": ("#16845E", "#DCF5E8"),   # green
+        }
+        for ema_header in ema_checkbox_palette:
+            display_frame[ema_header] = display_frame[ema_header].str.replace(
+                "✅", "☑", n=1, regex=False,
+            )
+        styled_frame = display_frame.style
+        for ema_header, (ink, tint) in ema_checkbox_palette.items():
+            styled_frame = styled_frame.apply(
+                lambda values, ink=ink, tint=tint: [
+                    f"color: {ink}; background-color: {tint}; font-weight: 700"
+                    if isinstance(value, str) and value.startswith("☑") else ""
+                    for value in values
+                ],
+                subset=[ema_header],
+            )
         st.dataframe(
-            display_frame, use_container_width=True, hide_index=True, height=580,
+            styled_frame, use_container_width=True, hide_index=True, height=580,
             key=dataframe_key("ccs_stock_screener", st.session_state),
             column_config=autofit_column_config(
                 config, autofit_enabled(st.session_state),
@@ -707,7 +729,7 @@ def render_screener():
         )
     st.caption(
         f"{provider} · {filled}/{len(available)} prices · "
-        "✅ CMP above level · no tick = at/below · — waiting/unavailable · "
+        "☑ colored EMA = above EMA · ✅ above R1 · no tick = at/below · — waiting/unavailable · "
         "Yahoo indicators reveal EMA200 → EMA50 → EMA20 → EMA10 → R1 · "
         "CE ≥5% from opt-in Dhan scan"
     )
