@@ -1,8 +1,8 @@
 # Payoff Studio: light, high-contrast options workspace.
 [theme]
 base = "light"
-primaryColor = "#1768CF"
-backgroundColor = "#F6F8FB"
+primaryColor = "#BD425A"
+backgroundColor = "#FDF9FA"
 secondaryBackgroundColor = "#FFFFFF"
 textColor = "#17253B"
 font = "sans serif"

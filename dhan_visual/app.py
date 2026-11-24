@@ -20,12 +20,15 @@ st.markdown("""
 /* Original light options workspace, inspired by the spacious structure of
    Sensibull's public strategy-builder screenshots, not copied site assets. */
 :root {
-  --page: #f6f8fb;
+  --page: #fdf9fa;
   --surface: #ffffff;
-  --surface2: #f1f5fb;
-  --border: #e1e6ef;
+  --surface2: #fff1f3;
+  --border: #e9dfe3;
   --text: #17253b;
   --muted: #66758c;
+  --rose: #bf4259;
+  --rose-tint: #fff0f3;
+  --rose-border: #f0cdd5;
   --blue: #1768cf;
   --green: #168567;
   --red: #dc485d;
@@ -47,7 +50,8 @@ st.markdown("""
 .ps-header {
   background: #ffffff;
   border: 1px solid var(--border);
-  box-shadow: 0 2px 12px rgba(28, 49, 81, .035);
+  border-top: 3px solid #db6a7c;
+  box-shadow: 0 2px 12px rgba(140, 56, 72, .045);
   border-radius: 12px;
   padding: 15px 20px 14px;
   margin: 2px 0 16px;
@@ -57,25 +61,25 @@ st.markdown("""
 .ps-mark {
   width:34px; height:34px; border-radius:9px;
   display:grid; place-items:center;
-  background:#e9f2ff; color:#1768cf;
+  background:#fff0f3; color:#bb4057;
   font-size:20px; font-weight:750;
 }
 .ps-brand h1 {
   font-size:25px; font-weight:740; letter-spacing:-.045em;
   margin:0; line-height:1.2; color:#17253b;
 }
-.ps-brand h1 span { color:#1768cf; }
+.ps-brand h1 span { color:#bd425a; }
 .ps-chips { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .ps-chip {
-  background:#f4f7fb; color:#576980;
-  border:1px solid #e3e9f2;
+  background:#fff7f8; color:#7f5261;
+  border:1px solid #f0dfe3;
   font-size:11px; font-weight:650; padding:5px 9px; border-radius:7px;
 }
 .ps-chip.safe { background:#eaf8f1; color:#187f61; border-color:#cae9da; }
 .ps-sub { margin:8px 0 0 46px; color:#718198; font-size:12px; line-height:1.5; }
 /* Calm, familiar trading-platform navigation. */
 .stTabs [data-baseweb="tab-list"] {
-  gap:8px; border-bottom:1px solid #dce4ef; padding-bottom:5px;
+  gap:8px; border-bottom:1px solid #eadfe3; padding-bottom:5px;
 }
 .stTabs [data-baseweb="tab"] {
   color:#65758d !important; font-size:13px !important;
@@ -83,13 +87,13 @@ st.markdown("""
   padding:10px 17px !important;
 }
 .stTabs [data-baseweb="tab"][aria-selected="true"] {
-  color:#125dbf !important; background:#eaf3ff !important;
+  color:#a9314a !important; background:#fff0f3 !important;
 }
-.stTabs [data-baseweb="tab-highlight"] { background-color:#1768cf !important; }
-.stTabs [data-baseweb="tab-border"] { background-color:#dce4ef !important; }
+.stTabs [data-baseweb="tab-highlight"] { background-color:#bf4259 !important; }
+.stTabs [data-baseweb="tab-border"] { background-color:#eadfe3 !important; }
 /* Light cards — readable hierarchy without dark blocks or loud gradients. */
 [data-testid="stMetric"] {
-  background:#ffffff; border:1px solid #e2e7ef;
+  background:#ffffff; border:1px solid #ebdfe3;
   border-radius:10px; padding:13px 15px; min-height:89px;
   box-shadow:0 1px 4px rgba(30, 49, 80, .025);
 }
@@ -97,11 +101,11 @@ st.markdown("""
 [data-testid="stMetricValue"] { color:#17253b !important; font-size:22px; font-weight:730; }
 [data-testid="stMetricDelta"] { font-weight:600; }
 [data-testid="stVerticalBlockBorderWrapper"] > div {
-  border-color:#e0e6ef !important; border-radius:10px !important;
+  border-color:#ebdfe3 !important; border-radius:10px !important;
   background: #ffffff !important;
 }
 [data-testid="stExpander"] {
-  background:#ffffff !important; border:1px solid #e1e7f0 !important;
+  background:#ffffff !important; border:1px solid #ebdfe3 !important;
   border-radius:9px !important;
 }
 [data-testid="stExpander"] summary { font-size:13px; font-weight:650; color:#253957; }
@@ -109,7 +113,7 @@ st.markdown("""
 div[data-baseweb="input"], div[data-baseweb="select"] > div,
 div[data-baseweb="base-input"], div[data-baseweb="textarea"] {
   background:#ffffff !important;
-  border-color:#d8e0eb !important;
+  border-color:#e6dce1 !important;
   border-radius:7px !important;
   color:#20324a !important;
 }
@@ -120,30 +124,36 @@ div[data-baseweb="base-input"], div[data-baseweb="textarea"] {
   color:#43536c !important; font-size:12px;
 }
 .stButton button[kind="primary"] {
-  background:#1768cf !important; border:1px solid #1768cf !important;
+  background:#bd425a !important; border:1px solid #bd425a !important;
   color:#ffffff !important; border-radius:7px !important;
   box-shadow:none !important;
 }
 .stButton button[kind="primary"]:hover {
-  background:#0e57b7 !important; border-color:#0e57b7 !important;
+  background:#a9344d !important; border-color:#a9344d !important;
 }
 .stButton button[kind="secondary"] {
-  background:#ffffff !important; border:1px solid #cfd9e7 !important;
-  color:#245079 !important; border-radius:7px !important; box-shadow:none !important;
+  background:#ffffff !important; border:1px solid #e4cfd6 !important;
+  color:#904154 !important; border-radius:7px !important; box-shadow:none !important;
 }
-.stButton button[kind="secondary"]:hover { background:#edf5ff !important; }
+.stButton button[kind="secondary"]:hover { background:#fff0f3 !important; }
 [data-testid="stAlert"] {
   border-radius:8px !important; font-size:12px;
 }
 [data-testid="stDataFrame"] {
-  background:#ffffff !important; border:1px solid #dde5ef;
+  background:#ffffff !important; border:1px solid #e9dfe3;
   border-radius:9px;
 }
 [data-testid="stDataFrame"] iframe { background:#ffffff !important; }
 .stMarkdown h3 { color:#1b2b45 !important; font-size:18px !important; font-weight:720; letter-spacing:-.02em; }
 .stMarkdown h4 { color:#223553 !important; font-size:15px !important; font-weight:700; }
 [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p { color:#687b93 !important; }
-.stApp a { color:#1768cf; }
+.stApp a { color:#b43f57; }
+/* Rose is an accent only; gains remain green and losses remain red. */
+[data-baseweb="input"]:focus-within, [data-baseweb="select"]:focus-within {
+  outline: 1px solid #df899a !important;
+  outline-offset: 1px;
+}
+[data-testid="stToggle"] input:checked + div { background-color:#bd425a !important; }
 footer, [data-testid="stDecoration"] { display:none !important; }
 @media (max-width: 700px) {
   .block-container { padding-left:.82rem !important; padding-right:.82rem !important; }
