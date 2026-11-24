@@ -59,7 +59,7 @@ class MasterParsing(unittest.TestCase):
         records = parse_dhan_master(FIXED)
         quotes = parse_dhan_ltp_response(
             {"status": "success", "data": {"NSE_EQ": {"1333": {"last_price": 650.0},
-                                                     "2885": {"last_price": 1000}}}},
+                                                     "2885": {"last_price": 1100}}}},
             {1333: "SBIN", 2885: "RELIANCE"}, "2026-11-24 UTC")
         result = screen_rows([r.entry for r in records], "NOV-26", quotes, max_value=500000)
         self.assertEqual([r["Symbol"] for r in result], ["SBIN"])

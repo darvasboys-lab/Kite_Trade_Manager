@@ -131,7 +131,11 @@ def parse_dhan_master(data: str | bytes) -> list[DhanUnderlying]:
         sym = _cell(row, "UNDERLYING_SYMBOL").upper()
         if not SYMBOL_PATTERN.fullmatch(sym):
             continue
-        under_id = _positive_integer(_cell(row, "UNDERLYING_SECURITY_ID"))
+        raw_under_id = _cell(row, "UNDERLYING_SECURITY_ID")
+        under_id = _positive_integer(raw_under_id)
+        if raw_under_id and not under_id:
+            # An explicitly invalid underlying ID must not fall back to a guess.
+            continue
         if under_id:
             if under_id not in eq_by_id or eq_by_id[under_id] != sym:
                 # Refuse inconsistent underlying ID/symbol evidence.
