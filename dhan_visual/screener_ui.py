@@ -17,6 +17,7 @@ import streamlit as st
 from dhan_visual.dhan_market import DhanUnderlying
 from dhan_visual.fast_universe import load_fast_catalogue, _write_cache
 from dhan_visual.background_quotes import load_dhan_all, load_yahoo_all, now_utc
+from dhan_visual.local_client_settings import read_client_id, save_client_id, valid_client_id
 from dhan_visual.screener import choose_expiry, expiry_options, screen_rows
 
 
@@ -104,22 +105,38 @@ def _market_pool():
 
 
 def _dhan_credentials():
-    configured = bool(os.environ.get("DHAN_CLIENT_ID") and os.environ.get("DHAN_ACCESS_TOKEN"))
-    with st.expander(
-        "Dhan market-data login (local only)", expanded=not configured
-    ):
+    """Remember only the Client ID locally; token remains in RAM or environment."""
+    saved = read_client_id()
+    default_id = os.environ.get("DHAN_CLIENT_ID", "") or saved
+    configured = bool(default_id and os.environ.get("DHAN_ACCESS_TOKEN"))
+    with st.expander("Dhan market-data login · read-only", expanded=not configured):
         st.caption(
-            "Enter your own Dhan Client ID and current access token once in "
-            "this local browser session. Both are used only for read-only "
-            "Dhan market-data requests. Never paste credentials in GitHub or chat."
+            "Client ID is remembered once on this laptop. Dhan access tokens "
+            "expire within 24 hours; paste your *current* token locally when "
+            "needed. This studio does not automatically renew tokens or save "
+            "them in its settings file. Never share an access token in chat."
         )
         cid = st.text_input(
-            "Dhan Client ID", value=os.environ.get("DHAN_CLIENT_ID", ""),
+            "Dhan Client ID", value=default_id,
             key="dhan_local_cid",
+            help="Saved automatically to this PC's gitignored .dhan_cache/client_settings.json.",
         )
+        current_id = cid.strip()
+        if valid_client_id(current_id):
+            if saved != current_id and not save_client_id(current_id):
+                st.warning(
+                    "Could not remember the Client ID on disk. "
+                    "Check write access to the DhanPayoffStudio folder."
+                )
+            else:
+                st.caption("Client ID remembered on this PC; no need to re-enter it tomorrow.")
+        elif current_id:
+            st.warning("Enter a valid numeric Dhan Client ID to remember it.")
         token = st.text_input(
-            "Dhan access token", value=os.environ.get("DHAN_ACCESS_TOKEN", ""),
+            "Dhan access token · current 24-hour token",
+            value=os.environ.get("DHAN_ACCESS_TOKEN", ""),
             type="password", key="dhan_local_access_token",
+            help="For security, the access token is not saved to the local settings file.",
         )
     return cid.strip(), token.strip()
 
