@@ -206,6 +206,67 @@ footer, [data-testid="stDecoration"] { display:none !important; }
 }
 </style>
 """, unsafe_allow_html=True)
+# Local display preference only; no server, broker, or strategy state changes.
+if "ccs_dark_mode" not in st.session_state:
+    st.session_state["ccs_dark_mode"] = False
+
+if st.session_state["ccs_dark_mode"]:
+    st.markdown("""
+    <style>
+    :root { color-scheme: dark; --page:#10151d; --surface:#171f2a;
+      --surface2:#242331; --border:#34404e; --text:#e4eaf3;
+      --muted:#a5b3c4; --rose:#f39ab2; --rose-tint:#30222c;
+      --rose-border:#694658; }
+    .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"],
+    [data-testid="stHeader"] { background:#10151d !important; color:#e4eaf3 !important; }
+    [data-testid="stSidebar"] { background:#151d27 !important; }
+    .ps-header, [data-testid="stMetric"],
+    [data-testid="stVerticalBlockBorderWrapper"] > div,
+    [data-testid="stExpander"], [data-testid="stDataFrame"] {
+      background:#171f2a !important; border-color:#34404e !important;
+      box-shadow: none !important;
+    }
+    .ps-brand h1, .ccs-screen-head h3, .stMarkdown h3, .stMarkdown h4,
+    [data-testid="stMetricValue"], [data-testid="stExpander"] summary,
+    .ccs-market-strip b { color:#e8eff8 !important; }
+    .ps-brand h1 span, .ccs-screen-head .ccs-accent { color:#f0a0b5 !important; }
+    .ps-mark, .ps-chip { background:#31232d !important;
+      color:#f5b7c6 !important; border-color:#5b3b4d !important; }
+    .ps-chip.safe { background:#15382f !important; color:#8ee8ba !important;
+      border-color:#25614e !important; }
+    .ps-sub, .ccs-screen-head p, .ccs-screen-kicker,
+    [data-testid="stCaptionContainer"],
+    [data-testid="stCaptionContainer"] p,
+    [data-testid="stMetricLabel"], [data-testid="stWidgetLabel"] label,
+    [data-testid="stWidgetLabel"] p { color:#aab9cb !important; }
+    .ccs-screen-head { background:linear-gradient(105deg,#1d2430,#29232e) !important;
+      border-color:#4b3544 !important; }
+    .ccs-market-strip { background:#171f2a !important;
+      color:#b6c3d1 !important; border-color:#34404e !important; }
+    .stTabs [data-baseweb="tab-list"] { border-color:#34404e !important; }
+    .stTabs [data-baseweb="tab"] { color:#b7c3d4 !important; }
+    .stTabs [data-baseweb="tab"][aria-selected="true"] {
+      color:#f4b5c7 !important; background:#332531 !important;
+    }
+    .stTabs [data-baseweb="tab-border"] { background:#34404e !important; }
+    div[data-baseweb="input"], div[data-baseweb="select"] > div,
+    div[data-baseweb="base-input"], div[data-baseweb="textarea"],
+    [data-testid="stPopover"] button,
+    .stButton button[kind="secondary"] {
+      background:#1c2735 !important; border-color:#405065 !important;
+      color:#e4eaf3 !important;
+    }
+    [data-testid="stNumberInput"] input, [data-testid="stTextInput"] input,
+    [data-testid="stTextArea"] textarea { color:#e4eaf3 !important; }
+    [data-testid="stDataFrame"] iframe {background:#171f2a !important;}
+    [data-testid="stDataFrame"] [role="grid"] { background:#171f2a !important; }
+    [data-testid="stAlert"] { border-color:#435468 !important; }
+    .stApp a { color:#f3a8c0 !important; }
+    .stButton button[kind="secondary"]:hover,
+    [data-testid="stPopover"] button:hover { background:#263448 !important; }
+    </style>
+    """, unsafe_allow_html=True)
+
 st.markdown(
     """<section class="ps-header" aria-label="Payoff Studio workspace">
       <div class="ps-topbar">
@@ -220,6 +281,17 @@ st.markdown(
       <p class="ps-sub">NSE F&O screening · EMA signals · monthly R1 · ATM straddles · covered-call payoff</p>
     </section>""", unsafe_allow_html=True
 )
+
+# Keep the mode control readily accessible on desktop and iPhone.
+theme_space, theme_action = st.columns([6, 1.4])
+with theme_action:
+    if st.button(
+        "☀ Light mode" if st.session_state["ccs_dark_mode"] else "☾ Dark mode",
+        key="ccs_theme_button", use_container_width=True,
+        help="Toggle the local appearance; market data and scanner rules are unchanged.",
+    ):
+        st.session_state["ccs_dark_mode"] = not st.session_state["ccs_dark_mode"]
+        st.rerun()
 
 search, manage = st.tabs(["⌕ Search Stock", "▥ Manage Trade"])
 
@@ -350,17 +422,19 @@ with manage:
         if show_target:
             chart.add_hline(y=float(target),line_color="#ca965d",line_dash="dash")
         chart.update_layout(
-            template="plotly_white",height=390,
+            template="plotly_dark" if st.session_state.get("ccs_dark_mode") else "plotly_white",height=390,
             margin=dict(l=8,r=8,t=16,b=7),
-            paper_bgcolor="#ffffff",plot_bgcolor="#ffffff",
-            font=dict(color="#52627b"),
+            paper_bgcolor="#171f2a" if st.session_state.get("ccs_dark_mode") else "#ffffff",
+            plot_bgcolor="#171f2a" if st.session_state.get("ccs_dark_mode") else "#ffffff",
+            font=dict(color="#d0daeb" if st.session_state.get("ccs_dark_mode") else "#52627b"),
             showlegend=bool(show_both or show_today),
             legend=dict(orientation="h",y=1.07,x=0,font=dict(size=11)),
             xaxis_title="Stock price (₹)", yaxis_title="Combined expiry P&L (₹)",
             hovermode="x unified",
         )
-        chart.update_xaxes(gridcolor="#edf0f5",zeroline=False)
-        chart.update_yaxes(gridcolor="#edf0f5",zeroline=False,tickformat=",")
+        grid = "#34404e" if st.session_state.get("ccs_dark_mode") else "#edf0f5"
+        chart.update_xaxes(gridcolor=grid,zeroline=False)
+        chart.update_yaxes(gridcolor=grid,zeroline=False,tickformat=",")
         st.plotly_chart(chart,use_container_width=True)
         st.caption(
             f"Spot ₹{spot:,.2f} (blue marker) · Short call strike ₹{strike:,.2f} "
