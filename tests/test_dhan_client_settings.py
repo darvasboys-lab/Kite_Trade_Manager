@@ -67,6 +67,8 @@ class ClientIdSettingsTests(unittest.TestCase):
             [DhanUnderlying(Underlying("TCS", "TCS", {"NOV-26": 225}), 11536)],
             "Verified fixture",
         )
+        # Keep this test scoped to Dhan Client ID without Yahoo network jobs.
+        app.session_state["fno_price_provider"] = "Dhan"
         with patch("dhan_visual.screener_ui.read_client_id", return_value="1234567890"), \
              patch("dhan_visual.screener_ui.save_client_id") as saver, \
              patch.dict("os.environ", {"DHAN_ACCESS_TOKEN": ""}, clear=False):
@@ -88,6 +90,8 @@ class ClientIdSettingsTests(unittest.TestCase):
             [DhanUnderlying(Underlying("TCS", "TCS", {"NOV-26": 225}), 11536)],
             "Verified fixture",
         )
+        # Keep this test scoped to Dhan Client ID without Yahoo network jobs.
+        app.session_state["fno_price_provider"] = "Dhan"
         app.session_state["dhan_local_cid"] = "1234567890"
         with patch("dhan_visual.screener_ui.read_client_id", return_value=""), \
              patch("dhan_visual.screener_ui.save_client_id", return_value=True) as save, \

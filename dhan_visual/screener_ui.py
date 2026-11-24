@@ -24,6 +24,7 @@ from dhan_visual.auto_auth import (
 )
 import time
 from dhan_visual.screener import choose_expiry, expiry_options, screen_rows
+from dhan_visual.option_panel import render_atm_panel
 
 
 @st.cache_resource
@@ -441,10 +442,10 @@ def _price_panel(universe, expiry, available):
     left, right = st.columns([2, 1])
     with left:
         provider = st.radio(
-            "Quote source", ["Dhan", "Yahoo Finance"], index=0,
+            "Quote source", ["Dhan", "Yahoo Finance"], index=1,
             horizontal=True, key="fno_price_provider",
-            help="Dhan is default. Yahoo is a selectable fallback; its historical "
-                 "bar closes can be delayed or missing.",
+            help="Yahoo is the default; Dhan can be selected for broker LTP. Yahoo's "
+                 "historical bar closes can be delayed or missing.",
         )
     with right:
         # Optional explicit force refresh is never required for first load.
@@ -510,9 +511,9 @@ def _price_panel(universe, expiry, available):
 def render_screener():
     st.subheader("NSE Stock F&O · Contract Value Screener")
     st.caption(
-        "F&O lot sizes load automatically. Dhan starts a full-universe market-data "
-        "snapshot in the background after local authentication; Yahoo backup "
-        "progressively loads every stock. Contract value = cash price × lot size."
+        "Stock F&O lots load automatically. Yahoo Finance is the default price source "
+        "and loads all stock prices in background patches. Dhan is optional. "
+        "Contract value = cash price × selected-expiry lot size."
     )
     universe = _auto_universe()
     if not universe:
@@ -602,34 +603,56 @@ def render_screener():
         )
 
     st.markdown(f"**{len(rows):,} displayed stocks** · {filled:,} with {provider} prices")
+    compact = st.toggle(
+        "Display contract values in lakhs (₹L)",
+        value=True, key="fno_compact_contract_value",
+        help="Example: ₹270500 becomes ₹2.7L. Off shows full rupees. "
+             "All filters, sorting and CSV exports use full numeric values.",
+    )
     if not rows:
         st.info("No stocks match the selected value filter. The source may also have missing prices.")
-        return
-    frame = pd.DataFrame(rows)
-    st.dataframe(
-        frame, use_container_width=True, hide_index=True, height=580,
-        column_config={
+    else:
+        frame = pd.DataFrame(rows)
+        config = {
             "Symbol": st.column_config.TextColumn("Stock"),
             "Company": st.column_config.TextColumn("Company"),
             "Last price (₹)": st.column_config.NumberColumn(
                 "Cash price (₹)", format="₹%.2f"),
             "Lot size": st.column_config.NumberColumn("Lot size", format="%d"),
-            "Contract value (₹)": st.column_config.NumberColumn(
-                "Price × Lot (₹)", format="₹%.2f"),
             "Quote time": st.column_config.TextColumn("Quote time"),
             "Price source": st.column_config.TextColumn("Source"),
-        },
-    )
+        }
+        if compact:
+            # Keep numeric values and sorting; only the table display changes.
+            frame["Contract value (₹L)"] = frame["Contract value (₹)"] / 100000
+            frame = frame.drop(columns=["Contract value (₹)"])
+            frame = frame[[
+                "Symbol", "Company", "Last price (₹)", "Lot size",
+                "Contract value (₹L)", "Quote time", "Price source",
+            ]]
+            config["Contract value (₹L)"] = st.column_config.NumberColumn(
+                "Price × Lot (₹L)", format="₹%.1fL"
+            )
+        else:
+            config["Contract value (₹)"] = st.column_config.NumberColumn(
+                "Price × Lot (₹)", format="₹%.0f"
+            )
+        st.dataframe(
+            frame, use_container_width=True, hide_index=True, height=580,
+            column_config=config,
+        )
     st.caption(
         f"**Data source:** {provider}. Contract value is the underlying notional "
         "and is NOT option margin, broker execution cost or an investment recommendation."
     )
-    exported = io.StringIO()
-    writer = csv.DictWriter(exported, fieldnames=list(rows[0]))
-    writer.writeheader()
-    writer.writerows(rows)
-    st.download_button(
-        "Download filtered CSV", data=exported.getvalue(),
-        file_name=f"fno_stock_values_{expiry}_{provider.lower().replace(' ', '_')}.csv",
-        mime="text/csv", key="fno_export",
-    )
+    render_atm_panel(available, rows, expiry)
+    if rows:
+        exported = io.StringIO()
+        writer = csv.DictWriter(exported, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+        st.download_button(
+            "Download filtered CSV", data=exported.getvalue(),
+            file_name=f"fno_stock_values_{expiry}_{provider.lower().replace(' ', '_')}.csv",
+            mime="text/csv", key="fno_export",
+        )
