@@ -1,6 +1,6 @@
 """Sensibull-style covered-call payoff studio: offline-only Windows prototype.
 
-No broker credentials, trading engine imports, server exposure, or order buttons.
+The Search Stock screen uses a read-only local Dhan market-data connection; no trading functions or order buttons.
 All market data and fills are user-adjustable hypothetical DEMO inputs.
 """
 import sys
@@ -35,12 +35,12 @@ header[data-testid="stHeader"] {background:transparent}
 st.markdown('''<div class="hdr"><span class="kicker">COVERED CALL · STRATEGY ANALYZER</span>
 <h1>Payoff <span style="color:#6ee3d1">Studio</span></h1>
 <p>Position risk, expiry payoff, stage-buy accumulation and 50% profit threshold — all in one workspace.</p>
-<span class="pill">OFFLINE DEMO</span><span class="pill">NO LIVE DHAN DATA</span><span class="pill">NO BROKER ORDERS</span></div>''', unsafe_allow_html=True)
+<span class="pill">OFFLINE DEMO</span><span class="pill">DHAN SCREEN · READ-ONLY</span><span class="pill">NO BROKER ORDERS</span></div>''', unsafe_allow_html=True)
 
 search, manage = st.tabs(["⌕ Search Stock", "▥ Manage Trade"])
 
 with search:
-    # Entire NSE derivatives catalogue and indicative Yahoo quotes are read on demand.
+    # Dhan broker F&O underlyings and live-market LTP snapshots are read on demand.
     # No broker credentials, no trading, and no network work on Manage Trade launch.
     from dhan_visual.screener_ui import render_screener
     render_screener()
