@@ -20,10 +20,13 @@ class PayoffStudioLightThemeTests(unittest.TestCase):
 
     def test_chart_and_visuals_are_coherently_light(self):
         source = APP.read_text(encoding="utf-8")
-        self.assertIn('template="plotly_white"', source)
-        self.assertNotIn('template="plotly_dark"', source)
-        self.assertIn('paper_bgcolor="#ffffff"', source)
-        self.assertIn('plot_bgcolor="#ffffff"', source)
+        # Light remains the default; dark is a reversible opt-in theme.
+        self.assertIn('st.session_state["ccs_dark_mode"] = False', source)
+        self.assertIn('template="plotly_dark" if st.session_state.get("ccs_dark_mode") else "plotly_white"', source)
+        self.assertIn('paper_bgcolor="#171f2a" if st.session_state.get("ccs_dark_mode") else "#ffffff"', source)
+        self.assertIn('plot_bgcolor="#171f2a" if st.session_state.get("ccs_dark_mode") else "#ffffff"', source)
+        self.assertIn('key="ccs_theme_button"', source)
+        self.assertIn('st.session_state["ccs_dark_mode"] = not st.session_state["ccs_dark_mode"]', source)
         self.assertIn("--page: #fdf9fa", source)
         self.assertIn("--rose: #bf4259", source)
         self.assertIn("background:#fff0f3", source)
@@ -44,7 +47,8 @@ class PayoffStudioLightThemeTests(unittest.TestCase):
         self.assertIn('"Quote source", ["Dhan", "Yahoo Finance"], index=1', ui)
         self.assertIn('key="fno_compact_contract_value"', ui)
         self.assertIn("render_atm_panel", ui)
-        self.assertIn("render_straddle_panel(available, expiry)", ui)
+        self.assertIn("render_straddle_panel(available, expiry,", ui)
+        self.assertIn("priority_levels=technicals, priority_quotes=prices", ui)
         from dhan_visual.straddle_scan import straddle_from_atm
         self.assertTrue(callable(straddle_from_atm))
 
