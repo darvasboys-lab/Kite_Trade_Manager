@@ -27,6 +27,9 @@ from dhan_visual.screener import choose_expiry, expiry_options, screen_rows
 from dhan_visual.option_panel import render_atm_panel
 from dhan_visual.straddle_panel import render_straddle_panel, available_otm_calls
 from dhan_visual.technical_ui import technical_values_for_table, technical_visible_stage, attach_technical_columns
+from dhan_visual.table_layout import (
+    autofit_column_config, autofit_enabled, click_autofit, dataframe_key,
+)
 
 
 @st.cache_resource
@@ -497,8 +500,8 @@ def render_screener():
 
     # Compact one-row toolbar: visible expiry + three tucked-away controls.
     # All prior Streamlit widget keys are preserved for saved user selections.
-    expiry_col, search_col, filters_col, source_col = st.columns(
-        [1.2, 1.0, 1.30, 1.0], gap="small",
+    expiry_col, search_col, filters_col, source_col, autofit_col = st.columns(
+        [1.05, 0.9, 1.2, 0.85, 1.05], gap="small",
     )
     with expiry_col:
         expiry = st.selectbox(
@@ -553,6 +556,15 @@ def render_screener():
                 _start_universe(force=True)
                 st.rerun()
             st.caption("Yahoo bars may be delayed.")
+    with autofit_col:
+        st.button(
+            "↔ Auto-fit all", key="ccs_autofit_all_button",
+            on_click=click_autofit, args=(st.session_state,),
+            use_container_width=True,
+            help="Fit all visible columns to their contents across the "
+                 "stock screener, ATM rankings and strategy tables. "
+                 "Click again to reset manually adjusted widths.",
+        )
 
     available = [row for row in universe if expiry in row.entry.lots]
     provider, all_prices = _price_panel(universe, expiry, available, provider, manual)
@@ -609,7 +621,6 @@ def render_screener():
         frame = pd.DataFrame(rows)
         config = {
             "Symbol": st.column_config.TextColumn("Stock"),
-            "Company": st.column_config.TextColumn("Company"),
             "Last price (₹)": st.column_config.NumberColumn(
                 "Cash price (₹)", format="₹%.2f"),
             "Lot size": st.column_config.NumberColumn("Lot size", format="%d"),
@@ -619,7 +630,7 @@ def render_screener():
             frame["Contract value (₹L)"] = frame["Contract value (₹)"] / 100000
             frame = frame.drop(columns=["Contract value (₹)"])
             frame = frame[[
-                "Symbol", "Company", "Last price (₹)", "Lot size",
+                "Symbol", "Last price (₹)", "Lot size",
                 "Contract value (₹L)",
             ]]
             config["Contract value (₹L)"] = st.column_config.NumberColumn(
@@ -630,7 +641,11 @@ def render_screener():
                 "Price × Lot (₹)", format="₹%.0f"
             )
         # Keep source/quote time in CSV and expandable notes, not the wide table.
-        frame = frame.drop(columns=["Quote time", "Price source"], errors="ignore")
+        # Company remains available for existing name-search matching,
+        # but is removed from the DISPLAY and the filtered CSV export.
+        frame = frame.drop(
+            columns=["Company", "Quote time", "Price source"], errors="ignore"
+        )
         frame = attach_technical_columns(
             frame, technicals, stage=visible_stage,
         )
@@ -656,7 +671,10 @@ def render_screener():
             config[title] = st.column_config.TextColumn(title, help=note, width="medium")
         st.dataframe(
             frame, use_container_width=True, hide_index=True, height=580,
-            column_config=config,
+            key=dataframe_key("ccs_stock_screener", st.session_state),
+            column_config=autofit_column_config(
+                config, autofit_enabled(st.session_state),
+            ),
         )
     st.caption(
         f"{provider} · {filled}/{len(available)} prices · "
@@ -681,7 +699,10 @@ def render_screener():
     if rows:
         # Export fully computed cached levels without waiting for visual
         # stage animation; no extra Yahoo requests are made.
-        exported = attach_technical_columns(pd.DataFrame(rows), technicals, stage=4)
+        exported = attach_technical_columns(
+            pd.DataFrame(rows).drop(columns=["Company"], errors="ignore"),
+            technicals, stage=4,
+        )
         otm_calls = available_otm_calls(available, expiry)
         exported["5%+ CE premium (%)"] = [
             float(otm_calls[sym].premium_pct) if sym in otm_calls else None

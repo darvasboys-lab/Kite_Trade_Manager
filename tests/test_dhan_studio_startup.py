@@ -46,6 +46,9 @@ class PayoffStudioStartupTests(unittest.TestCase):
         self.assertEqual(app.radio(key="fno_price_provider").value, "Yahoo Finance")
         self.assertEqual(app.selectbox(key="fno_value_preset").value, "Below ₹7 lakh")
         self.assertGreaterEqual(len(app.dataframe), 1)
+        self.assertNotIn("Company", app.dataframe[0].value.columns)
+        self.assertIn("Symbol", app.dataframe[0].value.columns)
+        self.assertIsNotNone(app.button(key="ccs_autofit_all_button"))
         for col in ("EMA 200", "EMA 50", "EMA 20", "EMA 10", "Monthly R1",
                     "5%+ CE premium (%)"):
             self.assertIn(col, app.dataframe[0].value.columns)
@@ -55,6 +58,36 @@ class PayoffStudioStartupTests(unittest.TestCase):
         self.assertIsNotNone(app.text_input(key="fno_symbol_find"))
         self.assertIsNotNone(app.button(key="fno_manual_price_refresh"))
         self.assertIsNotNone(app.button(key="fno_refresh_universe"))
+
+    def test_one_click_autofits_every_table_without_changing_stock_data(self):
+        from dhan_visual.table_layout import dataframe_key
+        app = app_with_catalogue()
+        pool = FakePool()
+        with patch("dhan_visual.screener_ui._market_pool", return_value=pool):
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            before = app.dataframe[0].value.copy()
+            self.assertNotIn("Company", before.columns)
+            app.button(key="ccs_autofit_all_button").click().run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertTrue(app.session_state["ccs_autofit_all"])
+            self.assertEqual(app.session_state["ccs_autofit_revision"], 1)
+            self.assertEqual(
+                dataframe_key("ccs_stock_screener", app.session_state),
+                "ccs_stock_screener_autofit_1",
+            )
+            self.assertEqual(
+                dataframe_key("ccs_straddle_rankings", app.session_state),
+                "ccs_straddle_rankings_autofit_1",
+            )
+            self.assertEqual(
+                dataframe_key("ccs_covered_call_stages", app.session_state),
+                "ccs_covered_call_stages_autofit_1",
+            )
+            self.assertTrue(app.dataframe[0].value.equals(before))
+            app.button(key="ccs_autofit_all_button").click().run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(app.session_state["ccs_autofit_revision"], 2)
 
     def test_local_credentials_dispatch_entire_universe_without_refresh_click(self):
         app = app_with_catalogue()
