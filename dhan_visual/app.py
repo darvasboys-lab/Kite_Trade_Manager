@@ -40,16 +40,10 @@ st.markdown('''<div class="hdr"><span class="kicker">COVERED CALL · STRATEGY AN
 search, manage = st.tabs(["⌕ Search Stock", "▥ Manage Trade"])
 
 with search:
-    st.subheader("Search Stock")
-    st.caption("Read-only Dhan stock and option lookup will be integrated here. No quote displayed in this version is live.")
-    symbol = st.text_input("Search NSE F&O symbol",placeholder="Enter symbol (e.g., ABC)")
-    a,b,c=st.columns(3)
-    a.metric("Broker", "Not connected")
-    b.metric("Spot / live BID", "Unavailable")
-    c.metric("Expiry / OTM calls", "Unavailable")
-    if symbol:
-        st.info(f"{symbol.upper()}: awaiting verified Dhan instrument master, option quotes and position-reader integration.")
-    st.warning("The Search Stock tab has no order placement. Your first equity buy and short call remain manual.")
+    # Entire NSE derivatives catalogue and indicative Yahoo quotes are read on demand.
+    # No broker credentials, no trading, and no network work on Manage Trade launch.
+    from dhan_visual.screener_ui import render_screener
+    render_screener()
 
 with manage:
     st.info("DEMO ONLY: Example positions and quotes are simulated. No Dhan account is connected; no order can be placed.")
