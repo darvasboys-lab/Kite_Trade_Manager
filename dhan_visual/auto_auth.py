@@ -16,16 +16,18 @@ import re
 import sys
 import threading
 import time
+import hashlib
+import hmac
+import struct
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 
 SERVICE = "DhanPayoffStudio.LocalTOTP.v1"
 AUTH_URL = "https://auth.dhan.co/app/generateAccessToken"
 PROFILE_URL = "https://api.dhan.co/v2/profile"
 TOKEN_MIN_REMAINING = timedelta(minutes=25)
 FAILURE_BACKOFF_SECONDS = 600
-INDIA_ZONE = ZoneInfo("Asia/Kolkata")
+INDIA_ZONE = timezone(timedelta(hours=5, minutes=30))  # IST needs no Windows tzdata
 LOCK = threading.RLock()
 
 
@@ -74,7 +76,7 @@ def normalize_totp_secret(secret: str) -> str:
         )
     try:
         raw = base64.b32decode(key + "=" * (-len(key) % 8), casefold=True)
-    except (ValueError, Exception) as exc:
+    except Exception as exc:
         raise AutoAuthError("TOTP setup secret is not valid base32") from exc
     if len(raw) < 10:
         raise AutoAuthError("TOTP setup secret is too short")
@@ -151,11 +153,16 @@ def _load_credentials(cid: str) -> tuple[str, str]:
 
 
 def generate_totp(seed: str, at: int | None = None) -> str:
-    import pyotp
-    secret = normalize_totp_secret(seed)
-    return pyotp.TOTP(secret, digits=6, interval=30).at(
-        int(at if at is not None else time.time())
+    """Same RFC 6238 standard-library algorithm as ResultBot's compute_totp."""
+    raw = base64.b32decode(
+        normalize_totp_secret(seed) + "=" * (-len(normalize_totp_secret(seed)) % 8),
+        casefold=True,
     )
+    counter = int(at if at is not None else time.time()) // 30
+    digest = hmac.new(raw, struct.pack(">Q", counter), hashlib.sha1).digest()
+    offset = digest[-1] & 15
+    truncated = struct.unpack(">I", digest[offset: offset + 4])[0] & 0x7fffffff
+    return str(truncated % 1000000).zfill(6)
 
 
 def _parse_expiry(raw) -> datetime:
