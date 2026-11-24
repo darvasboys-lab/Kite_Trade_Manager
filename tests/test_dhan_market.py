@@ -84,6 +84,21 @@ class MarketDataParsing(unittest.TestCase):
             with self.assertRaises(DhanDataError):
                 parse_dhan_ltp_response(response, {1333: "SBIN"}, "time")
 
+    def test_broker_error_codes_are_visible_without_raw_payload(self):
+        with self.assertRaisesRegex(DhanDataError, "DH-901"):
+            parse_dhan_ltp_response(
+                {"status": "failure", "errorCode": "DH-901",
+                 "errorMessage": "secret token must not be echoed"},
+                {11536:"TCS"}, "now"
+            )
+        try:
+            parse_dhan_ltp_response(
+                {"status": "failure", "errorCode": "DH-901",
+                 "errorMessage": "secret token must not be echoed"},
+                {11536:"TCS"}, "now")
+        except DhanDataError as exc:
+            self.assertNotIn("secret token", str(exc))
+
     def test_invalid_prices_rejected(self):
         response = {"status": "success", "data": {"NSE_EQ": {
             "1": {"last_price": "NaN"}, "2": {"last_price": -20},

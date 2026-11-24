@@ -92,9 +92,16 @@ def _download_csv(url: str, cap_bytes: int, timeout: tuple = (5, 14)) -> bytes:
 
 
 def parse_dhan_equities(payload: bytes) -> dict[str, int]:
-    """Read only NSE_EQ ordinary equity instruments from a segment CSV."""
+    """Derive unambiguous NSE EQ security IDs from official Dhan compact/detailed CSV.
+
+    Detailed CSV no longer has SEM_TRADING_SYMBOL, per Dhan v2 docs. Inspect
+    SYMBOL_NAME, display symbol and compact aliases instead. Never guess names
+    from a derivative option contract, or accept different security IDs for
+    the same cash symbol.
+    """
     equities = {}
     conflicted = set()
+    seen_equity_rows = 0
     for row in _csv_rows(payload):
         if _cell(row, "EXCH_ID", "SEM_EXM_EXCH_ID").upper() != "NSE":
             continue
@@ -103,19 +110,49 @@ def parse_dhan_equities(payload: bytes) -> dict[str, int]:
         series = _cell(row, "SERIES", "SEM_SERIES").upper()
         if series and series not in ("EQ", "EQUITY"):
             continue
-        sym = _cell(row, "TRADING_SYMBOL", "SEM_TRADING_SYMBOL", "SYMBOL_NAME", "SM_SYMBOL_NAME").upper()
         secid = _positive_integer(_cell(row, "SECURITY_ID", "SEM_SMST_SECURITY_ID"))
-        if not secid or not SYMBOL_PATTERN.fullmatch(sym):
+        if not secid:
             continue
-        if sym in equities and equities[sym] != secid:
-            conflicted.add(sym)
-        else:
-            equities[sym] = secid
-    for sym in conflicted:
-        equities.pop(sym, None)
+        seen_equity_rows += 1
+        candidates = [
+            _cell(row, "TRADING_SYMBOL", "SEM_TRADING_SYMBOL"),
+            _cell(row, "SYMBOL_NAME", "SM_SYMBOL_NAME"),
+            _cell(row, "DISPLAY_NAME", "SEM_CUSTOM_SYMBOL"),
+        ]
+        for candidate in candidates:
+            candidate = candidate.strip().upper()
+            if candidate.endswith("-EQ"):
+                candidate = candidate[:-3]
+            # Multiword full company names are not NSE cash symbols.
+            if not SYMBOL_PATTERN.fullmatch(candidate):
+                continue
+            old = equities.get(candidate)
+            if old is not None and old != secid:
+                conflicted.add(candidate)
+            else:
+                equities[candidate] = secid
+    for symbol in conflicted:
+        equities.pop(symbol, None)
     if not equities:
-        raise DhanDataError("No verified NSE_EQ equity symbols/security IDs found")
+        raise DhanDataError(
+            f"Dhan cash-equity master contained {seen_equity_rows} NSE_EQ records "
+            "but no validated symbol/security ID mappings (check CSV columns)"
+        )
     return equities
+
+
+def match_cash_ids(underlyings: list[DhanUnderlying], equities: dict[str, int]) -> tuple[list[DhanUnderlying], int]:
+    """Attach only verified NSE_EQ IDs, leaving unresolvable stocks unpriced."""
+    mapped = []
+    matched = 0
+    for item in underlyings:
+        found = equities.get(item.entry.symbol)
+        # An old cached ID must not override a freshly verified mismatch.
+        secid = found if found is not None else 0
+        if secid:
+            matched += 1
+        mapped.append(DhanUnderlying(item.entry, secid))
+    return mapped, matched
 
 
 def map_nse_lots_to_cash_security_ids(lot_payload: bytes, equities: dict[str, int]) -> list[DhanUnderlying]:
@@ -247,12 +284,16 @@ def _write_cache(catalogue, method: str, path: Path = CACHE_FILE):
 COMPACT_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
 
 
-def resolve_equity_ids() -> dict[str, int]:
-    """Get only public NSE equity security IDs when Dhan LTP is actually requested.
+def resolve_equity_ids(required_symbols: set[str] | None = None) -> dict[str, int]:
+    """Resolve Dhan NSE_EQ security IDs with a stock-universe overlap check.
 
-    The stock F&O list is deliberately not dependent on these data sources.
+    A segment CSV with hundreds of rows is not automatically a *usable* match.
+    If a source has no matching stock symbols, try the next official source
+    instead of returning a mapping that would make every LTP appear as N/A.
     """
+    required = {x.strip().upper() for x in (required_symbols or set()) if x.strip()}
     diagnostics = []
+    best_ids, best_overlap = {}, 0
     for name, url, limit in [
         ("Dhan NSE_EQ segment", EQ_SEGMENT_URL, 12_000_000),
         ("Dhan compact master", COMPACT_MASTER_URL, 40_000_000),
@@ -261,11 +302,24 @@ def resolve_equity_ids() -> dict[str, int]:
         try:
             ids = parse_dhan_equities(_download_csv(url, limit, timeout=(5, 18)))
             if len(ids) < 100:
-                raise DhanDataError(f"Only {len(ids)} NSE equities were found")
+                raise DhanDataError(f"Only {len(ids)} NSE cash-equity symbols parsed")
+            overlap = len(required.intersection(ids)) if required else len(ids)
+            if overlap > best_overlap:
+                best_ids, best_overlap = ids, overlap
+            if required and overlap < max(1, len(required) // 2):
+                diagnostics.append(
+                    f"{name}: matched only {overlap}/{len(required)} F&O symbols"
+                )
+                continue
             return ids
         except (DhanDataError, ValueError) as exc:
             diagnostics.append(f"{name}: {exc}")
-    raise DhanDataError("Cash-equity ID mapping unavailable. " + " | ".join(diagnostics))
+    if best_overlap >= max(1, len(required) // 4):
+        return best_ids  # Show partial coverage rather than hide usable quotes.
+    raise DhanDataError(
+        "NSE cash-stock ID mapping unavailable or mismatched. "
+        + " | ".join(diagnostics)[:900]
+    )
 
 
 def _save_catalogue(catalogue, label, path):
