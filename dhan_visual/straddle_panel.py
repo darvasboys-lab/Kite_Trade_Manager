@@ -19,6 +19,7 @@ from .auto_auth import is_configured
 from .local_client_settings import read_client_id, save_client_id, valid_client_id
 from .option_panel import _local_creds
 from .straddle_scan import rank_straddles, scan_all_straddles
+from .load_priority import strongest_first
 from .table_layout import autofit_column_config, autofit_enabled, dataframe_key
 from .tradingview_links import clickable_stock_frame, TRADINGVIEW_SYMBOL_DISPLAY
 
@@ -110,7 +111,8 @@ def _drain_events(snap):
 
 
 @st.fragment(run_every="2s")
-def render_straddle_panel(available, expiry):
+def render_straddle_panel(available, expiry, *, priority_levels=None,
+                          priority_quotes=None):
     """Live progress and sorting for the entire expiry universe, one user click."""
     total = len(available)
     key = _scan_key(available, expiry)
@@ -148,7 +150,8 @@ def render_straddle_panel(available, expiry):
                 st.caption(
                     "A single click scans the full universe in the background. "
                     "Dhan limits option-chain requests to approximately one every "
-                    "3 seconds; this may take a while. The main Yahoo screener stays usable."
+                    "3 seconds; strongest confirmed EMA/R1 stocks are scanned first, "
+                    "then all remaining stocks. The main Yahoo screener stays usable."
                 )
             elif our_job:
                 st.caption(
@@ -212,6 +215,10 @@ def render_straddle_panel(available, expiry):
                 if read_client_id() != cid:
                     save_client_id(cid)
                 queue, cancel = SimpleQueue(), Event()
+                priority_symbols = strongest_first(
+                    [item.entry.symbol for item in available],
+                    priority_levels, priority_quotes,
+                )
                 snap["started"] = True
                 snap["status"] = "Starting full-universe scan"
                 snap["fatal"] = ""
@@ -223,6 +230,7 @@ def render_straddle_panel(available, expiry):
                         scan_all_straddles, list(available), expiry,
                         cid, token, queue, cancel,
                         existing=done, auto_login=automatic,
+                        priority_symbols=priority_symbols,
                     ),
                 }
                 st.rerun()

@@ -171,6 +171,7 @@ def scan_all_straddles(
     existing: set[str] | None = None,
     auto_login: bool = False,
     master_lookup=True,
+    priority_symbols: list[str] | None = None,
 ) -> tuple[int, int]:
     """A complete, cancellable, resumable, rate-limited scan of ALL stocks.
 
@@ -179,7 +180,12 @@ def scan_all_straddles(
     does not cause an unbounded loop or fabricate premium values.
     """
     universe = {x.entry.symbol: x for x in underlyings if month in x.entry.lots}
-    symbols = sorted(universe)
+    # Ranking only affects the request order. New, unranked, or below-EMA200
+    # stocks remain included; a changed universe is never silently omitted.
+    front = list(dict.fromkeys(
+        sym for sym in (priority_symbols or ()) if sym in universe
+    ))
+    symbols = front + sorted(set(universe).difference(front))
     total = len(symbols)
     done = set(existing or set()).intersection(symbols)
     completed = len(done)
