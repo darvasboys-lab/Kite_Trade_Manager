@@ -169,7 +169,8 @@ class AutoAuthTests(unittest.TestCase):
         self.assertIn("on_click=_auto_enable", ui)
         self.assertIn("on_click=_auto_disable", ui)
         self.assertNotIn("DHAN_TOTP_SECRET =", ui)
-        self.assertNotIn("ResultBot", auth)
+        self.assertNotIn("from src.broker", auth)
+        self.assertNotIn("import resultbot", auth.lower())
         self.assertNotIn("/orders", auth)
 
 
