@@ -73,7 +73,7 @@ def _get_snapshot(symbols: list[str]) -> dict:
 
 
 @st.fragment(run_every="3s")
-def _tech_heartbeat(symbols):
+def _tech_heartbeat(symbols, priority_quotes=None):
     """Poll worker using Streamlit main thread; never call Streamlit in worker."""
     snap = _get_snapshot(symbols)
     key = snap["key"]
@@ -118,6 +118,7 @@ def _tech_heartbeat(symbols):
             "key": key, "queue": queue, "stop": stop,
             "future": _tech_pool().submit(
                 load_all_technicals, list(symbols), queue, stop,
+                priority_quotes=priority_quotes,
             ),
         }
         st.session_state["fno_technical_job"] = job
@@ -132,10 +133,10 @@ def _tech_heartbeat(symbols):
         st.caption(f"Indicator stages · {current} ready · revealing next in order")
 
 
-def technical_values_for_table(symbols: list[str]) -> dict[str, TechnicalLevels]:
+def technical_values_for_table(symbols: list[str], priority_quotes=None) -> dict[str, TechnicalLevels]:
     """Return available technical levels without blocking app rendering."""
     snap = _get_snapshot(symbols)
-    _tech_heartbeat(symbols)
+    _tech_heartbeat(symbols, priority_quotes)
     return snap["values"]
 
 
