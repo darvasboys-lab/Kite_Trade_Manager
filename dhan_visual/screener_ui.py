@@ -187,7 +187,7 @@ def _auto_login_heartbeat(cid):
                 st.session_state["dhan_auto_auth_fail_at"] = time.monotonic()
                 st.session_state["dhan_auto_error"] = "Dhan TOTP login failed; retry securely"
             st.session_state.pop("dhan_auto_auth_job", None)
-            st.rerun()
+            st.rerun(scope="app")
         st.caption("Secure Dhan TOTP login is running in the background…")
     else:
         current = st.session_state.get("dhan_auto_access")
@@ -258,7 +258,7 @@ def _auto_login_panel(cid, manual_token):
 def _dhan_credentials():
     saved = read_client_id()
     default_id = os.environ.get("DHAN_CLIENT_ID", "") or saved
-    configured = bool(default_id and os.environ.get("DHAN_ACCESS_TOKEN"))
+    configured = bool(default_id and (os.environ.get("DHAN_ACCESS_TOKEN") or is_configured(default_id)))
     with st.expander("Dhan market-data login · read-only", expanded=not configured):
         st.caption(
             "Client ID is remembered locally. Choose manual token entry or "
