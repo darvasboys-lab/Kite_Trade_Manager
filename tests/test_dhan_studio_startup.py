@@ -149,6 +149,49 @@ class PayoffStudioStartupTests(unittest.TestCase):
             self.assertEqual(load.call_args.args[3], 1333)
             self.assertEqual(app.session_state["fno_atm_result"]["quote"].ce.ltp, Decimal("12"))
 
+    def test_full_straddle_panel_never_calls_dhan_on_page_load(self):
+        app = app_with_catalogue()
+        pool = FakePool()
+        with patch("dhan_visual.screener_ui._market_pool", return_value=pool), \
+             patch("dhan_visual.straddle_panel.scan_all_straddles") as scan:
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            scan.assert_not_called()
+            self.assertIsNotNone(app.button(key="fno_straddle_start"))
+            self.assertIsNotNone(app.button(key="fno_straddle_stop"))
+
+    def test_single_start_scans_all_unfiltered_stock_underlyings(self):
+        app = app_with_catalogue()
+        # These credentials are synthetic and never sent to the broker.
+        app.session_state["dhan_local_cid"] = "1234567890"
+        app.session_state["dhan_local_access_token"] = "OFFLINE_FAKE_TEST_TOKEN_LONG"
+        app.session_state["fno_price_provider"] = "Dhan"
+        pool, other = FakePool(), FakePool()
+        with patch("dhan_visual.screener_ui._market_pool", return_value=other), \
+             patch("dhan_visual.straddle_panel._straddle_pool", return_value=pool), \
+             patch("dhan_visual.straddle_panel.read_client_id", return_value="1234567890"), \
+             patch("dhan_visual.straddle_panel.is_configured", return_value=False):
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            app.button(key="fno_straddle_start").click().run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(len(pool.calls), 1)
+            args, kwargs = pool.calls[0]
+            self.assertEqual(args[0].__name__, "scan_all_straddles")
+            self.assertEqual(len(args[1]), 2)
+            self.assertEqual(args[2], "NOV-26")
+            app.run()
+            self.assertEqual(len(pool.calls), 1)
+
+    def test_long_quote_date_and_source_fields_not_in_primary_cash_table(self):
+        app = app_with_catalogue()
+        app.session_state["fno_price_provider"] = "Dhan"
+        app.run()
+        self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+        cols = app.dataframe[0].value.columns.tolist()
+        self.assertNotIn("Quote time", cols)
+        self.assertNotIn("Price source", cols)
+
     def test_no_manual_list_upload_or_50_stock_hard_cap(self):
         source = (APP.parent / "screener_ui.py").read_text(encoding="utf-8")
         self.assertNotIn("file_uploader", source)
