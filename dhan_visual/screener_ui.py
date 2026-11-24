@@ -258,19 +258,34 @@ def _fetch_prices(source, available):
             "stale or unavailable. These quotes are never combined with Dhan quotes."
         )
         size = st.selectbox(
-            "Yahoo batch", ["First 50 stocks", "First 100 stocks", "All stocks (slow)"],
+            "Yahoo batch", ["Next 50 missing", "Next 100 missing", "All stocks (slow)"],
             key="fno_yahoo_batch",
+            help="Free Yahoo quotes may throttle or fail; loading is incremental unless All is selected.",
         )
         cache = st.session_state.get("fno_yahoo_snapshot") or {}
-        if st.session_state.pop("fno_refresh_requested", False):
-            target = symbols if size.startswith("All") else symbols[:50 if "50" in size else 100]
-            with st.spinner(f"Requesting Yahoo closes for {len(target)} stocks..."):
-                quotes, errors = _cached_yahoo(target)
-            cache = {
-                "quotes": quotes, "errors": errors,
-                "requested_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-            }
-            st.session_state["fno_yahoo_snapshot"] = cache
+        refresh = st.session_state.pop("fno_refresh_requested", False)
+        automatic_first = not st.session_state.get("fno_yahoo_attempted") and not cache
+        if refresh or automatic_first:
+            st.session_state["fno_yahoo_attempted"] = True
+            previous = cache.get("quotes", {})
+            missing = [symbol for symbol in symbols if symbol not in previous]
+            if size.startswith("All"):
+                target, merge = symbols, False
+            else:
+                target = tuple(missing[:50 if "50" in size else 100])
+                merge = True
+            if target:
+                with st.spinner(f"Requesting Yahoo prices for {len(target)} stocks..."):
+                    new_quotes, errors = _cached_yahoo(target)
+                combined = dict(previous) if merge else {}
+                combined.update(new_quotes)
+                cache = {
+                    "quotes": combined, "errors": errors,
+                    "requested_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+                }
+                st.session_state["fno_yahoo_snapshot"] = cache
+            else:
+                st.info("All symbols have a Yahoo quote. Select All stocks to refresh.")
         prices = {s: q for s, q in cache.get("quotes", {}).items() if s in symbols}
         st.caption("Yahoo bar prices · fetched " + cache.get("requested_at", "not yet"))
         errors = cache.get("errors", [])
