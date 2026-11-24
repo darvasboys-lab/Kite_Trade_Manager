@@ -40,14 +40,13 @@ st.markdown('''<div class="hdr"><span class="kicker">COVERED CALL · STRATEGY AN
 search, manage = st.tabs(["⌕ Search Stock", "▥ Manage Trade"])
 
 with search:
-    # Dhan broker F&O underlyings and live-market LTP snapshots are read on demand.
-    # No broker credentials, no trading, and no network work on Manage Trade launch.
+    # F&O public list loads automatically in a nonblocking worker; no trading calls.
     from dhan_visual.screener_ui import render_screener
     render_screener()
 
 with manage:
     st.info("DEMO ONLY: Example positions and quotes are simulated. No Dhan account is connected; no order can be placed.")
-    with st.expander("Edit example position & scenario inputs",expanded=True):
+    with st.expander("Edit strategy inputs",expanded=False):
         p1,p2,p3,p4=st.columns(4)
         avg=p1.number_input("First MANUAL batch average (₹)",min_value=0.05,value=1000.0,step=1.0)
         qty=p2.number_input("Manually owned shares",min_value=1,value=100,step=1)
@@ -66,7 +65,7 @@ with manage:
         st.error(f"No valid buying schedule: {exc}")
         st.stop()
 
-    with st.expander("Hypothetical market prices & fill progress",expanded=True):
+    with st.expander("Edit demo market prices and fill progress",expanded=False):
         a,b,c,d=st.columns(4)
         spot=a.number_input("Stock BID / indicative spot (₹)",min_value=0.05,value=1100.0,step=1.0)
         option_ask=b.number_input("Short call buyback ASK (₹ per share)",min_value=0.0,value=18.0,step=1.0)
@@ -88,52 +87,107 @@ with manage:
 
     payoff_tab, stage_tab, details_tab = st.tabs(["▤ Payoff Graph", "▦ Buy Stages", "☷ Position Details"])
     with payoff_tab:
-        left,right=st.columns([3,1],gap="large")
-        with right:
-            st.markdown("#### Chart controls")
-            model_today=st.checkbox("Show theoretical today",value=True)
-            show_current=st.checkbox("Show current-position expiry",value=True)
-            show_target=st.checkbox("Show 50% threshold",value=True)
-            iv=st.slider("Model IV (%)",5,120,28,1,disabled=not model_today)
-            dte=st.slider("Days to expiry (model)",0,180,21,1,disabled=not model_today)
-            st.caption("Theoretical today uses Black–Scholes with an illustrative volatility and 6% annual risk-free rate. It is NOT a broker option quote or a guaranteed current P&L curve.")
-            if remaining:
-                st.error(f"UNCOVERED: {remaining:,} short-call shares. Current expiry loss can grow as the stock rises.")
-            else:
-                st.success("Simulated share quantity matches short-call quantity; actual coverage still unverified.")
-            if closeout >= target:
-                st.warning("DEMO target exceeded. This is not a live notification or sell signal.")
-        with left:
-            st.markdown("### Strategy payoff")
-            st.caption("X = hypothetical underlying price · Y = combined profit/loss. Solid = conditional fully covered at expiry; dashed = current shares at expiry.")
-            lo=max(0.05,min(float(avg),float(spot),float(strike))*0.60)
-            hi=max(float(strike),float(spot),float(avg))*1.50
-            xs=[lo+(hi-lo)*i/240 for i in range(241)]
-            ys=[float(current_expiry_payoff(position,pv,done,x,full_costs)) for x in xs]
-            conditional=[float(current_expiry_payoff(position,pv,len(pv.stages),x,full_costs)) for x in xs]
-            chart=go.Figure()
-            chart.add_trace(go.Scatter(x=xs,y=[max(y,0) for y in conditional],mode="lines",line=dict(width=0),fill="tozeroy",fillcolor="rgba(37,181,129,.16)",showlegend=False,hoverinfo="skip"))
-            chart.add_trace(go.Scatter(x=xs,y=[min(y,0) for y in conditional],mode="lines",line=dict(width=0),fill="tozeroy",fillcolor="rgba(238,92,105,.17)",showlegend=False,hoverinfo="skip"))
-            chart.add_trace(go.Scatter(x=xs,y=conditional,mode="lines",line=dict(color="#42d7a5",width=3.6),name="Full coverage · expiry",hovertemplate="Stock ₹%{x:,.2f}<br>Planned P&L ₹%{y:,.0f}<extra></extra>"))
-            if show_current:
-                chart.add_trace(go.Scatter(x=xs,y=ys,mode="lines",line=dict(color="#9b9dff",width=2.8,dash="dash"),name="Current position · expiry",hovertemplate="Stock ₹%{x:,.2f}<br>Current position expiry P&L ₹%{y:,.0f}<extra></extra>"))
-            if model_today:
-                today=[float(theoretical_today_payoff(position,pv,done,max(x,0.01),iv,dte)) for x in xs]
-                chart.add_trace(go.Scatter(x=xs,y=today,mode="lines",line=dict(color="#f7bd68",width=2.0,dash="dot"),name="Modelled today · hypothetical",hovertemplate="Stock ₹%{x:,.2f}<br>Modelled P&L ₹%{y:,.0f}<extra></extra>"))
-            chart.add_trace(go.Scatter(x=[spot],y=[float(closeout)],mode="markers",marker=dict(color="#ffffff",size=12,line=dict(color="#2f3545",width=3)),name="Current input quote P&L",hovertemplate="Input stock BID ₹%{x:,.2f}<br>Input closeout P&L ₹%{y:,.0f}<extra></extra>"))
-            chart.add_hline(y=0,line_color="#8291a5",line_width=1.2)
-            chart.add_vline(x=float(strike),line_color="#ffca79",line_dash="dot",annotation_text="Short call strike",annotation_position="top right")
-            chart.add_vline(x=float(spot),line_color="#90c8fa",line_dash="dot",annotation_text="Input stock price",annotation_position="top left")
-            if show_target:
-                chart.add_hline(y=float(target),line_color="#ffd184",line_dash="dash",annotation_text="50% target",annotation_position="top right")
-            for i,val in enumerate(be.planned_expiry):
-                if lo<=float(val)<=hi:
-                    chart.add_vline(x=float(val),line_dash="dash",line_color="#35bb96",opacity=.55)
-            chart.update_layout(template="plotly_dark",height=500,margin=dict(l=12,r=12,t=28,b=12),paper_bgcolor="#111a27",plot_bgcolor="#111a27",font=dict(color="#a9bacd"),legend=dict(orientation="h",yanchor="bottom",y=1.02,x=0,font=dict(size=11)),xaxis_title="Underlying stock price (₹)",yaxis_title="P&L (₹)",hovermode="x unified")
-            chart.update_xaxes(showgrid=True,gridcolor="#223142",zeroline=False)
-            chart.update_yaxes(showgrid=True,gridcolor="#223142",zeroline=False,tickformat=",")
-            st.plotly_chart(chart,use_container_width=True)
-            st.caption("The coloured curve assumes every pending equity order fills at its planned trigger before expiry. Unfilled stages are **not** owned. Options mark-to-market can differ from the theoretical model; current P&L above is based only on your editable sample BID/ASK.")
+        st.markdown("### Profit / loss at expiry")
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            selected_view = st.radio(
+                "Show payoff for",
+                ["Shares owned now", "After all planned buys"],
+                horizontal=True, key="simple_payoff_view",
+                help="One clear payoff line at a time. The planned view is conditional.",
+            )
+        with c2:
+            st.caption(
+                "Purple = current shares and short call · "
+                "Green = fully covered after hypothetical future fills."
+            )
+
+        if remaining:
+            st.warning(
+                f"{remaining:,} short-call shares remain uncovered in this example. "
+                "The **Shares owned now** view shows that risk."
+            )
+        else:
+            st.success("Simulated current shares cover the short call.")
+        if closeout >= target:
+            st.caption("DEMO: the example closeout P&L exceeds the planned 50% target. No alert or order was sent.")
+
+        with st.expander("Optional chart details", expanded=False):
+            show_both = st.checkbox("Compare both expiry curves", value=False, key="graph_compare")
+            show_target = st.checkbox("Show planned 50% target guide", value=False, key="graph_target")
+            show_today = st.checkbox("Show theoretical today (model, not live quote)", value=False, key="graph_today")
+            if show_today:
+                a, b = st.columns(2)
+                iv = a.slider("Model volatility (%)", 5, 120, 28, 1, key="graph_iv")
+                dte = b.slider("Model days to expiry", 0, 180, 21, 1, key="graph_dte")
+                st.caption("Black–Scholes is a scenario model only; it is not the broker's buyback ASK.")
+
+        lo=max(0.05,min(float(avg),float(spot),float(strike))*0.65)
+        hi=max(float(strike),float(spot),float(avg))*1.35
+        xs=[lo+(hi-lo)*i/220 for i in range(221)]
+        actual=[float(current_expiry_payoff(position,pv,done,x,full_costs)) for x in xs]
+        planned=[float(current_expiry_payoff(position,pv,len(pv.stages),x,full_costs)) for x in xs]
+        planned_view=selected_view=="After all planned buys"
+        chosen=planned if planned_view else actual
+        accent="#41d6ab" if planned_view else "#a8a1fd"
+
+        chart=go.Figure()
+        chart.add_trace(go.Scatter(
+            x=xs,y=[max(y,0) for y in chosen],mode="lines",
+            line=dict(width=0),fill="tozeroy",
+            fillcolor="rgba(47,195,145,.16)",showlegend=False,hoverinfo="skip"))
+        chart.add_trace(go.Scatter(
+            x=xs,y=[min(y,0) for y in chosen],mode="lines",
+            line=dict(width=0),fill="tozeroy",
+            fillcolor="rgba(232,94,107,.14)",showlegend=False,hoverinfo="skip"))
+        chart.add_trace(go.Scatter(
+            x=xs,y=chosen,mode="lines",line=dict(color=accent,width=3.7),
+            name="Planned (if all buys fill)" if planned_view else "Shares owned now",
+            hovertemplate="Stock price ₹%{x:,.2f}<br>Expiry P&L ₹%{y:,.0f}<extra></extra>"))
+        if show_both:
+            other=actual if planned_view else planned
+            chart.add_trace(go.Scatter(
+                x=xs,y=other,mode="lines",line=dict(
+                    color="#a8a1fd" if planned_view else "#41d6ab",
+                    width=2.1,dash="dash"),
+                name="Current expiry" if planned_view else "Planned expiry (conditional)",
+                hovertemplate="Stock price ₹%{x:,.2f}<br>Expiry P&L ₹%{y:,.0f}<extra></extra>"))
+        if show_today:
+            modeled=[float(theoretical_today_payoff(position,pv,done,max(x,.01),iv,dte)) for x in xs]
+            chart.add_trace(go.Scatter(
+                x=xs,y=modeled,mode="lines",
+                line=dict(color="#e7b16d",width=1.8,dash="dot"),
+                name="Theoretical today",
+                hovertemplate="Stock ₹%{x:,.2f}<br>Model P&L ₹%{y:,.0f}<extra></extra>"))
+
+        chart.add_hline(y=0,line_color="#738298",line_width=1.1)
+        chart.add_vline(x=float(spot),line_color="#81b7ed",line_dash="dot")
+        chart.add_vline(x=float(strike),line_color="#dcae70",line_dash="dot")
+        if show_target:
+            chart.add_hline(y=float(target),line_color="#dcae70",line_dash="dash")
+        chart.update_layout(
+            template="plotly_dark",height=425,
+            margin=dict(l=8,r=8,t=16,b=7),
+            paper_bgcolor="#111a27",plot_bgcolor="#111a27",
+            font=dict(color="#9faec1"),
+            showlegend=bool(show_both or show_today),
+            legend=dict(orientation="h",y=1.07,x=0,font=dict(size=11)),
+            xaxis_title="Stock price (₹)", yaxis_title="Combined expiry P&L (₹)",
+            hovermode="x unified",
+        )
+        chart.update_xaxes(gridcolor="#253345",zeroline=False)
+        chart.update_yaxes(gridcolor="#253345",zeroline=False,tickformat=",")
+        st.plotly_chart(chart,use_container_width=True)
+        st.caption(
+            f"Spot ₹{spot:,.2f} (blue marker) · Short call strike ₹{strike:,.2f} "
+            "(gold marker) · Green shading = profit, red = loss. "
+            + ("**Planned view assumes all future equity buys fill.**"
+               if planned_view else "**Current view assumes no pending equity buys fill.**")
+        )
+        st.caption(
+            "Current closeout P&L in the cards uses manually entered stock BID "
+            "and option ASK. The chart shows hypothetical expiry outcomes, not a live price forecast."
+        )
 
     with stage_tab:
         st.markdown("### Buying-stage map")

@@ -114,17 +114,32 @@ class FastUniverseTests(unittest.TestCase):
             raw=json.loads(path.read_text())
             raw["fetched_at"]=(datetime.now(timezone.utc)-timedelta(hours=24)).isoformat()
             path.write_text(json.dumps(raw),encoding="utf-8")
-            with patch("dhan_visual.fast_universe._download_csv", side_effect=DhanDataError("offline")):
+            with patch("dhan_visual.fast_universe._download_csv", side_effect=DhanDataError("offline")), \
+                 patch("dhan_visual.dhan_market.fetch_dhan_master", side_effect=DhanDataError("offline")):
                 result,label=load_fast_catalogue(cache_path=path)
             self.assertEqual(len(result),105)
             self.assertIn("STALE CACHE",label)
+
+    def test_automatic_public_master_fallback_without_upload(self):
+        eq, lots, _ = make_inputs(115)
+        records = map_nse_lots_to_cash_security_ids(lots, parse_dhan_equities(eq))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "universe.json"
+            with patch("dhan_visual.fast_universe._download_csv", side_effect=DhanDataError("segment blocked")), \
+                 patch("dhan_visual.dhan_market.fetch_dhan_master", return_value=(records, "test")) as public:
+                actual, source = load_fast_catalogue(cache_path=path)
+            self.assertEqual(len(actual), 115)
+            self.assertIn("automatic fallback", source)
+            public.assert_called_once()
+            self.assertIsNotNone(_read_cache(path))
 
     def test_reject_malformed_cache_and_no_fabrication(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/"universe.json"
             path.write_text('{"schema_version":2,"stocks":[{"symbol":"FAKE"}]}')
             self.assertIsNone(_read_cache(path))
-            with patch("dhan_visual.fast_universe._download_csv", side_effect=DhanDataError("offline")):
+            with patch("dhan_visual.fast_universe._download_csv", side_effect=DhanDataError("offline")), \
+                 patch("dhan_visual.dhan_market.fetch_dhan_master", side_effect=DhanDataError("offline")):
                 with self.assertRaises(DhanDataError):
                     load_fast_catalogue(cache_path=path)
 
