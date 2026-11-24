@@ -10,7 +10,8 @@ from pathlib import Path
 import csv
 import io
 import os
-from queue import SimpleQueue
+from queue import Empty, SimpleQueue
+from threading import Event
 
 import pandas as pd
 import streamlit as st
@@ -30,6 +31,7 @@ from dhan_visual.straddle_panel import render_straddle_panel, available_otm_call
 from dhan_visual.nse_eod_ce import MAX_UPLOAD_BYTES, NseEodError, parse_nse_fo_eod
 from dhan_visual.ce_eod_local import NSE_FO_NAME, recent_nse_fo_reports
 from dhan_visual.ce_eod_remote import EodDownloadResult, IST, fetch_published_nse_eod
+from dhan_visual.ce_tejhq import TejEodCall, scan_tej_eod
 from dhan_visual.technical_ui import technical_values_for_table, technical_visible_stage, attach_technical_columns
 from dhan_visual.technical_worker import read_cached_technicals
 from dhan_visual.table_layout import (
@@ -559,7 +561,136 @@ def _eod_heartbeat():
         st.caption("NSE EOD · checking the latest published report in the background…")
 
 
-def _free_ce5_panel(expiry, dhan_count=0):
+@st.cache_resource
+def _tej_eod_pool():
+    return ThreadPoolExecutor(max_workers=1, thread_name_prefix="tejhq-eod-ce")
+
+
+@st.fragment(run_every="3s")
+def _tej_eod_heartbeat():
+    """Drain only local worker events; no Streamlit calls from background jobs."""
+    job = st.session_state.get("fno_tej_eod_job")
+    if not job:
+        return
+    state = st.session_state.get("fno_tej_eod_state")
+    if not state or state.get("month") != job["month"]:
+        job["cancel"].set()
+        return
+    updated = False
+    while True:
+        try:
+            event = job["events"].get_nowait()
+        except Empty:
+            break
+        kind = event[0]
+        if kind == "quote":
+            _, symbol, quote = event
+            if state["asof"] is None:
+                state["asof"] = quote.report_date
+            if quote.report_date == state["asof"]:
+                state["quotes"][symbol] = quote
+                state["processed"] += 1
+                updated = True
+        elif kind == "error":
+            _, symbol, error = event
+            state["errors"][symbol] = error
+            state["processed"] += 1
+            updated = True
+        else:
+            state["status"] = event[1]
+            updated = True
+    if job["future"].done():
+        try:
+            job["future"].result()
+        except Exception:
+            state["status"] = "Worker ended unexpectedly (no credentials logged)"
+        st.session_state.pop("fno_tej_eod_job", None)
+        updated = True
+    if updated:
+        st.rerun(scope="app")
+    else:
+        st.caption(
+            f"TejHQ EOD scan: {state['processed']}/{state['total']} processed · "
+            f"{len(state['quotes'])} CE values"
+        )
+
+
+def _tejhq_eod_panel(available, expiry):
+    """Optional paid provider, never called unless user presses Scan."""
+    with st.expander("Alternative EOD feed · TejHQ API (optional paid)", expanded=False):
+        st.caption(
+            "NSEFNO is free to view in a browser but prohibits automated "
+            "bulk scraping without permission. TejHQ offers a documented "
+            "Retail/Pro F&O EOD API (subscription required). "
+            "This app does not purchase a plan or send your key to NSE/Dhan."
+        )
+        st.markdown("[TejHQ F&O access and pricing](https://tejhq.dev/fo)")
+        st.markdown("[View NSEFNO options manually](https://nsefno.com/pages/historical_options)")
+        token = st.text_input(
+            "TejHQ Retail/Pro API key", type="password",
+            key="fno_tej_eod_key",
+            help="Only sent via HTTPS Authorization header to api.tejhq.dev "
+                 "after you click Scan. Not stored to disk, CSV or GitHub.",
+        )
+        job = st.session_state.get("fno_tej_eod_job")
+        busy = bool(job and not job["future"].done())
+        state = st.session_state.get("fno_tej_eod_state")
+        if state is None or state.get("month") != expiry:
+            if job:
+                job["cancel"].set()
+            state = {
+                "month": expiry, "quotes": {}, "errors": {},
+                "asof": None, "processed": 0, "total": 0,
+                "status": "Not started",
+            }
+            st.session_state["fno_tej_eod_state"] = state
+        cols = st.columns([2, 1])
+        with cols[0]:
+            start = st.button(
+                "Scan all stock CE EOD (TejHQ)", key="fno_tej_eod_scan",
+                disabled=busy or len(token) < 12 or not available,
+                help="Reads every symbol one at a time, up to 250 calls. "
+                     "Requires a paid Retail/Pro API key.",
+                use_container_width=True,
+            )
+        with cols[1]:
+            if st.button(
+                "Stop", key="fno_tej_eod_stop",
+                disabled=not busy, use_container_width=True,
+            ) and job:
+                job["cancel"].set()
+        if start:
+            events, cancel = SimpleQueue(), Event()
+            symbols = [item.entry.symbol for item in available]
+            state.update(
+                quotes={}, errors={}, asof=None, processed=0,
+                total=len(symbols), status="Scanning",
+            )
+            st.session_state["fno_tej_eod_job"] = {
+                "month": expiry, "events": events, "cancel": cancel,
+                "future": _tej_eod_pool().submit(
+                    scan_tej_eod, symbols, expiry, token, events, cancel,
+                ),
+            }
+            st.rerun()
+        st.caption(
+            f"TejHQ: {state['status']} · {state['processed']}/{state['total']} "
+            f"checked · {len(state['quotes'])} CE closes · "
+            f"report {state['asof'] or 'not available'}"
+        )
+        if state["errors"]:
+            st.caption(
+                "Sample failures: " + "; ".join(
+                    f"{symbol}: {err}"
+                    for symbol, err in list(state["errors"].items())[:2]
+                )
+            )
+        if job:
+            _tej_eod_heartbeat()
+    return state
+
+
+def _free_ce5_panel(expiry, dhan_count=0, available=None):
     """Explicit EOD/Live choice: never silently substitute one for another."""
     mode = st.radio(
         "CE ≥+5% data", ["EOD", "Live"], horizontal=True,
@@ -632,6 +763,19 @@ def _free_ce5_panel(expiry, dhan_count=0):
         if local_errors:
             st.caption("Downloads file diagnostics: " + "; ".join(local_errors[:2]))
 
+    # Optional alternative must stay user-initiated and never request an
+    # API before a valid paid key and explicit Scan action.
+    tej_state = _tejhq_eod_panel(available or [], expiry)
+    best_nse_date = max((snap.report_date for snap, _ in candidates), default="")
+    if (tej_state.get("quotes") and
+            (not best_nse_date or tej_state["asof"] > best_nse_date)):
+        count = len(tej_state["quotes"])
+        st.caption(
+            f"EOD · TejHQ {tej_state['asof']} · {count} CE references "
+            "(Retail/Pro, selected expiry, report-date matched)."
+        )
+        return tej_state["quotes"], tej_state["asof"]
+
     if not candidates:
         if not remote:
             st.caption("EOD CE · checking the official exchange archive…")
@@ -672,7 +816,8 @@ def _ce5_choice(symbol, dhan_calls, eod_calls, eod_date, mode="EOD"):
     if symbol in eod_calls:
         quote = eod_calls[symbol]
         suffix = " · 0 volume (reference only)" if quote.volume == 0 else ""
-        return quote, f"NSE EOD {eod_date}{suffix}"
+        provider = "TejHQ EOD" if isinstance(quote, TejEodCall) else "NSE EOD"
+        return quote, f"{provider} {eod_date}{suffix}"
     return None, "EOD unavailable · report/contract missing"
 
 
@@ -813,7 +958,9 @@ def render_screener():
         and technical_state.get("status") == "complete"
     )
     dhan_ce5 = available_otm_calls(available, expiry)
-    eod_calls, eod_date = _free_ce5_panel(expiry, dhan_count=len(dhan_ce5))
+    eod_calls, eod_date = _free_ce5_panel(
+        expiry, dhan_count=len(dhan_ce5), available=available,
+    )
     ce_mode = st.session_state.get("fno_ce5_mode", "EOD")
     selected_ce = eod_calls if ce_mode == "EOD" else dhan_ce5
     # R1 table must use the SAME selected CE mode as the main screener.
@@ -974,8 +1121,9 @@ def render_screener():
             if ce_mode == "Live" and sym in dhan_ce5 else None
             for sym in exported["Symbol"]
         ]
-        exported["NSE EOD underlying for CE % (₹)"] = [
-            float(quote.underlying_close) if source.startswith("NSE EOD") else None
+        exported["EOD underlying for CE % (₹)"] = [
+            float(quote.underlying_close)
+            if source.startswith(("NSE EOD", "TejHQ EOD")) else None
             for quote, source in export_selected
         ]
         exported["CE source"] = [source for _, source in export_selected]
