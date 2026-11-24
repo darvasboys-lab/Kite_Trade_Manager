@@ -45,30 +45,47 @@ def _csv_rows(payload: bytes):
     return reader
 
 
-def _download_csv(url: str, cap_bytes: int) -> bytes:
-    import requests
+def _download_csv(url: str, cap_bytes: int, timeout: tuple = (5, 14)) -> bytes:
+    """Download only known public URLs. HTTPS redirects are normal for CSV/CDNs.
 
+    No Dhan credential is attached to these public instrument-list GETs.
+    Errors report the stage + HTTP status or exception type, never tokens.
+    """
+    import requests
+    from urllib.parse import urlparse
+
+    host = urlparse(url).hostname or "instrument source"
     try:
-        resp = requests.get(url, timeout=(6, 25),
-                            headers={"Accept": "text/csv,*/*", "User-Agent": "DhanPayoffStudio/2.0"},
-                            stream=True)
-        resp.raise_for_status()
-        if resp.url != url:
-            raise DhanDataError("Unexpected source redirect")
-        size = 0
-        chunks = []
+        resp = requests.get(
+            url, timeout=timeout, allow_redirects=True, stream=True,
+            headers={"Accept": "text/csv,application/octet-stream,*/*",
+                     "User-Agent": "Mozilla/5.0 (compatible; DhanPayoffStudio/3.0)"},
+        )
+        if resp.status_code != 200:
+            raise DhanDataError(f"{host}: HTTP {resp.status_code}")
+        final = urlparse(resp.url)
+        if final.scheme != "https" or not final.hostname:
+            raise DhanDataError(f"{host}: instrument redirect was not HTTPS")
+        size, chunks = 0, []
         for chunk in resp.iter_content(chunk_size=256 * 1024):
             if not chunk:
                 continue
             size += len(chunk)
             if size > cap_bytes:
-                raise DhanDataError("Instrument response exceeded safe maximum size")
+                raise DhanDataError(f"{host}: exceeded {cap_bytes // 1_000_000} MB safety limit")
             chunks.append(chunk)
         if not chunks:
-            raise DhanDataError("Empty instrument file")
-        return b"".join(chunks)
+            raise DhanDataError(f"{host}: empty CSV response")
+        data = b"".join(chunks)
+        if data.lstrip().lower().startswith((b"<html", b"<!doctype html")):
+            raise DhanDataError(f"{host}: returned an HTML page instead of a CSV")
+        return data
+    except requests.exceptions.SSLError as exc:
+        raise DhanDataError(f"{host}: SSL certificate validation failed") from exc
+    except requests.exceptions.Timeout as exc:
+        raise DhanDataError(f"{host}: download timed out") from exc
     except requests.RequestException as exc:
-        raise DhanDataError(f"Instrument source unavailable ({type(exc).__name__})") from exc
+        raise DhanDataError(f"{host}: network error ({type(exc).__name__})") from exc
     finally:
         if "resp" in locals():
             resp.close()
@@ -159,12 +176,16 @@ def _validate_catalogue(catalogue: list[DhanUnderlying], minimum: int = 100):
     seen_symbols, seen_ids = set(), set()
     for record in catalogue:
         item = record.entry
+        secid = record.equity_security_id
         if (not SYMBOL_PATTERN.fullmatch(item.symbol)
-                or item.symbol in seen_symbols or record.equity_security_id in seen_ids
+                or item.symbol in seen_symbols
+                or type(secid) is not int or secid < 0
+                or (secid and secid in seen_ids)
                 or not item.lots or any(type(v) is not int or v <= 0 for v in item.lots.values())):
             raise DhanDataError("Invalid/conflicting symbol, ID or lot in F&O list")
         seen_symbols.add(item.symbol)
-        seen_ids.add(record.equity_security_id)
+        if secid:
+            seen_ids.add(secid)
     return catalogue
 
 
@@ -223,63 +244,107 @@ def _write_cache(catalogue, method: str, path: Path = CACHE_FILE):
     return fetched_at
 
 
-def load_fast_catalogue(refresh: bool = False, progress=None, cache_path: Path = CACHE_FILE):
-    """Return (mapped underlyings, visible source label).
+COMPACT_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
 
-    Prefer a fresh, validated, credential-free local cache. Otherwise fetch
-    NSE_EQ + compact NSE official lot file. Fall back to Dhan NSE_FNO segment
-    only when NSE lot file is unavailable. On transient source errors, a
-    <=48-hour-old cache is explicitly flagged stale, never silently fresh.
+
+def resolve_equity_ids() -> dict[str, int]:
+    """Get only public NSE equity security IDs when Dhan LTP is actually requested.
+
+    The stock F&O list is deliberately not dependent on these data sources.
     """
-    def report(label):
-        if progress is not None:
-            progress(label)
+    diagnostics = []
+    for name, url, limit in [
+        ("Dhan NSE_EQ segment", EQ_SEGMENT_URL, 12_000_000),
+        ("Dhan compact master", COMPACT_MASTER_URL, 40_000_000),
+        ("Dhan detailed master", "https://images.dhan.co/api-data/api-scrip-master-detailed.csv", 80_000_000),
+    ]:
+        try:
+            ids = parse_dhan_equities(_download_csv(url, limit, timeout=(5, 18)))
+            if len(ids) < 100:
+                raise DhanDataError(f"Only {len(ids)} NSE equities were found")
+            return ids
+        except (DhanDataError, ValueError) as exc:
+            diagnostics.append(f"{name}: {exc}")
+    raise DhanDataError("Cash-equity ID mapping unavailable. " + " | ".join(diagnostics))
+
+
+def _save_catalogue(catalogue, label, path):
+    _validate_catalogue(catalogue)
+    _write_cache(catalogue, label, path)
+    return catalogue, label
+
+
+def load_fast_catalogue(refresh: bool = False, progress=None, cache_path: Path = CACHE_FILE):
+    """Automatically load a complete NSE stock F&O list; never request CSV upload.
+
+    Prioritize the *small official NSE lot-size file* to ensure the table can
+    appear even if Dhan's market-data ID service is unreachable. Verified
+    NSE_EQ IDs are resolved lazily when the owner requests Dhan prices.
+    """
+    def report(message):
+        if progress:
+            progress(message)
 
     cached = _read_cache(cache_path)
     if cached and cached[1] <= MAX_CACHE_AGE_SECONDS and not refresh:
         data, age, stamp, method = cached
-        report(f"Loaded {len(data)} stocks from local cache")
         return data, f"Local cache ({age/3600:.1f} hours old; {method})"
-    started = time.monotonic()
+
+    start = time.monotonic()
+    errors = []
+
+    # Independent of Dhan identity/marketfeed. Most important: show stock rows.
+    report("Trying official NSE stock F&O lot-size file (no Dhan login needed)...")
     try:
-        report("1/3 · Downloading Dhan NSE cash-equity security IDs...")
-        equity_ids = parse_dhan_equities(_download_csv(EQ_SEGMENT_URL, 12_000_000))
-        report(f"2/3 · Matched {len(equity_ids):,} NSE equity IDs; downloading stock F&O lots...")
-        try:
-            payload = _download_csv(NSE_LOTS_URL, 3_000_000)
-            catalogue = map_nse_lots_to_cash_security_ids(payload, equity_ids)
-            _validate_catalogue(catalogue)
-            method = "NSE official F&O lots + Dhan NSE_EQ IDs"
-        except (DhanDataError, ValueError, UnicodeError):
-            report("2/3 · NSE lots unavailable/incomplete; trying segment-only Dhan NSE_FNO...")
-            catalogue = parse_dhan_fno_segment(
-                _download_csv(FNO_SEGMENT_URL, 80_000_000), equity_ids
-            )
-            _validate_catalogue(catalogue)
-            method = "Dhan NSE_EQ + NSE_FNO segment masters"
-        report("3/3 · Writing small, public-metadata-only local cache...")
-        _write_cache(catalogue, method, cache_path)
-        return catalogue, f"{method} · loaded in {time.monotonic()-started:.1f} seconds"
-    except (DhanDataError, ValueError) as primary_error:
-        # Dhan's segment endpoints can be blocked even when the documented
-        # public detailed CSV is accessible. Try that automatic fallback before
-        # ever asking a user to do anything by hand.
-        try:
-            report("Automatic fallback · downloading Dhan's public detailed master once...")
-            from .dhan_market import fetch_dhan_master
-            catalogue, _ = fetch_dhan_master()
-            _validate_catalogue(catalogue)
-            method = "Dhan public detailed master (automatic fallback)"
-            _write_cache(catalogue, method, cache_path)
-            return catalogue, f"{method} · loaded in {time.monotonic()-started:.1f} seconds"
-        except (DhanDataError, ValueError) as backup_error:
-            if cached:
-                data, age, stamp, method = cached
-                report("Automatic sources unavailable; existing cache is labelled STALE")
-                return data, f"STALE CACHE ({age/3600:.1f}h; {method}). Refresh recommended."
-            raise DhanDataError(
-                "All automatic instrument sources were unavailable or invalid. "
-                f"Segment/NSE: {type(primary_error).__name__}; "
-                f"public detailed master: {type(backup_error).__name__}. "
-                "Use Retry after checking your internet connection. No file upload is needed."
-            ) from backup_error
+        nse_payload = _download_csv(NSE_LOTS_URL, 3_000_000, timeout=(5, 14))
+        lot_rows = parse_nse_lots(nse_payload)
+        # Dhan security IDs not yet resolved = 0; never use 0 in marketfeed.
+        catalogue = [DhanUnderlying(row, 0) for row in lot_rows]
+        _validate_catalogue(catalogue)
+        catalogue, method = _save_catalogue(
+            catalogue, "NSE official F&O lots (Dhan NSE_EQ IDs resolved on price request)",
+            cache_path,
+        )
+        report(f"Loaded {len(catalogue)} F&O stocks from NSE.")
+        return catalogue, f"{method} · {time.monotonic() - start:.1f}s"
+    except (DhanDataError, ValueError, UnicodeError) as exc:
+        errors.append(f"NSE lot-size CSV: {exc}")
+
+    # If NSE itself fails, attempt Dhan's two smaller segment sources.
+    report("Official NSE lot file unavailable; checking Dhan NSE_EQ/NSE_FNO segments...")
+    try:
+        eq = parse_dhan_equities(
+            _download_csv(EQ_SEGMENT_URL, 12_000_000, timeout=(5, 14))
+        )
+        result = parse_dhan_fno_segment(
+            _download_csv(FNO_SEGMENT_URL, 80_000_000, timeout=(5, 22)), eq
+        )
+        _validate_catalogue(result)
+        result, method = _save_catalogue(
+            result, "Dhan NSE_EQ and NSE_FNO segment files", cache_path
+        )
+        return result, f"{method} · {time.monotonic() - start:.1f}s"
+    except (DhanDataError, ValueError, UnicodeError) as exc:
+        errors.append(f"Dhan segmented master: {exc}")
+
+    # Last automatic public instrument-master option; only once on cold failure.
+    report("Segment files unavailable; trying Dhan public detailed master...")
+    try:
+        from .dhan_market import fetch_dhan_master
+        result, _ = fetch_dhan_master()
+        result, method = _save_catalogue(
+            result, "Dhan official detailed master", cache_path
+        )
+        return result, f"{method} · {time.monotonic() - start:.1f}s"
+    except (DhanDataError, ValueError, UnicodeError) as exc:
+        errors.append(f"Dhan detailed master: {exc}")
+
+    if cached:
+        data, age, _, method = cached
+        report(f"Sources unavailable: reusing labelled {age/3600:.1f}-hour-old cache.")
+        return data, f"STALE CACHE ({age/3600:.1f}h; {method}). Check exchange lots before trading."
+    raise DhanDataError(
+        "Automatic list download failed at all official sources. "
+        + " | ".join(errors)[:1300]
+        + " · No file upload required. Check source-specific HTTP, SSL or timeout errors."
+    )
