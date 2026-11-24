@@ -33,6 +33,7 @@ from dhan_visual.table_layout import (
 from dhan_visual.tradingview_links import (
     clickable_stock_frame, TRADINGVIEW_SYMBOL_DISPLAY,
 )
+from dhan_visual.r1_today_panel import render_r1_today_panel
 
 
 @st.cache_resource
@@ -617,6 +618,18 @@ def render_screener():
     technical_symbols = [item.entry.symbol for item in universe]
     technicals = technical_values_for_table(technical_symbols)
     visible_stage = technical_visible_stage(technical_symbols)
+    technical_state = st.session_state.get("fno_technicals") or {}
+    r1_ready = (
+        visible_stage == 4
+        and technical_state.get("status") == "complete"
+    )
+    # Full F&O universe independently of Search, price/value limits and
+    # user-selected sort. Uses its own paced Yahoo NSE 15-minute scan only
+    # AFTER the historical monthly R1 levels are available.
+    render_r1_today_panel(
+        available, expiry, technicals, compact=compact,
+        technically_ready=r1_ready,
+    )
     st.markdown(f"**{len(rows):,} displayed stocks** · {filled:,} with {provider} prices")
     if not rows:
         st.info("No stocks match the selected value filter. The source may also have missing prices.")

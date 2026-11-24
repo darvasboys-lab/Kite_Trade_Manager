@@ -88,6 +88,52 @@ class PayoffStudioStartupTests(unittest.TestCase):
         self.assertIn("st.column_config.LinkColumn(", source)
         self.assertIn("display_text=TRADINGVIEW_SYMBOL_DISPLAY", source)
 
+    def test_r1_today_panel_does_not_request_yahoo_before_monthly_r1_ready(self):
+        app = app_with_catalogue()
+        quote_pool = FakePool()
+        cross_pool = FakePool()
+        with patch("dhan_visual.screener_ui._market_pool", return_value=quote_pool), \
+             patch("dhan_visual.r1_today_panel._r1_pool", return_value=cross_pool):
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(len(cross_pool.calls), 0)
+            self.assertIsNotNone(app.button(key="ccs_r1_today_refresh"))
+            # The existing strategy-builder tab has its own independent table.
+            self.assertGreaterEqual(len(app.dataframe), 1)
+            self.assertIn("TradingView chart", app.dataframe[0].value.columns)
+
+    def test_r1_today_auto_scan_all_fno_underlyings_not_current_filters(self):
+        from dhan_visual.technical_indicators import TechnicalLevels
+        from dhan_visual.technical_ui import _tech_key
+        app = app_with_catalogue()
+        app.session_state["fno_symbol_find"] = "TCS"
+        app.session_state["fno_value_preset"] = "Below ₹5 lakh"
+        app.session_state["fno_technicals"] = {
+            "key": _tech_key(["TCS", "SBIN"]),
+            "values": {
+                sym: TechnicalLevels(
+                    Decimal("90"),Decimal("94"),Decimal("95"),Decimal("96"),
+                    Decimal("100"),Decimal("101"),"2026-11-23","2026-11"
+                ) for sym in ("TCS","SBIN")
+            },
+            "stage":4,"stage_next_at":float("inf"),
+            "processed":2,"total":2,"failed":0,"status":"complete",
+        }
+        pool = FakePool()
+        with patch("dhan_visual.screener_ui._market_pool",return_value=FakePool()), \
+             patch("dhan_visual.r1_today_panel._r1_pool",return_value=pool):
+            app.run()
+            self.assertFalse(app.exception,[str(x.message) for x in app.exception])
+            self.assertEqual(len(pool.calls),1)
+            args,kwargs = pool.calls[0]
+            self.assertEqual(args[0].__name__,"scan_r1_today")
+            self.assertEqual(set(args[1]),{"TCS","SBIN"})
+            self.assertEqual(set(args[2]),{"TCS","SBIN"})
+            self.assertEqual(args[2]["TCS"],Decimal("100"))
+            app.run()
+            self.assertFalse(app.exception,[str(x.message) for x in app.exception])
+            self.assertEqual(len(pool.calls),1, "Do not repeat Yahoo scan on widget reruns")
+
     def test_one_click_autofits_every_table_without_changing_stock_data(self):
         from dhan_visual.table_layout import dataframe_key
         app = app_with_catalogue()
