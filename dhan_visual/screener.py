@@ -11,7 +11,7 @@ import io
 import math
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Mapping
 
@@ -120,14 +120,45 @@ def expiry_options(rows: list[Underlying]) -> list[str]:
     return sorted({month for row in rows for month in row.lots}, key=expiry_sort_key)
 
 
+IST = timezone(timedelta(hours=5, minutes=30))
+
+# Verified 2026 NSE holiday adjustment: the usual 24 November Tuesday
+# was a trading holiday; November stock F&O expired Monday, 23 November.
+# Other months use the published last-Tuesday rule, WITHOUT pretending
+# to know future exchange holiday adjustments.
+KNOWN_STOCK_EXPIRY_ADJUSTMENTS = {(2026, 11): date(2026, 11, 23)}
+
+
+def stock_month_expiry(label: str) -> date:
+    """Calendar estimate for stock F&O monthly expiry, with verified exceptions."""
+    year, month = expiry_sort_key(label)
+    if (year, month) in KNOWN_STOCK_EXPIRY_ADJUSTMENTS:
+        return KNOWN_STOCK_EXPIRY_ADJUSTMENTS[(year, month)]
+    # Last Tuesday, or earlier if later proven to be an exchange holiday.
+    if month == 12:
+        last = date(year + 1, 1, 1) - timedelta(days=1)
+    else:
+        last = date(year, month + 1, 1) - timedelta(days=1)
+    return last - timedelta(days=(last.weekday() - 1) % 7)
+
+
+def active_expiry_options(rows: list[Underlying],
+                          now: datetime | None = None) -> list[str]:
+    """Exclude definitely expired contract months from the live quote selector."""
+    instant = now or datetime.now(IST)
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=IST)
+    today_ist = instant.astimezone(IST).date()
+    return [label for label in expiry_options(rows)
+            if stock_month_expiry(label) >= today_ist]
+
+
 def choose_expiry(rows: list[Underlying], now: datetime | None = None) -> str:
-    """Prefer the first expiry not older than the current calendar month."""
-    now = now or datetime.now(timezone.utc)
-    opts = expiry_options(rows)
-    if not opts:
-        raise ValueError("No expiry months in source")
-    current = (now.year, now.month)
-    return next((x for x in opts if expiry_sort_key(x) >= current), opts[-1])
+    """Prefer the nearest unexpired month in India, never an expired month."""
+    options = active_expiry_options(rows, now)
+    if not options:
+        raise ValueError("No active F&O expiry months available in the instrument list")
+    return options[0]
 
 
 def fetch_nse_catalogue() -> tuple[list[Underlying], str]:
