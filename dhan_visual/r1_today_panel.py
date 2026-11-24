@@ -170,7 +170,7 @@ def render_r1_today_panel(available, expiry: str, technicals,
     with st.container(border=True):
         heading, control = st.columns([4.2, 1.0], gap="small")
         with heading:
-            st.markdown("#### <escape>↗</escape> Crossed Monthly R1 Today")
+            st.markdown("#### ↗ Crossed Monthly R1 Today")
             st.caption(
                 f"{today.strftime('%d %b')} · "
                 "verified upward 15m NSE high through current-month R1 · "
