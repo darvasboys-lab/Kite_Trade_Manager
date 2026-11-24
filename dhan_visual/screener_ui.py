@@ -26,6 +26,7 @@ import time
 from dhan_visual.screener import choose_expiry, expiry_options, screen_rows
 from dhan_visual.option_panel import render_atm_panel
 from dhan_visual.straddle_panel import render_straddle_panel
+from dhan_visual.technical_ui import technical_values_for_table, attach_technical_columns
 
 
 @st.cache_resource
@@ -578,6 +579,9 @@ def render_screener():
     if no_prices_yet and preset != "All stocks":
         st.caption(f"Loading quotes · **{preset}** will apply when prices arrive.")
 
+    # Technical download is separate from cash quotes and covers the full F&O
+    # universe, not just the ₹7 lakh/selected-symbol table subset.
+    technicals = technical_values_for_table([item.entry.symbol for item in universe])
     st.markdown(f"**{len(rows):,} displayed stocks** · {filled:,} with {provider} prices")
     compact = st.toggle(
         "Display contract values in lakhs (₹L)",
@@ -613,11 +617,24 @@ def render_screener():
             )
         # Keep source/quote time in CSV and expandable notes, not the wide table.
         frame = frame.drop(columns=["Quote time", "Price source"], errors="ignore")
+        frame = attach_technical_columns(frame, technicals)
+        for title, note in (
+            ("EMA 200", "Daily 200-session EMA"),
+            ("EMA 50", "Daily 50-session EMA"),
+            ("EMA 20", "Daily 20-session EMA"),
+            ("EMA 10", "Daily 10-session EMA"),
+            ("Monthly R1", "Current calendar month's standard R1, calculated from previous completed month's H/L/C"),
+        ):
+            config[title] = st.column_config.TextColumn(title, help=note, width="medium")
         st.dataframe(
             frame, use_container_width=True, hide_index=True, height=580,
             column_config=config,
         )
-    st.caption(f"{provider} · {filled}/{len(available)} prices · indicative cash notional")
+    st.caption(
+        f"{provider} · {filled}/{len(available)} prices · "
+        "✓ CMP > level · ✕ CMP ≤ level · — waiting/unavailable · "
+        "EMAs and monthly R1 from Yahoo daily history"
+    )
     with st.expander("Source details and timestamps", expanded=False):
         st.caption(f"Instrument list: {(st.session_state.get('fno_universe_data') or (None, 'Unknown'))[1]}")
         if provider == "Yahoo Finance":
@@ -633,12 +650,13 @@ def render_screener():
     render_straddle_panel(available, expiry)
     render_atm_panel(available, rows, expiry)
     if rows:
-        exported = io.StringIO()
-        writer = csv.DictWriter(exported, fieldnames=list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
+        exported = attach_technical_columns(pd.DataFrame(rows), technicals)
+        exported["Indicators as of"] = [
+            technicals[sym].asof if sym in technicals else ""
+            for sym in exported["Symbol"]
+        ]
         st.download_button(
-            "Download filtered CSV", data=exported.getvalue(),
+            "Download filtered CSV", data=exported.to_csv(index=False),
             file_name=f"fno_stock_values_{expiry}_{provider.lower().replace(' ', '_')}.csv",
             mime="text/csv", key="fno_export",
         )

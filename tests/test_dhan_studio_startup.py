@@ -46,6 +46,8 @@ class PayoffStudioStartupTests(unittest.TestCase):
         self.assertEqual(app.radio(key="fno_price_provider").value, "Yahoo Finance")
         self.assertEqual(app.selectbox(key="fno_value_preset").value, "Below ₹7 lakh")
         self.assertGreaterEqual(len(app.dataframe), 1)
+        for col in ("EMA 200", "EMA 50", "EMA 20", "EMA 10", "Monthly R1"):
+            self.assertIn(col, app.dataframe[0].value.columns)
 
     def test_local_credentials_dispatch_entire_universe_without_refresh_click(self):
         app = app_with_catalogue()
@@ -191,6 +193,67 @@ class PayoffStudioStartupTests(unittest.TestCase):
         cols = app.dataframe[0].value.columns.tolist()
         self.assertNotIn("Quote time", cols)
         self.assertNotIn("Price source", cols)
+
+    def test_technical_columns_use_displayed_quote_and_are_not_required_to_render(self):
+        from dhan_visual.technical_indicators import TechnicalLevels
+        from dhan_visual.technical_ui import _tech_key
+        app = app_with_catalogue()
+        cid, token = "1234567890", "FAKE_LONG_TOKEN_FOR_TEST_ONLY"
+        app.session_state["dhan_local_cid"] = cid
+        app.session_state["dhan_local_access_token"] = token
+        app.session_state["fno_price_provider"] = "Dhan"
+        symbols = ",".join(sorted(x.entry.symbol for x in example()))
+        universe_key = hashlib.sha256(symbols.encode()).hexdigest()
+        auth_key = hashlib.sha256((cid + ":" + token + ":" + universe_key).encode()).hexdigest()
+        app.session_state["fno_dhan_attempt_key"] = auth_key
+        app.session_state["fno_dhan_snapshot"] = {
+            "key":auth_key,
+            "quotes":{
+                "TCS":Quote(Decimal("101"),"test","Dhan LTP"),
+                "SBIN":Quote(Decimal("90"),"test","Dhan LTP"),
+            },
+            "ids":{"TCS":11536,"SBIN":1333},
+            "requested_at":"mock","errors":[],
+        }
+        app.session_state["fno_technicals"] = {
+            "key": _tech_key(["TCS","SBIN"]),
+            "values": {
+                "TCS": TechnicalLevels(
+                    Decimal("99"),Decimal("100"),Decimal("102"),Decimal("103"),
+                    Decimal("110"),Decimal("100"),"2026-11-23","2026-11",
+                )
+            },
+            "processed":1,"total":2,"failed":0,"status":"loading",
+        }
+        app.run()
+        self.assertFalse(app.exception,[str(x.message) for x in app.exception])
+        frame=app.dataframe[0].value
+        tcs=frame.loc[frame["Symbol"]=="TCS"].iloc[0]
+        self.assertEqual(tcs["EMA 200"],"✓ ₹99.00")
+        self.assertEqual(tcs["EMA 50"],"✓ ₹100.00")
+        self.assertEqual(tcs["EMA 20"],"✕ ₹102.00")
+        self.assertEqual(tcs["Monthly R1"],"✕ ₹110.00")
+        self.assertEqual(frame.loc[frame["Symbol"]=="SBIN"].iloc[0]["EMA 200"],"—")
+
+    def test_technical_history_starts_only_after_yahoo_quote_loader_finishes(self):
+        from dhan_visual.technical_ui import _tech_key
+        from dhan_visual.screener_ui import _universe_key
+        app=app_with_catalogue()
+        symbols=[x.entry.symbol for x in example()]
+        key=_universe_key(example())
+        app.session_state["fno_yahoo_attempt_key"]=key
+        app.session_state["fno_yahoo_snapshot"]={
+            "key":key,"quotes":{},"errors":[],"processed":2,"total":2,
+        }
+        pool=FakePool()
+        with patch("dhan_visual.technical_ui._tech_pool",return_value=pool):
+            app.run()
+            self.assertFalse(app.exception,[str(x.message) for x in app.exception])
+            self.assertEqual(len(pool.calls),1)
+            self.assertEqual(pool.calls[0][0][0].__name__,"load_all_technicals")
+            self.assertEqual(set(pool.calls[0][0][1]),set(symbols))
+            app.run()
+            self.assertEqual(len(pool.calls),1)
 
     def test_no_manual_list_upload_or_50_stock_hard_cap(self):
         source = (APP.parent / "screener_ui.py").read_text(encoding="utf-8")
