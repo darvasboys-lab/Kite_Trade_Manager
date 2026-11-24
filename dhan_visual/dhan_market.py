@@ -175,14 +175,25 @@ def parse_dhan_master(data: str | bytes) -> list[DhanUnderlying]:
 def fetch_dhan_master() -> tuple[list[DhanUnderlying], str]:
     import requests
 
+    from urllib.parse import urlparse
     try:
-        response = requests.get(DHAN_MASTER_URL, timeout=(8, 60),
-                                headers={"Accept": "text/csv,*/*", "User-Agent": "DhanPayoffStudio/1.0"})
-        response.raise_for_status()
+        response = requests.get(
+            DHAN_MASTER_URL, timeout=(6, 26), allow_redirects=True,
+            headers={"Accept": "text/csv,application/octet-stream,*/*",
+                     "User-Agent": "Mozilla/5.0 (DhanPayoffStudio/3.0)"})
+        if response.status_code != 200:
+            raise DhanDataError(f"Dhan detailed master returned HTTP {response.status_code}")
+    except requests.exceptions.SSLError as exc:
+        raise DhanDataError("Dhan detailed master SSL certificate verification failed") from exc
+    except requests.exceptions.Timeout as exc:
+        raise DhanDataError("Dhan detailed master download timed out") from exc
     except requests.RequestException as exc:
-        raise DhanDataError("Dhan instrument list download failed; check network/Dhan status") from exc
-    if response.url != DHAN_MASTER_URL or len(response.content) > 80_000_000:
-        raise DhanDataError("Unexpected Dhan instrument response/redirect/size")
+        raise DhanDataError(f"Dhan detailed master network error ({type(exc).__name__})") from exc
+    final = urlparse(response.url)
+    if final.scheme != "https" or not final.hostname:
+        raise DhanDataError("Dhan detailed master redirected away from HTTPS")
+    if not response.content or len(response.content) > 80_000_000:
+        raise DhanDataError("Dhan detailed master empty or too large")
     rows = parse_dhan_master(response.content)
     if len(rows) < 100:
         raise DhanDataError("Fewer than 100 stock F&O symbols verified; refusing incomplete catalogue")
