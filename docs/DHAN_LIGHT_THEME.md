@@ -32,3 +32,15 @@ with Ctrl+Shift+R if stale CSS remains after restarting.
 
 Visual acceptance requires inspecting an actual Windows screenshot. CI checks
 the light theme and existing Streamlit UI tests; it is not a pixel comparison.
+
+
+## Warm rose accents (November 24, 2026)
+
+Owner asked for a subtle reddish Sensibull-like tinge without restoring the
+previous dark theme. Kept white surfaces and navy text while introducing a
+very pale rose app canvas (#FDF9FA), blush selected tabs (#FFF0F3), a
+rose accent (#BD425A) for active controls, soft pink button borders, and
+a narrow coral top edge on the header. Profit remains green and loss red;
+payoff chart stays white with distinct blue/green lines to preserve meaning.
+No changes to Yahoo/default quote source, the all-219 short-straddle scan,
+percentage sorting, TOTP, option data, numerical calculations or orders.
