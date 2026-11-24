@@ -430,6 +430,33 @@ class PayoffStudioStartupTests(unittest.TestCase):
             )
             scan.assert_not_called()
 
+    def test_dec_ce_populates_from_locally_downloaded_nse_report(self):
+        """Read only a local public UDiFF ZIP, no broker or NSE scraping."""
+        from tempfile import TemporaryDirectory
+        from dhan_visual.ce_eod_local import recent_nse_fo_reports
+        from test_ce_eod_local import save_nse_zip
+        with TemporaryDirectory() as folder:
+            file = save_nse_zip(folder, "20261123")
+            self.assertEqual(
+                recent_nse_fo_reports(Path(folder), today=__import__("datetime").date(2026, 11, 25)),
+                [file],
+            )
+            app = app_with_catalogue()
+            app.session_state["fno_expiry"] = "DEC-26"
+            with patch("dhan_visual.screener_ui.recent_nse_fo_reports", return_value=[file]), \
+                 patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()), \
+                 patch("dhan_visual.straddle_panel.scan_all_straddles") as scan:
+                app.run()
+                self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+                df = app.dataframe[0].value
+                value = df.loc[df["Symbol"] == "TCS", "5%+ CE premium (%)"].iloc[0]
+                source = df.loc[df["Symbol"] == "TCS", "CE source"].iloc[0]
+                self.assertEqual(value, 2.0)
+                self.assertEqual(source, "NSE EOD 2026-11-23")
+                self.assertTrue(df.loc[df["Symbol"] == "SBIN",
+                                       "5%+ CE premium (%)"].isna().all())
+                scan.assert_not_called()
+
     def test_compact_search_and_filters_retain_all_prior_actions(self):
         app = app_with_catalogue()
         pool = FakePool()
@@ -470,7 +497,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
         )[0]
         self.assertNotIn("file_uploader", list_loader)
         self.assertEqual(source.count("st.file_uploader("), 1)
-        self.assertIn("NSE F&O daily ZIP or CSV", source)
+        self.assertIn("Optional: choose NSE F&O daily ZIP or CSV", source)
         self.assertNotIn("First 50 stocks", source)
         self.assertIn("load_fast_catalogue", source)
         self.assertIn("load_yahoo_all", source)
