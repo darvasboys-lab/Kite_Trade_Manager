@@ -20,6 +20,7 @@ from .local_client_settings import read_client_id, save_client_id, valid_client_
 from .option_panel import _local_creds
 from .straddle_scan import rank_straddles, scan_all_straddles
 from .table_layout import autofit_column_config, autofit_enabled, dataframe_key
+from .tradingview_links import clickable_stock_frame, TRADINGVIEW_SYMBOL_DISPLAY
 
 
 @st.cache_resource
@@ -250,12 +251,20 @@ def render_straddle_panel(available, expiry):
             f"Dhan option chain · {len(df)} ranked / {total} · "
             "percentage based on option LTP (not guaranteed sale price)"
         )
+        display_df = clickable_stock_frame(
+            df, source="Stock", target="TradingView chart",
+        )
         st.dataframe(
-            df, use_container_width=True, hide_index=True, height=540,
+            display_df, use_container_width=True, hide_index=True, height=540,
             key=dataframe_key("ccs_straddle_rankings", st.session_state),
             column_config=autofit_column_config({
                 "Rank": st.column_config.NumberColumn("#", format="%d"),
-                "Stock": st.column_config.TextColumn("Stock"),
+                "Stock": None,  # Keep raw NSE symbol for calculations/CSV.
+                "TradingView chart": st.column_config.LinkColumn(
+                    "Stock", display_text=TRADINGVIEW_SYMBOL_DISPLAY,
+                    help="Click to open this NSE stock in TradingView.",
+                    width="small",
+                ),
                 "ATM strike (₹)": st.column_config.NumberColumn("ATM (₹)", format="₹%.2f"),
                 "CMP (₹)": st.column_config.NumberColumn("CMP (₹)", format="₹%.2f"),
                 "CE LTP (₹)": st.column_config.NumberColumn("CE (₹)", format="₹%.2f"),

@@ -30,6 +30,9 @@ from dhan_visual.technical_ui import technical_values_for_table, technical_visib
 from dhan_visual.table_layout import (
     autofit_column_config, autofit_enabled, click_autofit, dataframe_key,
 )
+from dhan_visual.tradingview_links import (
+    clickable_stock_frame, TRADINGVIEW_SYMBOL_DISPLAY,
+)
 
 
 @st.cache_resource
@@ -669,8 +672,21 @@ def render_screener():
             ("Monthly R1", "Current calendar month's standard R1, calculated from previous completed month's H/L/C"),
         ):
             config[title] = st.column_config.TextColumn(title, help=note, width="medium")
+        # The source Symbol remains untouched for filters, prices, sorting,
+        # EMA/R1 matches, and CSV. Show a linked NSE ticker in its place.
+        # No extra visible company/name/URL column is added.
+        display_frame = clickable_stock_frame(
+            frame, source="Symbol", target="TradingView chart",
+        )
+        config["Symbol"] = None  # Hide raw ticker; link displays the name.
+        config["TradingView chart"] = st.column_config.LinkColumn(
+            "Stock",
+            display_text=TRADINGVIEW_SYMBOL_DISPLAY,
+            help="Click the NSE stock symbol to open its TradingView chart.",
+            width="small",
+        )
         st.dataframe(
-            frame, use_container_width=True, hide_index=True, height=580,
+            display_frame, use_container_width=True, hide_index=True, height=580,
             key=dataframe_key("ccs_stock_screener", st.session_state),
             column_config=autofit_column_config(
                 config, autofit_enabled(st.session_state),
