@@ -118,6 +118,9 @@ def _auto_enable(cid):
             )
         store_credentials(cid, st.session_state.get("_dhan_setup_pin", ""),
                           st.session_state.get("_dhan_setup_seed", ""))
+        # A manually entered (possibly expired) token must not silently block
+        # the freshly enabled automatic login. This callback runs before inputs.
+        st.session_state["dhan_local_access_token"] = ""
         st.session_state["dhan_auto_message"] = "Secure TOTP auto-login enabled on this laptop."
         st.session_state.pop("dhan_auto_error", None)
         st.session_state.pop("dhan_auto_auth_fail_at", None)
