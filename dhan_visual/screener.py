@@ -256,7 +256,7 @@ def screen_rows(
             "Last price (₹)": float(quote.price) if quote else None,
             "Lot size": lot, "Contract value (₹)": float(value) if value is not None else None,
             "Quote time": quote.timestamp if quote else "Unavailable",
-            "Price source": quote.source if quote else "No Yahoo quote",
+            "Price source": quote.source if quote else "No Dhan quote",
         })
     # Missing quotes are ALWAYS last, even when sorting descending.
     return sorted(out, key=lambda row: (
