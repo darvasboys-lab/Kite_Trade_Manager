@@ -34,7 +34,11 @@ class MasterParsing(unittest.TestCase):
         self.assertNotIn("NIFTY", [x.entry.symbol for x in records])
 
     def test_index_exclusion_and_security_id_validation(self):
-        records = parse_dhan_master(MASTER)
+        # Isolate the invalid -1 record by removing the separate valid November put.
+        invalid_only = MASTER.replace(
+            "NSE,D,42003,OPTSTK,STKOPT,SBIN26NOVPE,SBIN,,1333,SBIN,750,2026-11-26\n", ""
+        )
+        records = parse_dhan_master(invalid_only)
         sbin = next(x for x in records if x.entry.symbol == "SBIN")
         self.assertEqual(sbin.entry.lots, {"DEC-26": 850})
 
