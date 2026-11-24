@@ -17,6 +17,7 @@ import tempfile
 import time
 
 from .technical_indicators import TechnicalLevels, download_history_batch
+from .load_priority import strongest_first
 
 CACHE_PATH = Path(__file__).resolve().parent.parent / ".dhan_cache" / "yahoo_technical.json"
 CACHE_VERSION = 1
@@ -127,17 +128,20 @@ def load_all_technicals(symbols: list[str], queue: SimpleQueue,
                         today: date | None = None,
                         batch_size: int = BATCH_SIZE,
                         pause: float = BATCH_DELAY_SECONDS,
-                        cache_path: Path = CACHE_PATH) -> tuple[int, int]:
+                        cache_path: Path = CACHE_PATH,
+                        priority_quotes=None) -> tuple[int, int]:
     """Gradually fetch 2-year history for every F&O stock with no user clicks.
 
     Reuses at most 9-hour-old public cache, groups ≤10 Yahoo symbols, sleeps
     between requests, and backs off on empty/rate-limited responses.
     """
     day = today or _today_ist()
-    unique = list(dict.fromkeys(symbols))
     if not 1 <= batch_size <= 10:
         raise ValueError("Yahoo batch size must be 1–10 stocks")
     known = read_cached_technicals(cache_path, today=day)
+    # Strongest verified cached trends first; unknowns still receive history.
+    # When there is no cache, trend strength cannot yet be known.
+    unique = strongest_first(symbols, known, priority_quotes, today=day)
     cache = {s: known[s] for s in unique if s in known}
     total = len(unique)
     completed = len(cache)
