@@ -135,6 +135,47 @@ class FastUniverseTests(unittest.TestCase):
             public.assert_called_once()
             self.assertIsNotNone(_read_cache(path))
 
+    def test_dhan_compact_csv_symbol_fields(self):
+        # Dhan compact master uses SEM_TRADING_SYMBOL. Its detailed CSV may not.
+        csv_bytes = (
+            "SEM_EXM_EXCH_ID,SEM_SEGMENT,SEM_SMST_SECURITY_ID,SEM_INSTRUMENT_NAME,"
+            "SEM_TRADING_SYMBOL,SM_SYMBOL_NAME,SEM_SERIES\n"
+            "NSE,E,11536,EQUITY,TCS,TATA CONSULTANCY SERVICES,EQ\n"
+            "NSE,E,1333,EQUITY,SBIN,STATE BANK OF INDIA,EQ\n"
+            "NSE,D,98765,OPTSTK,TCS26NOV,OTHER,OPTSTK\n"
+        ).encode()
+        ids = parse_dhan_equities(csv_bytes)
+        self.assertEqual(ids["TCS"], 11536)
+        self.assertEqual(ids["SBIN"], 1333)
+        self.assertNotIn("TATA CONSULTANCY SERVICES", ids)
+
+    def test_dhan_detailed_csv_without_trading_symbol(self):
+        csv_bytes = (
+            "EXCH_ID,SEGMENT,SECURITY_ID,INSTRUMENT,SYMBOL_NAME,DISPLAY_NAME,SERIES\n"
+            "NSE,E,11536,EQUITY,TCS,TCS-EQ,EQ\n"
+            "NSE,E,1333,EQUITY,SBIN,SBIN-EQ,EQ\n"
+        ).encode()
+        ids = parse_dhan_equities(csv_bytes)
+        self.assertEqual(ids["TCS"], 11536)
+        self.assertEqual(ids["SBIN"], 1333)
+
+    def test_bad_dhan_segment_map_falls_back_when_symbols_do_not_match(self):
+        eq, _, _ = make_inputs(115)
+        bad = eq.replace(b"FO0", b"XY0")
+        urls = []
+        required = {f"FO{i:04d}" for i in range(1,116)}
+        def source(url, cap, **kw):
+            urls.append(url)
+            if url == EQ_SEGMENT_URL:
+                return bad
+            if url == COMPACT_MASTER_URL:
+                return eq
+            raise AssertionError("Detailed master should not be needed")
+        with patch("dhan_visual.fast_universe._download_csv", side_effect=source):
+            ids = resolve_equity_ids(required)
+        self.assertEqual(len(required & ids.keys()), 115)
+        self.assertEqual(urls, [EQ_SEGMENT_URL, COMPACT_MASTER_URL])
+
     def test_nse_list_appears_with_no_dhan_service(self):
         _, lots, _ = make_inputs(125)
         called = []
