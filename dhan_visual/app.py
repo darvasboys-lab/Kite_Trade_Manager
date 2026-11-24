@@ -17,25 +17,113 @@ from dhan_visual.payoff import current_expiry_payoff, expiry_breakevens, theoret
 st.set_page_config(page_title="Covered Call | Payoff Studio", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""
 <style>
-.stApp {background:#0b111a; color:#e8f1fa}
-.block-container {max-width:1470px; padding-top:1.2rem; padding-bottom:3rem}
-header[data-testid="stHeader"] {background:transparent}
-[data-testid="stMetric"] {background:#151f2c; border:1px solid #29394b; border-radius:15px; padding:16px 18px}
-[data-testid="stMetricLabel"] {color:#8fa5bc}
-[data-testid="stMetricValue"] {font-size:25px; color:#f0f7fe}
-[data-testid="stTabs"] button {font-weight:650; font-size:14px}
-[data-testid="stExpander"] {background:#111b27; border:1px solid #29394b; border-radius:13px}
-.hdr {padding:26px 30px; margin-bottom:15px; background:linear-gradient(115deg,#142c32,#152133 75%,#101823);border:1px solid #294653;border-radius:19px}
-.hdr .kicker {font-size:11px;color:#66d8c9;letter-spacing:.16em;font-weight:800}
-.hdr h1 {margin:4px 0 7px; font-size:36px; font-weight:800;letter-spacing:-.035em}
-.hdr p {color:#9eb2c6; margin:0; font-size:14px}
-.pill {display:inline-block;border:1px solid #44605f;color:#9be3da;border-radius:7px;padding:4px 10px;font-size:11px;font-weight:750;margin:14px 7px 0 0}
-.section-note {font-size:12px; color:#98a9bc; padding-bottom:9px}
-</style>""",unsafe_allow_html=True)
-st.markdown('''<div class="hdr"><span class="kicker">COVERED CALL · STRATEGY ANALYZER</span>
-<h1>Payoff <span style="color:#6ee3d1">Studio</span></h1>
-<p>Position risk, expiry payoff, stage-buy accumulation and 50% profit threshold — all in one workspace.</p>
-<span class="pill">OFFLINE DEMO</span><span class="pill">DHAN SCREEN · READ-ONLY</span><span class="pill">NO BROKER ORDERS</span></div>''', unsafe_allow_html=True)
+/* Compact, Sensibull-inspired dark options workspace.
+   Original CSS, no third-party trademarks or image assets. */
+:root {
+  --page: #101318;
+  --surface: #191e27;
+  --surface2: #202733;
+  --border: #303947;
+  --text: #ebeff5;
+  --muted: #9aa7b7;
+  --blue: #4f96ee;
+  --green: #41c69a;
+  --red: #ef7480;
+}
+.stApp, [data-testid="stAppViewContainer"] {
+  background: var(--page) !important; color: var(--text);
+}
+[data-testid="stHeader"] {background: var(--page) !important}
+[data-testid="stSidebar"] {background: var(--surface)}
+.block-container {
+  max-width: 1520px !important;
+  padding-top: .72rem !important;
+  padding-bottom: 2rem !important;
+  padding-left: 1.45rem !important;
+  padding-right: 1.45rem !important;
+}
+@media (max-width: 700px) {
+  .block-container {padding-left:.8rem !important; padding-right:.8rem !important}
+  .ps-brand h1 {font-size:23px !important}
+  .ps-chips {gap:5px !important}
+  .ps-chip {font-size:10px !important; padding:3px 6px !important}
+}
+.ps-header {
+  background: #171c25; border:1px solid #2d3745;
+  border-radius:12px; padding:15px 19px 13px;
+  margin:1px 0 15px;
+}
+.ps-topbar {display:flex; justify-content:space-between; align-items:center; gap:14px; flex-wrap:wrap}
+.ps-brand {display:flex; align-items:center; gap:12px}
+.ps-mark {
+  width:32px; height:32px; border-radius:9px; display:grid; place-items:center;
+  background:#25406b; color:#97c4ff; font-size:19px; font-weight:750
+}
+.ps-brand h1 {font-size:25px; font-weight:720; letter-spacing:-.045em; margin:0; line-height:1.2}
+.ps-brand h1 span {color:#73b0ff}
+.ps-chips {display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+.ps-chip {
+  background:#212a37; color:#aebaca; font-size:11px; font-weight:650;
+  border:1px solid #344054; padding:5px 9px; border-radius:7px
+}
+.ps-chip.safe {color:#65dbb2;background:#172f2b;border-color:#2d574d}
+.ps-sub {margin:8px 0 0 44px; color:var(--muted); font-size:12px; line-height:1.5}
+.stTabs [data-baseweb="tab-list"] {gap:8px; border-bottom:1px solid #303948; padding-bottom:4px}
+.stTabs [data-baseweb="tab"] {
+  color:#a9b5c7 !important; font-size:13px !important; font-weight:650 !important;
+  border-radius:7px 7px 0 0; padding:10px 18px !important;
+}
+.stTabs [aria-selected="true"] {color:#d8ebff !important; background:#1d2c41 !important}
+[data-testid="stMetric"] {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:10px; padding:12px 14px; min-height:88px;
+}
+[data-testid="stMetricLabel"] {color:var(--muted); font-size:12px}
+[data-testid="stMetricValue"] {font-size:23px; font-weight:700; color:var(--text)}
+[data-testid="stVerticalBlockBorderWrapper"] > div {
+  border-radius:10px !important; border-color:var(--border) !important;
+}
+[data-testid="stExpander"] {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:9px;
+}
+[data-testid="stExpander"] summary {font-size:13px; font-weight:620}
+div[data-baseweb="input"], div[data-baseweb="select"] > div, div[data-baseweb="base-input"] {
+  background:#191f29 !important; border-color:#364252 !important; border-radius:7px !important
+}
+[data-testid="stNumberInput"] input, [data-testid="stTextInput"] input {
+  color:#e9eef5 !important
+}
+.stButton button[kind="primary"] {
+  background:#286bb8 !important; border:1px solid #4e88cb !important;
+  border-radius:8px !important; box-shadow:none !important
+}
+.stButton button[kind="secondary"] {
+  background:#212937 !important; border:1px solid #3d4b5b !important;
+  color:#d5e0ea !important; border-radius:8px !important
+}
+[data-testid="stAlert"] {border-radius:8px !important; font-size:12px}
+[data-testid="stDataFrame"] {border:1px solid var(--border); border-radius:9px}
+.stMarkdown h3 {font-size:18px !important; font-weight:720; letter-spacing:-.02em}
+.stMarkdown h4 {font-size:15px !important; font-weight:700}
+[data-testid="stCaptionContainer"] {color:#9eadbf !important}
+footer, [data-testid="stDecoration"] {display:none !important}
+</style>
+""", unsafe_allow_html=True)
+st.markdown(
+    """<section class="ps-header" aria-label="Payoff Studio workspace">
+      <div class="ps-topbar">
+        <div class="ps-brand"><div class="ps-mark">↗</div>
+          <h1>Payoff <span>Studio</span></h1></div>
+        <div class="ps-chips">
+          <span class="ps-chip safe">● Market-data only</span>
+          <span class="ps-chip">Stock F&O</span>
+          <span class="ps-chip">Strategy demo</span>
+        </div>
+      </div>
+      <p class="ps-sub">F&O stock screener · contract-size filters · covered-call payoff simulation</p>
+    </section>""", unsafe_allow_html=True
+)
 
 search, manage = st.tabs(["⌕ Search Stock", "▥ Manage Trade"])
 
@@ -166,17 +254,17 @@ with manage:
         if show_target:
             chart.add_hline(y=float(target),line_color="#dcae70",line_dash="dash")
         chart.update_layout(
-            template="plotly_dark",height=425,
+            template="plotly_dark",height=390,
             margin=dict(l=8,r=8,t=16,b=7),
-            paper_bgcolor="#111a27",plot_bgcolor="#111a27",
+            paper_bgcolor="#191e27",plot_bgcolor="#191e27",
             font=dict(color="#9faec1"),
             showlegend=bool(show_both or show_today),
             legend=dict(orientation="h",y=1.07,x=0,font=dict(size=11)),
             xaxis_title="Stock price (₹)", yaxis_title="Combined expiry P&L (₹)",
             hovermode="x unified",
         )
-        chart.update_xaxes(gridcolor="#253345",zeroline=False)
-        chart.update_yaxes(gridcolor="#253345",zeroline=False,tickformat=",")
+        chart.update_xaxes(gridcolor="#2a3340",zeroline=False)
+        chart.update_yaxes(gridcolor="#2a3340",zeroline=False,tickformat=",")
         st.plotly_chart(chart,use_container_width=True)
         st.caption(
             f"Spot ₹{spot:,.2f} (blue marker) · Short call strike ₹{strike:,.2f} "

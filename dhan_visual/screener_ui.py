@@ -18,6 +18,11 @@ from dhan_visual.dhan_market import DhanUnderlying
 from dhan_visual.fast_universe import load_fast_catalogue, _write_cache
 from dhan_visual.background_quotes import load_dhan_all, load_yahoo_all, now_utc
 from dhan_visual.local_client_settings import read_client_id, save_client_id, valid_client_id
+from dhan_visual.auto_auth import (
+    AutoAuthError, AutoAccess, is_configured, store_credentials, forget_credentials,
+    read_cached_token, load_or_generate,
+)
+import time
 from dhan_visual.screener import choose_expiry, expiry_options, screen_rows
 
 
@@ -104,41 +109,185 @@ def _market_pool():
     return ThreadPoolExecutor(max_workers=2, thread_name_prefix="fno-public-quotes")
 
 
+def _auto_enable(cid):
+    """Save the setup key/PIN into Windows Credential Manager, not source files."""
+    try:
+        if not st.session_state.get("_dhan_auto_ack"):
+            raise AutoAuthError(
+                "Confirm that creating a new Dhan token may affect ResultBot."
+            )
+        store_credentials(cid, st.session_state.get("_dhan_setup_pin", ""),
+                          st.session_state.get("_dhan_setup_seed", ""))
+        # A manually entered (possibly expired) token must not silently block
+        # the freshly enabled automatic login. This callback runs before inputs.
+        st.session_state["dhan_local_access_token"] = ""
+        st.session_state["dhan_auto_message"] = "Secure TOTP auto-login enabled on this laptop."
+        st.session_state.pop("dhan_auto_error", None)
+        st.session_state.pop("dhan_auto_auth_fail_at", None)
+        st.session_state.pop("dhan_auto_access", None)
+    except AutoAuthError as exc:
+        st.session_state["dhan_auto_error"] = str(exc)
+    finally:
+        # Button callbacks execute before the widgets are re-created on rerun.
+        st.session_state["_dhan_setup_pin"] = ""
+        st.session_state["_dhan_setup_seed"] = ""
+        st.session_state["_dhan_auto_ack"] = False
+
+
+def _auto_disable(cid):
+    try:
+        forget_credentials(cid)
+        st.session_state.pop("dhan_auto_access", None)
+        st.session_state.pop("dhan_auto_error", None)
+        st.session_state.pop("dhan_auto_auth_fail_at", None)
+        st.session_state["dhan_auto_message"] = (
+            "Auto-login disabled. PIN, TOTP and cached token deleted locally. "
+            "Issued tokens must be revoked separately in Dhan Web."
+        )
+    except AutoAuthError as exc:
+        st.session_state["dhan_auto_error"] = str(exc)
+
+
+def _start_auto_login(cid, force=False):
+    job = st.session_state.get("dhan_auto_auth_job")
+    if job and not job["future"].done():
+        return
+    if not force and (
+        time.monotonic() - st.session_state.get("dhan_auto_auth_fail_at", -1e12)
+        < 600
+    ):
+        return
+    if not force:
+        ready = read_cached_token(cid)
+        if ready:
+            st.session_state["dhan_auto_access"] = ready
+            return
+    st.session_state.pop("dhan_auto_error", None)
+    st.session_state["dhan_auto_auth_job"] = {
+        "cid": cid,
+        "future": _market_pool().submit(load_or_generate, cid),
+    }
+
+
+@st.fragment(run_every="15s")
+def _auto_login_heartbeat(cid):
+    """While app runs: process authentication and renew close to expiry."""
+    if not is_configured(cid):
+        return
+    job = st.session_state.get("dhan_auto_auth_job")
+    if job:
+        if job["future"].done():
+            try:
+                access = job["future"].result()
+                if job["cid"] == cid and is_configured(cid):
+                    st.session_state["dhan_auto_access"] = access
+                    st.session_state.pop("dhan_auto_auth_fail_at", None)
+                    st.session_state.pop("dhan_auto_error", None)
+            except AutoAuthError as exc:
+                st.session_state["dhan_auto_auth_fail_at"] = time.monotonic()
+                st.session_state["dhan_auto_error"] = str(exc)
+            except Exception:
+                st.session_state["dhan_auto_auth_fail_at"] = time.monotonic()
+                st.session_state["dhan_auto_error"] = "Dhan TOTP login failed; retry securely"
+            st.session_state.pop("dhan_auto_auth_job", None)
+            st.rerun(scope="app")
+        st.caption("Secure Dhan TOTP login is running in the background…")
+    else:
+        current = st.session_state.get("dhan_auto_access")
+        if not isinstance(current, AutoAccess) or not current.usable():
+            _start_auto_login(cid)
+
+
+def _auto_login_panel(cid, manual_token):
+    """Optional local TOTP setup, independent of ResultBot's secrets."""
+    if not valid_client_id(cid):
+        return ""
+    enabled = is_configured(cid)
+    with st.expander("Automatic Dhan access token · TOTP setup", expanded=False):
+        st.caption(
+            "Provide your Dhan 6-digit PIN and TOTP setup secret ONCE. "
+            "Windows Credential Manager protects these locally. "
+            "Dhan returns a 24-hour token; while this dashboard is running "
+            "it can renew automatically without pasting a daily token."
+        )
+        st.warning(
+            "This Dhan account may also be used by ResultBot. "
+            "Creating a separate token can sometimes interrupt other sessions. "
+            "Enable only if you accept this risk. ResultBot itself will not be changed."
+        )
+        if enabled:
+            st.success("Secure TOTP settings are saved in Windows Credential Manager.")
+            st.button("Delete local TOTP/PIN and disable auto-login",
+                      key="dhan_auto_delete", on_click=_auto_disable, args=(cid,))
+        else:
+            st.text_input("6-digit Dhan PIN", key="_dhan_setup_pin",
+                          type="password", max_chars=6, value="")
+            st.text_input("16-character TOTP setup secret (NOT the 6-digit code)",
+                          key="_dhan_setup_seed", type="password", value="")
+            st.checkbox(
+                "I understand that creating a new Dhan token may affect ResultBot",
+                key="_dhan_auto_ack", value=False,
+            )
+            st.button("Save securely and enable automatic token generation",
+                      key="dhan_auto_enable", on_click=_auto_enable, args=(cid,))
+        if st.session_state.get("dhan_auto_message"):
+            st.info(st.session_state["dhan_auto_message"])
+        if st.session_state.get("dhan_auto_error"):
+            st.error(st.session_state["dhan_auto_error"])
+
+    if manual_token or not enabled:
+        return ""
+    stored = st.session_state.get("dhan_auto_access")
+    if not isinstance(stored, AutoAccess) or not stored.usable():
+        stored = read_cached_token(cid)
+        if stored:
+            st.session_state["dhan_auto_access"] = stored
+        else:
+            _start_auto_login(cid)
+    _auto_login_heartbeat(cid)
+    if st.session_state.get("dhan_auto_error"):
+        st.error(st.session_state["dhan_auto_error"])
+        if st.button("Retry Dhan TOTP login", key="dhan_auto_retry"):
+            _start_auto_login(cid, force=True)
+    if stored and stored.usable():
+        st.caption(
+            "Automatic Dhan token active until "
+            + stored.expires.astimezone().strftime("%d %b %Y %H:%M")
+        )
+        return stored.token
+    return ""
+
+
 def _dhan_credentials():
-    """Remember only the Client ID locally; token remains in RAM or environment."""
     saved = read_client_id()
     default_id = os.environ.get("DHAN_CLIENT_ID", "") or saved
-    configured = bool(default_id and os.environ.get("DHAN_ACCESS_TOKEN"))
+    configured = bool(default_id and (os.environ.get("DHAN_ACCESS_TOKEN") or is_configured(default_id)))
     with st.expander("Dhan market-data login · read-only", expanded=not configured):
         st.caption(
-            "Client ID is remembered once on this laptop. Dhan access tokens "
-            "expire within 24 hours; paste your *current* token locally when "
-            "needed. This studio does not automatically renew tokens or save "
-            "them in its settings file. Never share an access token in chat."
+            "Client ID is remembered locally. Choose manual token entry or "
+            "enable secure TOTP auto-login below. Never paste credentials in chat."
         )
         cid = st.text_input(
             "Dhan Client ID", value=default_id,
             key="dhan_local_cid",
-            help="Saved automatically to this PC's gitignored .dhan_cache/client_settings.json.",
+            help="Saved locally to the gitignored .dhan_cache/client_settings.json",
         )
         current_id = cid.strip()
         if valid_client_id(current_id):
             if saved != current_id and not save_client_id(current_id):
-                st.warning(
-                    "Could not remember the Client ID on disk. "
-                    "Check write access to the DhanPayoffStudio folder."
-                )
+                st.warning("Could not save Client ID locally")
             else:
-                st.caption("Client ID remembered on this PC; no need to re-enter it tomorrow.")
+                st.caption("Client ID remembered on this PC.")
         elif current_id:
-            st.warning("Enter a valid numeric Dhan Client ID to remember it.")
-        token = st.text_input(
-            "Dhan access token · current 24-hour token",
+            st.warning("Enter a numeric Dhan Client ID")
+        manual = st.text_input(
+            "Dhan access token · manual option",
             value=os.environ.get("DHAN_ACCESS_TOKEN", ""),
             type="password", key="dhan_local_access_token",
-            help="For security, the access token is not saved to the local settings file.",
+            help="Optional if TOTP auto-login is enabled.",
         )
-    return cid.strip(), token.strip()
+    automatic = _auto_login_panel(current_id, manual.strip())
+    return current_id, (manual.strip() or automatic)
 
 
 def _universe_key(universe):
