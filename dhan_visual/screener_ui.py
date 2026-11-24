@@ -625,7 +625,7 @@ def render_screener():
             ("EMA 10", "Daily 10-session EMA"),
             ("Monthly R1", "Current calendar month's standard R1, calculated from previous completed month's H/L/C"),
         ):
-            config[title] = st.column_config.TextColumn(title, help=note, width="small")
+            config[title] = st.column_config.TextColumn(title, help=note, width="medium")
         st.dataframe(
             frame, use_container_width=True, hide_index=True, height=580,
             column_config=config,

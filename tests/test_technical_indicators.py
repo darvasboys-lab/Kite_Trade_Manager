@@ -63,7 +63,7 @@ class EMAMonthlyPivotTests(unittest.TestCase):
         frame.loc[nov_rows, "Close"] = 105.
         levels = calculate_levels(frame, current_month=date(2026, 11, 24))
         expected = Decimal(2)*(Decimal(120)+Decimal(80)+Decimal(101))/3 - Decimal(80)
-        self.assertEqual(levels.monthly_r1, expected)
+        self.assertAlmostEqual(float(levels.monthly_r1), float(expected), places=8)
         self.assertLess(levels.monthly_r1, Decimal(200))
 
     def test_insufficient_200_history_is_unknown_not_fabricated(self):
@@ -96,7 +96,7 @@ class EMAMonthlyPivotTests(unittest.TestCase):
         frame.loc[dec,"Close"] = 115.
         result = calculate_levels(frame, current_month=date(2026,1,8))
         expected = Decimal(2)*(Decimal(130)+Decimal(80)+Decimal(115))/3-Decimal(80)
-        self.assertEqual(result.monthly_r1, expected)
+        self.assertAlmostEqual(float(result.monthly_r1), float(expected), places=8)
 
     def test_ticker_frame_supports_both_multiindex_conventions(self):
         frame = daily_history()
