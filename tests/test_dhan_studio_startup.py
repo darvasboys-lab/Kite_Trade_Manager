@@ -98,7 +98,8 @@ class PayoffStudioStartupTests(unittest.TestCase):
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
             self.assertEqual(len(cross_pool.calls), 0)
             self.assertIsNotNone(app.button(key="ccs_r1_today_refresh"))
-            self.assertEqual(len(app.dataframe), 1)
+            # The existing strategy-builder tab has its own independent table.
+            self.assertGreaterEqual(len(app.dataframe), 1)
             self.assertIn("TradingView chart", app.dataframe[0].value.columns)
 
     def test_r1_today_auto_scan_all_fno_underlyings_not_current_filters(self):
