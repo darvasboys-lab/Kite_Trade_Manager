@@ -12,11 +12,13 @@ from dhan_visual.dhan_market import (
     parse_dhan_master,
 )
 from dhan_visual.screener import choose_expiry, expiry_options, screen_rows
+from dhan_visual.fast_universe import load_fast_catalogue
 
 
-@st.cache_data(ttl=6 * 60 * 60, show_spinner=False)
-def _cached_dhan_master():
-    return fetch_dhan_master()
+def _cached_dhan_master(refresh=False, progress=None):
+    # A compact validated on-disk universe survives Streamlit/python restarts.
+    # Full Dhan instrument master is NOT downloaded on ordinary screen visits.
+    return load_fast_catalogue(refresh=refresh, progress=progress)
 
 
 def _handle_master():
@@ -30,13 +32,17 @@ def _handle_master():
         )
         return None, None
 
-    if st.button("Refresh instrument list", key="dhan_refresh_master"):
-        _cached_dhan_master.clear()
+    force = st.button("Force re-download instrument list", key="dhan_refresh_master")
+    if force:
         st.session_state.pop("dhan_price_snapshot", None)
     try:
-        with st.spinner("Reading Dhan F&O and NSE cash-equity instrument IDs..."):
-            universe, stamp = _cached_dhan_master()
-        return universe, f"Dhan instrument master · fetched {stamp}"
+        progress = st.empty()
+        with st.spinner("Loading fast F&O universe (cache → small files → segment fallback)..."):
+            universe, stamp = _cached_dhan_master(
+                refresh=force, progress=lambda message: progress.caption(message)
+            )
+        progress.empty()
+        return universe, stamp
     except Exception:
         st.warning(
             "Dhan's public instrument master could not be downloaded or verified. "
@@ -100,33 +106,62 @@ def render_screener():
     previous_cid = st.session_state.get("dhan_snapshot_cid")
     if previous_cid is not None and previous_cid != cid.strip():
         st.session_state.pop("dhan_price_snapshot", None)
-    a, b = st.columns([1, 2])
-    refresh = a.button(
-        "Fetch / refresh Dhan stock LTPs", key="dhan_refresh_ltps", type="primary",
-        help="One explicit NSE_EQ quote snapshot for the selected expiry's underlyings.",
+    a, b = st.columns([1, 1.7])
+    mode = b.selectbox(
+        "Price-loading mode",
+        ["All stocks (complete scan, usually one request)",
+         "Next 100 unpriced stocks (quick patch)",
+         "Next 250 unpriced stocks"],
+        key="dhan_quote_patch_mode",
+        help="All stocks is fastest for a complete contract-size ranking. Patches help diagnose slow networks. Dhan permits 1000 instruments per request.",
     )
-    b.caption(
-        "The dashboard does **not** place or modify trades. Dhan returns a "
-        "snapshot LTP but does not provide exchange trade timestamps in this endpoint. "
-        "Outside market hours, LTP may be from an earlier trade."
+    refresh = a.button(
+        "Fetch / refresh Dhan prices", key="dhan_refresh_ltps", type="primary",
+        help="One manual NSE_EQ market-data snapshot; never place orders.",
+    )
+    st.caption(
+        "Dhan's market-data API supports 1,000 instrument IDs per request. "
+        "A complete stock F&O screen typically needs one quote request. "
+        "Patch mode retrieves only the next missing symbols for troubleshooting."
     )
     if refresh:
         if not cid.strip() or not token.strip():
             st.error("Enter your own Dhan Client ID and access token in the credentials panel.")
         else:
-            with st.spinner(f"Requesting up to {len(available)} NSE cash-equity market prices from Dhan..."):
-                try:
-                    prices, errors = fetch_dhan_ltp(available, cid, token)
-                    st.session_state["dhan_price_snapshot"] = {
-                        "quotes": prices,
-                        "errors": errors,
-                        "request_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
-                        "ids": {item.entry.symbol: item.equity_security_id for item in available},
-                    }
-                    st.session_state["dhan_snapshot_cid"] = cid.strip()
-                except DhanDataError as exc:
-                    st.session_state.pop("dhan_price_snapshot", None)
-                    st.error(f"Dhan data error: {exc}")
+            prior = st.session_state.get("dhan_price_snapshot") or {}
+            prior_ids = prior.get("ids", {}) if st.session_state.get("dhan_snapshot_cid") == cid.strip() else {}
+            prior_quotes = prior.get("quotes", {}) if st.session_state.get("dhan_snapshot_cid") == cid.strip() else {}
+            if mode.startswith("All"):
+                requested = available
+                preserve = False
+            else:
+                missing = [x for x in available if
+                           x.entry.symbol not in prior_quotes or
+                           prior_ids.get(x.entry.symbol) != x.equity_security_id]
+                size = 100 if "100" in mode else 250
+                requested = missing[:size]
+                preserve = True
+            if not requested:
+                st.info("All selected stocks already have a snapshot. Use the All mode to refresh them.")
+            else:
+                with st.spinner(f"Requesting {len(requested)} NSE_EQ prices from Dhan..."):
+                    try:
+                        new_prices, errors = fetch_dhan_ltp(requested, cid, token)
+                        merged = dict(prior_quotes) if preserve else {}
+                        merged.update(new_prices)
+                        ids = dict(prior_ids) if preserve else {}
+                        ids.update({x.entry.symbol: x.equity_security_id for x in requested})
+                        st.session_state["dhan_price_snapshot"] = {
+                            "quotes": merged,
+                            "errors": errors,
+                            "request_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+                            "ids": ids,
+                        }
+                        st.session_state["dhan_snapshot_cid"] = cid.strip()
+                        if errors:
+                            st.warning(f"{len(errors)} Dhan quote request errors; old/missing quotes are not fabricated.")
+                    except DhanDataError as exc:
+                        st.error(f"Dhan data error: {exc}")
 
     snapshot = st.session_state.get("dhan_price_snapshot") or {}
     raw_prices = snapshot.get("quotes", {})
@@ -154,6 +189,12 @@ def render_screener():
     k2.metric("Dhan prices available", f"{len(prices):,}")
     k3.metric("Missing prices", f"{len(available) - len(prices):,}")
     k4.metric("Selected expiry", expiry)
+    if len(prices) < len(available):
+        st.warning(
+            f"Partial price coverage: {len(prices)}/{len(available)} stock prices. "
+            "Contract-value sorting and min/max filters are complete ONLY for "
+            "the priced rows. Use All stocks to scan the full list."
+        )
 
     st.markdown("#### Filter by stock and contract value")
     a, b, c = st.columns([1.4, 1.2, 1.5])

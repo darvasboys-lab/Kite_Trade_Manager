@@ -23,3 +23,5 @@ logs/
 .streamlit/secrets.toml
 .env.*
 !.env.example
+.dhan_cache/
+.venv_fresh/
