@@ -154,6 +154,45 @@ div[data-baseweb="base-input"], div[data-baseweb="textarea"] {
   outline-offset: 1px;
 }
 [data-testid="stToggle"] input:checked + div { background-color:#bd425a !important; }
+/* Strategy-screener workspace: compact financial terminal surface. */
+.ccs-screen-head {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:11px 17px 9px;
+  margin:0 0 9px;
+  background:linear-gradient(105deg,#fff,#fff6f7);
+  border:1px solid #efdae0; border-left:3px solid #c45167;
+  border-radius:11px;
+  box-shadow:0 4px 16px rgba(126,48,67,.045);
+}
+.ccs-screen-kicker {
+  font-size:10px; font-weight:760; letter-spacing:.12em;
+  color:#ac5367;
+}
+.ccs-screen-head h3 {
+  margin:3px 0 3px; font-size:19px; font-weight:760;
+  letter-spacing:-.025em; color:#202f46;
+}
+.ccs-screen-head .ccs-accent {color:#ce6476; margin:0 5px}
+.ccs-screen-head p {
+  margin:0; font-size:12px; color:#798597;
+}
+.ccs-market-strip {
+  display:flex; gap:9px; align-items:center; flex-wrap:wrap;
+  background:#fff; border:1px solid #eee3e7;
+  border-radius:8px; padding:7px 12px; margin:4px 0 8px;
+  font-size:11.5px; color:#69768a;
+}
+.ccs-market-strip b {color:#293951; font-weight:750}
+.ccs-strip-dot {color:#dca6b2;font-weight:700}
+[data-testid="stPopover"] button {
+  background:#fff !important; color:#904154 !important;
+  border:1px solid #e7d3d9 !important; border-radius:8px !important;
+  font-weight:650 !important;
+}
+[data-testid="stPopover"] button:hover {background:#fff3f5 !important}
+[data-testid="stDataFrame"] {
+  box-shadow:0 3px 14px rgba(58,36,50,.035);
+}
 footer, [data-testid="stDecoration"] { display:none !important; }
 @media (max-width: 700px) {
   .block-container { padding-left:.82rem !important; padding-right:.82rem !important; }

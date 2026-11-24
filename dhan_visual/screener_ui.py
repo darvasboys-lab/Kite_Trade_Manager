@@ -25,7 +25,7 @@ from dhan_visual.auto_auth import (
 import time
 from dhan_visual.screener import choose_expiry, expiry_options, screen_rows
 from dhan_visual.option_panel import render_atm_panel
-from dhan_visual.straddle_panel import render_straddle_panel
+from dhan_visual.straddle_panel import render_straddle_panel, available_otm_calls
 from dhan_visual.technical_ui import technical_values_for_table, attach_technical_columns
 
 
@@ -77,11 +77,7 @@ def _auto_universe():
     future = st.session_state.get("fno_universe_future")
     error = st.session_state.get("fno_universe_error")
     if data:
-        a, b = st.columns([4, 1])
-        a.caption(f"F&O list · {len(data[0])} stocks loaded")
-        if b.button("Refresh list", key="fno_refresh_universe"):
-            _start_universe(force=True)
-            st.rerun()
+        # No large list-status row above the compact screener toolbar.
         if future:
             _load_status()
         elif error:
@@ -436,20 +432,8 @@ def _poll_market_data():
         st.caption(f"Yahoo · {snap.get('processed', 0)}/{yahoo_busy['total']} scanned")
 
 
-def _price_panel(universe, expiry, available):
-    st.markdown("#### Prices · automatic background loading")
-    left, right = st.columns([2, 1])
-    with left:
-        provider = st.radio(
-            "Quote source", ["Dhan", "Yahoo Finance"], index=1,
-            horizontal=True, key="fno_price_provider",
-            help="Yahoo is the default; Dhan can be selected for broker LTP. Yahoo's "
-                 "historical bar closes can be delayed or missing.",
-        )
-    with right:
-        # Optional explicit force refresh is never required for first load.
-        manual = st.button("Refresh now", key="fno_manual_price_refresh")
-
+def _price_panel(universe, expiry, available, provider, manual):
+    """Quote-source controls live in the compact top-right toolbar."""
     all_symbols = {row.entry.symbol for row in universe}
     if provider == "Dhan":
         cid, token = _dhan_credentials()
@@ -497,63 +481,97 @@ def _price_panel(universe, expiry, available):
 
 
 def render_screener():
-    st.subheader("NSE Stock F&O · Contract Value Screener")
-    st.caption("Yahoo default · automatic cash prices · contract value = CMP × lot size")
     universe = _auto_universe()
     if not universe:
         return
     entries = [row.entry for row in universe]
     expiries = expiry_options(entries)
-    expiry = st.selectbox(
-        "F&O expiry month", expiries, index=expiries.index(choose_expiry(entries)),
-        key="fno_expiry",
+
+    st.markdown(
+        """<div class="ccs-screen-head">
+             <div><span class="ccs-screen-kicker">NSE STOCK F&O · READ ONLY</span>
+             <h3>Market screener <span class="ccs-accent">/</span> Strategy signals</h3>
+             <p>Contract value · EMA trend · monthly R1 · options premium</p></div>
+           </div>""", unsafe_allow_html=True,
     )
+
+    # Compact one-row toolbar: visible expiry + three tucked-away controls.
+    # All prior Streamlit widget keys are preserved for saved user selections.
+    expiry_col, search_col, filters_col, source_col = st.columns(
+        [1.2, 1.0, 1.30, 1.0], gap="small",
+    )
+    with expiry_col:
+        expiry = st.selectbox(
+            "F&O expiry month", expiries,
+            index=expiries.index(choose_expiry(entries)),
+            key="fno_expiry", label_visibility="collapsed",
+        )
+    with search_col:
+        with st.popover("⌕ Search", use_container_width=True):
+            search = st.text_input(
+                "Find stock / symbol", placeholder="TCS, SBIN, RELIANCE",
+                key="fno_symbol_find",
+            )
+    with filters_col:
+        with st.popover("⚙ Filter & sort", use_container_width=True):
+            sort = st.radio(
+                "Sort contract value", ["Low → high", "High → low"],
+                key="fno_value_sort", horizontal=True,
+            )
+            choices = [
+                "All stocks", "Below ₹5 lakh", "Below ₹6 lakh",
+                "Below ₹7 lakh", "Below ₹8 lakh",
+                "Above ₹5 lakh", "Above ₹8 lakh", "Custom",
+            ]
+            preset = st.selectbox(
+                "Contract value range", choices, index=3,
+                key="fno_value_preset",
+            )
+            min_l = st.number_input(
+                "Minimum (₹ lakh)", min_value=0., value=0., step=.5,
+                key="fno_min_lakh", disabled=preset != "Custom",
+            )
+            max_l = st.number_input(
+                "Maximum (₹ lakh; 0 = no upper limit)",
+                min_value=0., value=0., step=.5,
+                key="fno_max_lakh", disabled=preset != "Custom",
+            )
+            compact = st.toggle(
+                "Show values in ₹L", value=True,
+                key="fno_compact_contract_value",
+                help="₹270,500 → ₹2.7L; raw numeric values remain unchanged.",
+            )
+    with source_col:
+        with st.popover("◉ Source", use_container_width=True):
+            provider = st.radio(
+                "Quote source", ["Dhan", "Yahoo Finance"], index=1,
+                key="fno_price_provider", horizontal=True,
+                help="Yahoo is default; Dhan needs a valid local data token.",
+            )
+            manual = st.button("↻ Refresh prices", key="fno_manual_price_refresh")
+            if st.button("↻ Refresh stock list", key="fno_refresh_universe"):
+                _start_universe(force=True)
+                st.rerun()
+            st.caption("Yahoo bars may be delayed.")
+
     available = [row for row in universe if expiry in row.entry.lots]
-    provider, all_prices = _price_panel(universe, expiry, available)
-    prices = {sym: quote for sym, quote in all_prices.items()
-              if sym in {row.entry.symbol for row in available}}
+    provider, all_prices = _price_panel(universe, expiry, available, provider, manual)
+    prices = {
+        sym: quote for sym, quote in all_prices.items()
+        if sym in {row.entry.symbol for row in available}
+    }
     filled = len(prices)
-    all_count = len(universe)
-    cols = st.columns(4)
-    cols[0].metric("Listed F&O stocks", f"{all_count:,}")
-    cols[1].metric("For selected expiry", f"{len(available):,}")
-    cols[2].metric("Prices available", f"{filled:,}/{len(available):,}")
-    cols[3].metric("Still unpriced", f"{len(available) - filled:,}")
-
-    if filled != len(available):
-        st.caption("Partial prices · ranking is incomplete until all stocks are quoted.")
-
-    st.markdown("#### Filter & sort")
-    with st.container(border=True):
-        first, second, third = st.columns([1.4, 1.1, 1.3])
-        search = first.text_input(
-            "Stock / symbol", placeholder="TCS, SBIN, RELIANCE",
-            key="fno_symbol_find",
-        )
-        sort = second.radio(
-            "Sort by contract value", ["Low → high", "High → low"],
-            key="fno_value_sort", horizontal=True,
-        )
-        choices = [
-            "All stocks", "Below ₹5 lakh", "Below ₹6 lakh",
-            "Below ₹7 lakh", "Below ₹8 lakh",
-            "Above ₹5 lakh", "Above ₹8 lakh", "Custom",
-        ]
-        preset = third.selectbox(
-            "Show contract sizes", choices, index=3,
-            key="fno_value_preset",
-            help="Starts with <₹7 lakh. Change to All stocks to see the full F&O universe.",
-        )
-        a, b = st.columns(2)
-        min_l = a.number_input(
-            "Minimum (₹ lakh)", min_value=0., value=0., step=.5,
-            key="fno_min_lakh", disabled=preset != "Custom",
-        )
-        max_l = b.number_input(
-            "Maximum (₹ lakh, 0 means no upper limit)",
-            min_value=0., value=0., step=.5, key="fno_max_lakh",
-            disabled=preset != "Custom",
-        )
+    st.markdown(
+        f'<div class="ccs-market-strip">'
+        f'<span><b>{len(available)}</b> F&O stocks</span>'
+        f'<span class="ccs-strip-dot">·</span>'
+        f'<span><b>{filled}</b> quotes</span>'
+        f'<span class="ccs-strip-dot">·</span>'
+        f'<span>{provider}</span>'
+        f'<span class="ccs-strip-dot">·</span>'
+        f'<span>{preset} · {sort}</span>'
+        f'</div>', unsafe_allow_html=True,
+    )
 
     caps = {
         "All stocks": (0, 0),
@@ -583,12 +601,6 @@ def render_screener():
     # universe, not just the ₹7 lakh/selected-symbol table subset.
     technicals = technical_values_for_table([item.entry.symbol for item in universe])
     st.markdown(f"**{len(rows):,} displayed stocks** · {filled:,} with {provider} prices")
-    compact = st.toggle(
-        "Display contract values in lakhs (₹L)",
-        value=True, key="fno_compact_contract_value",
-        help="Example: ₹270500 becomes ₹2.7L. Off shows full rupees. "
-             "All filters, sorting and CSV exports use full numeric values.",
-    )
     if not rows:
         st.info("No stocks match the selected value filter. The source may also have missing prices.")
     else:
@@ -618,6 +630,18 @@ def render_screener():
         # Keep source/quote time in CSV and expandable notes, not the wide table.
         frame = frame.drop(columns=["Quote time", "Price source"], errors="ignore")
         frame = attach_technical_columns(frame, technicals)
+        otm_calls = available_otm_calls(available, expiry)
+        # Single numeric column. A missing option-chain snapshot remains N/A.
+        frame["5%+ CE premium (%)"] = [
+            float(otm_calls[symbol].premium_pct) if symbol in otm_calls else None
+            for symbol in frame["Symbol"]
+        ]
+        config["5%+ CE premium (%)"] = st.column_config.NumberColumn(
+            "CE ≥+5% (%)", format="%.2f%%", width="medium",
+            help="First real listed CE strike >= Dhan chain CMP × 1.05. "
+                 "CE LTP / Dhan CMP ×100. Populates from the SAME background "
+                 "ATM-straddle scan; no extra Dhan requests. Missing = N/A.",
+        )
         for title, note in (
             ("EMA 200", "Daily 200-session EMA"),
             ("EMA 50", "Daily 50-session EMA"),
@@ -633,7 +657,7 @@ def render_screener():
     st.caption(
         f"{provider} · {filled}/{len(available)} prices · "
         "✓ CMP > level · ✕ CMP ≤ level · — waiting/unavailable · "
-        "EMAs and monthly R1 from Yahoo daily history"
+        "EMAs/R1 from Yahoo history · CE ≥5% uses Dhan chain CMP and needs ATM scan"
     )
     with st.expander("Source details and timestamps", expanded=False):
         st.caption(f"Instrument list: {(st.session_state.get('fno_universe_data') or (None, 'Unknown'))[1]}")
@@ -651,6 +675,19 @@ def render_screener():
     render_atm_panel(available, rows, expiry)
     if rows:
         exported = attach_technical_columns(pd.DataFrame(rows), technicals)
+        otm_calls = available_otm_calls(available, expiry)
+        exported["5%+ CE premium (%)"] = [
+            float(otm_calls[sym].premium_pct) if sym in otm_calls else None
+            for sym in exported["Symbol"]
+        ]
+        exported["5%+ CE strike (₹)"] = [
+            float(otm_calls[sym].strike) if sym in otm_calls else None
+            for sym in exported["Symbol"]
+        ]
+        exported["Dhan CMP for CE % (₹)"] = [
+            float(otm_calls[sym].underlying_ltp) if sym in otm_calls else None
+            for sym in exported["Symbol"]
+        ]
         exported["Indicators as of"] = [
             technicals[sym].asof if sym in technicals else ""
             for sym in exported["Symbol"]

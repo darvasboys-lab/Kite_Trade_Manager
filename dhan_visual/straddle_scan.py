@@ -45,6 +45,34 @@ class StraddleRow:
 
 
 @dataclass(frozen=True)
+class OtmCall5Quote:
+    """First listed CE strike >= Dhan option-chain spot * 1.05."""
+    symbol: str
+    expiry: str
+    strike: Decimal
+    underlying_ltp: Decimal
+    call_ltp: Decimal
+    premium_pct: Decimal
+    captured_at: str
+
+
+def otm_call_5_from_atm(value: AtmOptionQuote) -> OtmCall5Quote | None:
+    """No estimate when no actual strike or no positive CE market LTP."""
+    leg = value.otm_5_ce
+    strike = value.otm_5_strike
+    if (strike is None or leg is None or leg.ltp is None
+            or value.underlying_price <= 0
+            or strike < value.underlying_price * Decimal("1.05")
+            or leg.ltp <= 0):
+        return None
+    return OtmCall5Quote(
+        value.symbol, value.expiry, strike, value.underlying_price,
+        leg.ltp, leg.ltp / value.underlying_price * Decimal(100),
+        value.captured_at,
+    )
+
+
+@dataclass(frozen=True)
 class ScanUpdate:
     symbol: str
     completed: int
@@ -53,6 +81,7 @@ class ScanUpdate:
     error: str = ""
     fatal: bool = False
     status: str = ""
+    otm_call: OtmCall5Quote | None = None
 
 
 def straddle_from_atm(value: AtmOptionQuote) -> StraddleRow:
@@ -209,8 +238,19 @@ def scan_all_straddles(
                 sym, month, item.entry.lots[month], item.equity_security_id,
                 client_id, token, verified_expiry=expiry_map.get(sym),
             )
-            row = straddle_from_atm(atm)
-            updates.put(ScanUpdate(sym, completed, total, row=row))
+            # One Dhan option-chain response supplies ATM straddle AND +5% CE.
+            # Even when ATM PE is absent, preserve an independently valid CE.
+            otm_call = otm_call_5_from_atm(atm)
+            try:
+                row = straddle_from_atm(atm)
+            except OptionDataError as exc:
+                updates.put(ScanUpdate(
+                    sym, completed, total, error=str(exc)[:250], otm_call=otm_call,
+                ))
+            else:
+                updates.put(ScanUpdate(
+                    sym, completed, total, row=row, otm_call=otm_call,
+                ))
         except (OptionDataError, DhanDataError) as exc:
             safe = str(exc)[:250]
             fatal = any(

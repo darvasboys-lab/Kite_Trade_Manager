@@ -46,8 +46,15 @@ class PayoffStudioStartupTests(unittest.TestCase):
         self.assertEqual(app.radio(key="fno_price_provider").value, "Yahoo Finance")
         self.assertEqual(app.selectbox(key="fno_value_preset").value, "Below ₹7 lakh")
         self.assertGreaterEqual(len(app.dataframe), 1)
-        for col in ("EMA 200", "EMA 50", "EMA 20", "EMA 10", "Monthly R1"):
+        for col in ("EMA 200", "EMA 50", "EMA 20", "EMA 10", "Monthly R1",
+                    "5%+ CE premium (%)"):
             self.assertIn(col, app.dataframe[0].value.columns)
+        # Former full-width filter, search and quote source controls remain
+        # reachable by exactly the same widget keys inside small popovers.
+        self.assertEqual(app.radio(key="fno_value_sort").value, "Low → high")
+        self.assertIsNotNone(app.text_input(key="fno_symbol_find"))
+        self.assertIsNotNone(app.button(key="fno_manual_price_refresh"))
+        self.assertIsNotNone(app.button(key="fno_refresh_universe"))
 
     def test_local_credentials_dispatch_entire_universe_without_refresh_click(self):
         app = app_with_catalogue()
@@ -254,6 +261,60 @@ class PayoffStudioStartupTests(unittest.TestCase):
             self.assertEqual(set(pool.calls[0][0][1]),set(symbols))
             app.run()
             self.assertEqual(len(pool.calls),1)
+
+    def test_otm_ce_column_populates_from_existing_scan_without_new_broker_calls(self):
+        from dhan_visual.straddle_scan import OtmCall5Quote
+        app = app_with_catalogue()
+        cid, token = "1234567890", "FAKE_LONG_TOKEN_FOR_TEST_ONLY"
+        app.session_state["dhan_local_cid"] = cid
+        app.session_state["dhan_local_access_token"] = token
+        app.session_state["fno_price_provider"] = "Dhan"
+        symbols = ",".join(sorted(x.entry.symbol for x in example()))
+        universe_key = hashlib.sha256(symbols.encode()).hexdigest()
+        key = hashlib.sha256((cid + ":" + token + ":" + universe_key).encode()).hexdigest()
+        app.session_state["fno_dhan_attempt_key"] = key
+        app.session_state["fno_dhan_snapshot"] = {
+            "key": key, "quotes": {
+                "TCS": Quote(Decimal("100"), "mock", "Dhan LTP"),
+                "SBIN": Quote(Decimal("95"), "mock", "Dhan LTP"),
+            }, "ids": {"TCS": 11536, "SBIN": 1333},
+            "errors": [], "requested_at": "mock",
+        }
+        otm = OtmCall5Quote(
+            "TCS", "2026-11-26", Decimal("105"),
+            Decimal("100"), Decimal("2"), Decimal("2"), "mock"
+        )
+        pool = FakePool()
+        with patch("dhan_visual.screener_ui.available_otm_calls",
+                   return_value={"TCS": otm}), \
+             patch("dhan_visual.screener_ui._market_pool", return_value=pool), \
+             patch("dhan_visual.straddle_panel.scan_all_straddles") as scan:
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            screen = app.dataframe[0].value
+            self.assertEqual(
+                screen.loc[screen["Symbol"] == "TCS", "5%+ CE premium (%)"].iloc[0],
+                2.0,
+            )
+            self.assertTrue(
+                screen.loc[screen["Symbol"] == "SBIN", "5%+ CE premium (%)"].isna().all()
+            )
+            scan.assert_not_called()
+
+    def test_compact_search_and_filters_retain_all_prior_actions(self):
+        app = app_with_catalogue()
+        pool = FakePool()
+        with patch("dhan_visual.screener_ui._market_pool", return_value=pool):
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            app.text_input(key="fno_symbol_find").set_value("TCS").run()
+            self.assertEqual(app.dataframe[0].value["Symbol"].tolist(), ["TCS"])
+            app.text_input(key="fno_symbol_find").set_value("").run()
+            app.radio(key="fno_value_sort").set_value("High → low").run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(app.radio(key="fno_value_sort").value, "High → low")
+            app.selectbox(key="fno_value_preset").set_value("All stocks").run()
+            self.assertEqual(len(app.dataframe[0].value), 2)
 
     def test_no_manual_list_upload_or_50_stock_hard_cap(self):
         source = (APP.parent / "screener_ui.py").read_text(encoding="utf-8")

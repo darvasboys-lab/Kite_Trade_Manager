@@ -51,6 +51,10 @@ class AtmOptionQuote:
     ce: OptionLeg
     pe: OptionLeg
     captured_at: str
+    # Optional 5%+ out-of-money CALL derived from this SAME option-chain
+    # response; old positional constructors remain valid.
+    otm_5_strike: Decimal | None = None
+    otm_5_ce: OptionLeg | None = None
 
 
 class _RateLimiter:
@@ -147,6 +151,23 @@ def parse_atm_option_chain(payload: dict, symbol: str, expiry: str,
             _number(record.get("top_ask_price")),
         )
 
+    # Only CE strikes at least 5% ABOVE the Dhan chain underlying CMP.
+    # Choose first ACTUAL listed strike at/above target, not an invented
+    # strike or a lower strike that might be less than 5% OTM.
+    threshold = spot * Decimal("1.05")
+    eligible_calls = sorted(
+        ((k, values["ce"]) for k, values in strikes
+         if k >= threshold and isinstance(values.get("ce"), dict)),
+        key=lambda item: item[0],
+    )
+    otm_strike = eligible_calls[0][0] if eligible_calls else None
+    otm_ce = (
+        OptionLeg(
+            _number(eligible_calls[0][1].get("last_price")),
+            _number(eligible_calls[0][1].get("top_bid_price")),
+            _number(eligible_calls[0][1].get("top_ask_price")),
+        ) if eligible_calls else None
+    )
     if not isinstance(lot_size, int) or lot_size <= 0:
         raise OptionDataError("Invalid stock-option market lot size")
     return AtmOptionQuote(
@@ -158,6 +179,8 @@ def parse_atm_option_chain(payload: dict, symbol: str, expiry: str,
         ce=read_leg("ce"),
         pe=read_leg("pe"),
         captured_at=stamp,
+        otm_5_strike=otm_strike,
+        otm_5_ce=otm_ce,
     )
 
 
