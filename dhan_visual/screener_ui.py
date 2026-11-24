@@ -6,6 +6,7 @@ F&O list starts fetching in a worker and survives restarts as public-only cache.
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from hashlib import sha256
+from pathlib import Path
 import csv
 import io
 import os
@@ -26,7 +27,8 @@ import time
 from dhan_visual.screener import choose_expiry, expiry_options, screen_rows
 from dhan_visual.option_panel import render_atm_panel
 from dhan_visual.straddle_panel import render_straddle_panel, available_otm_calls
-from dhan_visual.nse_eod_ce import NseEodError, parse_nse_fo_eod
+from dhan_visual.nse_eod_ce import MAX_UPLOAD_BYTES, NseEodError, parse_nse_fo_eod
+from dhan_visual.ce_eod_local import NSE_FO_NAME, recent_nse_fo_reports
 from dhan_visual.technical_ui import technical_values_for_table, technical_visible_stage, attach_technical_columns
 from dhan_visual.technical_worker import read_cached_technicals
 from dhan_visual.table_layout import (
@@ -497,47 +499,110 @@ def _parse_ce5_upload(payload: bytes):
     return parse_nse_fo_eod(payload)
 
 
-def _free_ce5_panel(expiry):
-    """NSE public EOD fallback via one user-downloaded file; no site scraping."""
-    with st.expander("Free CE ≥5% option premiums · NSE daily file", expanded=False):
+@st.cache_data(show_spinner=False, max_entries=5)
+def _read_local_ce5_file(path_string: str, size: int, mtime_ns: int):
+    """Cached local validation: one official-looking file, zero web requests."""
+    path = Path(path_string)
+    filename = NSE_FO_NAME.fullmatch(path.name)
+    if not filename or path.is_symlink() or not path.is_file():
+        raise NseEodError("Unrecognized NSE daily file")
+    actual = path.stat()
+    if (actual.st_size != size or actual.st_mtime_ns != mtime_ns
+            or not 0 < size <= MAX_UPLOAD_BYTES):
+        raise NseEodError("The NSE daily file changed or exceeds size limits")
+    result = parse_nse_fo_eod(path.read_bytes())
+    expected = datetime.strptime(filename.group(1), "%Y%m%d").date().isoformat()
+    if result.report_date != expected:
+        raise NseEodError("The report's business date does not match its filename")
+    return result
+
+
+def _free_ce5_panel(expiry, dhan_count=0):
+    """Read-only CE fallback: Dhan, local NSE Downloads, optional uploaded NSE."""
+    latest_local = None
+    local_name = ""
+    local_errors = []
+    for path in recent_nse_fo_reports():
+        try:
+            metadata = path.stat()
+            latest_local = _read_local_ce5_file(
+                str(path), metadata.st_size, metadata.st_mtime_ns,
+            )
+            local_name = path.name
+            break
+        except (NseEodError, OSError, ValueError) as exc:
+            local_errors.append(f"{path.name}: {type(exc).__name__}")
+
+    with st.expander("CE ≥+5% data · free NSE EOD report / Dhan scan", expanded=False):
         st.caption(
-            "Yahoo's NSE cash quotes do not include reliable NFO option chains. "
-            "Dhan's opt-in option-chain scan is tried first. For a free EOD "
-            "fallback, download ONE F&O-UDiFF Common Bhavcopy Final (.csv.zip) "
-            "from NSE All Reports → Derivatives, then upload it below. "
-            "No automatic NSE scraping or broker login is performed."
+            "Dhan option-chain LTP (only after the opt-in scan) is preferred. "
+            "Free fallback: download ONE official 'F&O-UDiFF Common Bhavcopy Final' "
+            "ZIP from NSE Derivatives Reports. If saved in your Windows Downloads "
+            "folder under its original filename, the app picks it up automatically "
+            "on the next refresh. Alternatively upload it here. "
+            "This does NOT automate website data collection."
         )
         st.markdown(
-            "[Open NSE official derivatives reports]"
+            "[Open official NSE derivatives reports]"
             "(https://www.nseindia.com/all-reports-derivatives)"
         )
+        st.button(
+            "↻ Check Downloads again", key="fno_ce5_recheck_downloads",
+            help="Recheck your Windows Downloads folder for an NSE official daily F&O report.",
+        )
         uploaded = st.file_uploader(
-            "NSE F&O daily ZIP or CSV", type=["zip", "csv"],
+            "Optional: choose NSE F&O daily ZIP or CSV",
+            type=["zip", "csv"],
             key="fno_ce5_nse_eod_file",
-            help="One daily report covers all F&O stock option contracts. "
-                 "Files are parsed locally and not sent to a trading broker.",
+            help="Use this if you saved the official NSE report outside Downloads.",
         )
-        if uploaded is None:
+        selected = latest_local
+        descriptor = f"Downloads/{local_name}" if latest_local is not None else ""
+        if uploaded is not None:
+            try:
+                selected = _parse_ce5_upload(uploaded.getvalue())
+                descriptor = f"uploaded {uploaded.name}"
+            except NseEodError as exc:
+                st.error(f"Uploaded report could not be read: {exc}")
+                # A bad upload must not hide a valid local report.
+        if selected is None:
             st.caption(
-                "No NSE EOD file uploaded. CE ≥5% remains N/A until a valid "
-                "Dhan option scan completes or an NSE EOD report is supplied."
+                "No recent NSE daily F&O file found in Downloads and no valid "
+                "upload. Stock Yahoo prices alone cannot supply CE premiums."
             )
-            return {}, ""
-        try:
-            snap = _parse_ce5_upload(uploaded.getvalue())
-        except NseEodError as exc:
-            st.error(f"Could not read NSE daily report: {exc}")
-            return {}, ""
-        calls = snap.quotes.get(expiry, {})
-        st.caption(
-            f"NSE report {snap.report_date} · {len(calls)} verified traded "
-            f"first-eligible 5%+ CE contracts for {expiry}. "
-            "EOD closing prices are NOT live quotes or executable bids."
-        )
-        if not calls:
-            st.warning("No valid CE data for this expiry month in the uploaded report.")
-        return calls, snap.report_date
+            if local_errors:
+                st.caption("Local file diagnostics: " + "; ".join(local_errors[:2]))
+            calls, report_day = {}, ""
+        else:
+            calls, report_day = selected.quotes.get(expiry, {}), selected.report_date
+            st.caption(
+                f"Using {descriptor} · NSE report date {report_day} · "
+                f"{len(calls)} traded, verified 5%+ calls for {expiry}. "
+                "These are END-OF-DAY closes, not live premiums or executable bids."
+            )
+            if not calls:
+                st.warning(
+                    f"Report {report_day} contains no valid traded 5%+ stock CE "
+                    f"for {expiry}. Check the selected expiry and report date."
+                )
 
+    if not dhan_count and not calls:
+        st.info(
+            f"CE ≥+5% for {expiry}: no option prices loaded. "
+            "Select an ACTIVE expiry, then expand 'CE ≥+5% data' to "
+            "use the official NSE daily report, or start the Dhan "
+            "option-chain scan below the stock table. Yahoo supplies stock "
+            "prices, not NSE option premiums."
+        )
+    elif calls:
+        st.caption(
+            f"CE data: {dhan_count} Dhan chain prices · "
+            f"{len(calls)} NSE EOD fallback candidates ({report_day}). "
+            "Each % uses the matching source's underlying price."
+        )
+    else:
+        st.caption(f"CE data: {dhan_count} Dhan option-chain snapshots.")
+    return calls, report_day
 
 def _ce5_choice(symbol, dhan_calls, eod_calls, eod_date):
     """Sequential provider fallback; never mix spot and option dates."""
@@ -692,8 +757,8 @@ def render_screener():
         available, expiry, technicals, compact=compact,
         technically_ready=r1_ready, priority_quotes=prices,
     )
-    eod_calls, eod_date = _free_ce5_panel(expiry)
     dhan_ce5 = available_otm_calls(available, expiry)
+    eod_calls, eod_date = _free_ce5_panel(expiry, dhan_count=len(dhan_ce5))
     st.markdown(f"**{len(rows):,} displayed stocks** · {filled:,} with {provider} prices")
     if not rows:
         st.info("No stocks match the selected value filter. The source may also have missing prices.")
@@ -744,7 +809,7 @@ def render_screener():
             "CE ≥+5% (%)", format="%.2f%%", width="medium",
             help="First listed call strike >= source underlying ×1.05. "
                  "Priority: Dhan option-chain LTP (opt-in scan), then "
-                 "user-uploaded NSE daily traded closing price. "
+                 "locally downloaded or uploaded NSE daily traded closing price. "
                  "Do not interpret NSE EOD as a current or executable premium.",
         )
         config["CE source"] = st.column_config.TextColumn(
@@ -805,7 +870,7 @@ def render_screener():
         f"{provider} · {filled}/{len(available)} prices · "
         "☑ colored EMA = above EMA · ✅ above R1 · no tick = at/below · — waiting/unavailable · "
         "Yahoo indicators reveal EMA200 → EMA50 → EMA20 → EMA10 → R1 · "
-        "CE ≥5%: opt-in Dhan LTP, then uploaded NSE EOD (never mixed)"
+        "CE ≥5%: opt-in Dhan LTP, then local NSE EOD (never mixed)"
     )
     with st.expander("Source details and timestamps", expanded=False):
         st.caption(f"Instrument list: {(st.session_state.get('fno_universe_data') or (None, 'Unknown'))[1]}")
