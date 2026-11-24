@@ -17,97 +17,143 @@ from dhan_visual.payoff import current_expiry_payoff, expiry_breakevens, theoret
 st.set_page_config(page_title="Covered Call | Payoff Studio", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""
 <style>
-/* Compact, Sensibull-inspired dark options workspace.
-   Original CSS, no third-party trademarks or image assets. */
+/* Original light options workspace, inspired by the spacious structure of
+   Sensibull's public strategy-builder screenshots, not copied site assets. */
 :root {
-  --page: #101318;
-  --surface: #191e27;
-  --surface2: #202733;
-  --border: #303947;
-  --text: #ebeff5;
-  --muted: #9aa7b7;
-  --blue: #4f96ee;
-  --green: #41c69a;
-  --red: #ef7480;
+  --page: #f6f8fb;
+  --surface: #ffffff;
+  --surface2: #f1f5fb;
+  --border: #e1e6ef;
+  --text: #17253b;
+  --muted: #66758c;
+  --blue: #1768cf;
+  --green: #168567;
+  --red: #dc485d;
 }
-.stApp, [data-testid="stAppViewContainer"] {
-  background: var(--page) !important; color: var(--text);
+.stApp, [data-testid="stAppViewContainer"],
+[data-testid="stMain"] {
+  background-color: var(--page) !important;
+  color: var(--text) !important;
 }
-[data-testid="stHeader"] {background: var(--page) !important}
-[data-testid="stSidebar"] {background: var(--surface)}
+[data-testid="stHeader"] { background: var(--page) !important; }
+[data-testid="stSidebar"] { background: #ffffff !important; }
 .block-container {
   max-width: 1520px !important;
-  padding-top: .72rem !important;
+  padding-top: .75rem !important;
   padding-bottom: 2rem !important;
-  padding-left: 1.45rem !important;
-  padding-right: 1.45rem !important;
-}
-@media (max-width: 700px) {
-  .block-container {padding-left:.8rem !important; padding-right:.8rem !important}
-  .ps-brand h1 {font-size:23px !important}
-  .ps-chips {gap:5px !important}
-  .ps-chip {font-size:10px !important; padding:3px 6px !important}
+  padding-left: 1.4rem !important;
+  padding-right: 1.4rem !important;
 }
 .ps-header {
-  background: #171c25; border:1px solid #2d3745;
-  border-radius:12px; padding:15px 19px 13px;
-  margin:1px 0 15px;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 12px rgba(28, 49, 81, .035);
+  border-radius: 12px;
+  padding: 15px 20px 14px;
+  margin: 2px 0 16px;
 }
-.ps-topbar {display:flex; justify-content:space-between; align-items:center; gap:14px; flex-wrap:wrap}
-.ps-brand {display:flex; align-items:center; gap:12px}
+.ps-topbar { display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; }
+.ps-brand { display:flex; align-items:center; gap:12px; }
 .ps-mark {
-  width:32px; height:32px; border-radius:9px; display:grid; place-items:center;
-  background:#25406b; color:#97c4ff; font-size:19px; font-weight:750
+  width:34px; height:34px; border-radius:9px;
+  display:grid; place-items:center;
+  background:#e9f2ff; color:#1768cf;
+  font-size:20px; font-weight:750;
 }
-.ps-brand h1 {font-size:25px; font-weight:720; letter-spacing:-.045em; margin:0; line-height:1.2}
-.ps-brand h1 span {color:#73b0ff}
-.ps-chips {display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+.ps-brand h1 {
+  font-size:25px; font-weight:740; letter-spacing:-.045em;
+  margin:0; line-height:1.2; color:#17253b;
+}
+.ps-brand h1 span { color:#1768cf; }
+.ps-chips { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .ps-chip {
-  background:#212a37; color:#aebaca; font-size:11px; font-weight:650;
-  border:1px solid #344054; padding:5px 9px; border-radius:7px
+  background:#f4f7fb; color:#576980;
+  border:1px solid #e3e9f2;
+  font-size:11px; font-weight:650; padding:5px 9px; border-radius:7px;
 }
-.ps-chip.safe {color:#65dbb2;background:#172f2b;border-color:#2d574d}
-.ps-sub {margin:8px 0 0 44px; color:var(--muted); font-size:12px; line-height:1.5}
-.stTabs [data-baseweb="tab-list"] {gap:8px; border-bottom:1px solid #303948; padding-bottom:4px}
+.ps-chip.safe { background:#eaf8f1; color:#187f61; border-color:#cae9da; }
+.ps-sub { margin:8px 0 0 46px; color:#718198; font-size:12px; line-height:1.5; }
+/* Calm, familiar trading-platform navigation. */
+.stTabs [data-baseweb="tab-list"] {
+  gap:8px; border-bottom:1px solid #dce4ef; padding-bottom:5px;
+}
 .stTabs [data-baseweb="tab"] {
-  color:#a9b5c7 !important; font-size:13px !important; font-weight:650 !important;
-  border-radius:7px 7px 0 0; padding:10px 18px !important;
+  color:#65758d !important; font-size:13px !important;
+  font-weight:650 !important; border-radius:8px 8px 0 0;
+  padding:10px 17px !important;
 }
-.stTabs [aria-selected="true"] {color:#d8ebff !important; background:#1d2c41 !important}
+.stTabs [data-baseweb="tab"][aria-selected="true"] {
+  color:#125dbf !important; background:#eaf3ff !important;
+}
+.stTabs [data-baseweb="tab-highlight"] { background-color:#1768cf !important; }
+.stTabs [data-baseweb="tab-border"] { background-color:#dce4ef !important; }
+/* Light cards — readable hierarchy without dark blocks or loud gradients. */
 [data-testid="stMetric"] {
-  background:var(--surface); border:1px solid var(--border);
-  border-radius:10px; padding:12px 14px; min-height:88px;
+  background:#ffffff; border:1px solid #e2e7ef;
+  border-radius:10px; padding:13px 15px; min-height:89px;
+  box-shadow:0 1px 4px rgba(30, 49, 80, .025);
 }
-[data-testid="stMetricLabel"] {color:var(--muted); font-size:12px}
-[data-testid="stMetricValue"] {font-size:23px; font-weight:700; color:var(--text)}
+[data-testid="stMetricLabel"] { color:#687990 !important; font-size:12px; }
+[data-testid="stMetricValue"] { color:#17253b !important; font-size:22px; font-weight:730; }
+[data-testid="stMetricDelta"] { font-weight:600; }
 [data-testid="stVerticalBlockBorderWrapper"] > div {
-  border-radius:10px !important; border-color:var(--border) !important;
+  border-color:#e0e6ef !important; border-radius:10px !important;
+  background: #ffffff !important;
 }
 [data-testid="stExpander"] {
-  background:var(--surface); border:1px solid var(--border);
-  border-radius:9px;
+  background:#ffffff !important; border:1px solid #e1e7f0 !important;
+  border-radius:9px !important;
 }
-[data-testid="stExpander"] summary {font-size:13px; font-weight:620}
-div[data-baseweb="input"], div[data-baseweb="select"] > div, div[data-baseweb="base-input"] {
-  background:#191f29 !important; border-color:#364252 !important; border-radius:7px !important
+[data-testid="stExpander"] summary { font-size:13px; font-weight:650; color:#253957; }
+[data-testid="stExpander"] svg { color:#73829a !important; }
+div[data-baseweb="input"], div[data-baseweb="select"] > div,
+div[data-baseweb="base-input"], div[data-baseweb="textarea"] {
+  background:#ffffff !important;
+  border-color:#d8e0eb !important;
+  border-radius:7px !important;
+  color:#20324a !important;
 }
 [data-testid="stNumberInput"] input, [data-testid="stTextInput"] input {
-  color:#e9eef5 !important
+  color:#17253b !important;
+}
+[data-testid="stWidgetLabel"] label, [data-testid="stWidgetLabel"] p {
+  color:#43536c !important; font-size:12px;
 }
 .stButton button[kind="primary"] {
-  background:#286bb8 !important; border:1px solid #4e88cb !important;
-  border-radius:8px !important; box-shadow:none !important
+  background:#1768cf !important; border:1px solid #1768cf !important;
+  color:#ffffff !important; border-radius:7px !important;
+  box-shadow:none !important;
+}
+.stButton button[kind="primary"]:hover {
+  background:#0e57b7 !important; border-color:#0e57b7 !important;
 }
 .stButton button[kind="secondary"] {
-  background:#212937 !important; border:1px solid #3d4b5b !important;
-  color:#d5e0ea !important; border-radius:8px !important
+  background:#ffffff !important; border:1px solid #cfd9e7 !important;
+  color:#245079 !important; border-radius:7px !important; box-shadow:none !important;
 }
-[data-testid="stAlert"] {border-radius:8px !important; font-size:12px}
-[data-testid="stDataFrame"] {border:1px solid var(--border); border-radius:9px}
-.stMarkdown h3 {font-size:18px !important; font-weight:720; letter-spacing:-.02em}
-.stMarkdown h4 {font-size:15px !important; font-weight:700}
-[data-testid="stCaptionContainer"] {color:#9eadbf !important}
-footer, [data-testid="stDecoration"] {display:none !important}
+.stButton button[kind="secondary"]:hover { background:#edf5ff !important; }
+[data-testid="stAlert"] {
+  border-radius:8px !important; font-size:12px;
+}
+[data-testid="stDataFrame"] {
+  background:#ffffff !important; border:1px solid #dde5ef;
+  border-radius:9px;
+}
+[data-testid="stDataFrame"] iframe { background:#ffffff !important; }
+.stMarkdown h3 { color:#1b2b45 !important; font-size:18px !important; font-weight:720; letter-spacing:-.02em; }
+.stMarkdown h4 { color:#223553 !important; font-size:15px !important; font-weight:700; }
+[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p { color:#687b93 !important; }
+.stApp a { color:#1768cf; }
+footer, [data-testid="stDecoration"] { display:none !important; }
+@media (max-width: 700px) {
+  .block-container { padding-left:.82rem !important; padding-right:.82rem !important; }
+  .ps-header { padding:12px 13px; }
+  .ps-brand h1 { font-size:22px !important; }
+  .ps-sub { margin-left:0; }
+  .ps-chips { gap:5px; }
+  .ps-chip { font-size:10px; padding:4px 6px; }
+  [data-testid="stMetricValue"] { font-size:18px; }
+}
 </style>
 """, unsafe_allow_html=True)
 st.markdown(
@@ -186,7 +232,7 @@ with manage:
             )
         with c2:
             st.caption(
-                "Purple = current shares and short call · "
+                "Blue = current shares and short call · "
                 "Green = fully covered after hypothetical future fills."
             )
 
@@ -217,17 +263,17 @@ with manage:
         planned=[float(current_expiry_payoff(position,pv,len(pv.stages),x,full_costs)) for x in xs]
         planned_view=selected_view=="After all planned buys"
         chosen=planned if planned_view else actual
-        accent="#41d6ab" if planned_view else "#a8a1fd"
+        accent="#18846a" if planned_view else "#2169c9"
 
         chart=go.Figure()
         chart.add_trace(go.Scatter(
             x=xs,y=[max(y,0) for y in chosen],mode="lines",
             line=dict(width=0),fill="tozeroy",
-            fillcolor="rgba(47,195,145,.16)",showlegend=False,hoverinfo="skip"))
+            fillcolor="rgba(33,155,113,.11)",showlegend=False,hoverinfo="skip"))
         chart.add_trace(go.Scatter(
             x=xs,y=[min(y,0) for y in chosen],mode="lines",
             line=dict(width=0),fill="tozeroy",
-            fillcolor="rgba(232,94,107,.14)",showlegend=False,hoverinfo="skip"))
+            fillcolor="rgba(216,73,87,.10)",showlegend=False,hoverinfo="skip"))
         chart.add_trace(go.Scatter(
             x=xs,y=chosen,mode="lines",line=dict(color=accent,width=3.7),
             name="Planned (if all buys fill)" if planned_view else "Shares owned now",
@@ -236,7 +282,7 @@ with manage:
             other=actual if planned_view else planned
             chart.add_trace(go.Scatter(
                 x=xs,y=other,mode="lines",line=dict(
-                    color="#a8a1fd" if planned_view else "#41d6ab",
+                    color="#2169c9" if planned_view else "#18846a",
                     width=2.1,dash="dash"),
                 name="Current expiry" if planned_view else "Planned expiry (conditional)",
                 hovertemplate="Stock price ₹%{x:,.2f}<br>Expiry P&L ₹%{y:,.0f}<extra></extra>"))
@@ -244,27 +290,27 @@ with manage:
             modeled=[float(theoretical_today_payoff(position,pv,done,max(x,.01),iv,dte)) for x in xs]
             chart.add_trace(go.Scatter(
                 x=xs,y=modeled,mode="lines",
-                line=dict(color="#e7b16d",width=1.8,dash="dot"),
+                line=dict(color="#ac6f31",width=1.8,dash="dot"),
                 name="Theoretical today",
                 hovertemplate="Stock ₹%{x:,.2f}<br>Model P&L ₹%{y:,.0f}<extra></extra>"))
 
-        chart.add_hline(y=0,line_color="#738298",line_width=1.1)
-        chart.add_vline(x=float(spot),line_color="#81b7ed",line_dash="dot")
-        chart.add_vline(x=float(strike),line_color="#dcae70",line_dash="dot")
+        chart.add_hline(y=0,line_color="#a0adbd",line_width=1.1)
+        chart.add_vline(x=float(spot),line_color="#4a93dc",line_dash="dot")
+        chart.add_vline(x=float(strike),line_color="#ca965d",line_dash="dot")
         if show_target:
-            chart.add_hline(y=float(target),line_color="#dcae70",line_dash="dash")
+            chart.add_hline(y=float(target),line_color="#ca965d",line_dash="dash")
         chart.update_layout(
-            template="plotly_dark",height=390,
+            template="plotly_white",height=390,
             margin=dict(l=8,r=8,t=16,b=7),
-            paper_bgcolor="#191e27",plot_bgcolor="#191e27",
-            font=dict(color="#9faec1"),
+            paper_bgcolor="#ffffff",plot_bgcolor="#ffffff",
+            font=dict(color="#52627b"),
             showlegend=bool(show_both or show_today),
             legend=dict(orientation="h",y=1.07,x=0,font=dict(size=11)),
             xaxis_title="Stock price (₹)", yaxis_title="Combined expiry P&L (₹)",
             hovermode="x unified",
         )
-        chart.update_xaxes(gridcolor="#2a3340",zeroline=False)
-        chart.update_yaxes(gridcolor="#2a3340",zeroline=False,tickformat=",")
+        chart.update_xaxes(gridcolor="#edf0f5",zeroline=False)
+        chart.update_yaxes(gridcolor="#edf0f5",zeroline=False,tickformat=",")
         st.plotly_chart(chart,use_container_width=True)
         st.caption(
             f"Spot ₹{spot:,.2f} (blue marker) · Short call strike ₹{strike:,.2f} "
