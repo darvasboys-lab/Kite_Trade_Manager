@@ -24,7 +24,7 @@ from dhan_visual.auto_auth import (
     read_cached_token, load_or_generate,
 )
 import time
-from dhan_visual.screener import active_expiry_options, choose_expiry, expiry_options, screen_rows
+from dhan_visual.screener import choose_expiry, expiry_options, screen_rows
 from dhan_visual.option_panel import render_atm_panel
 from dhan_visual.straddle_panel import render_straddle_panel, available_otm_calls
 from dhan_visual.nse_eod_ce import MAX_UPLOAD_BYTES, NseEodError, parse_nse_fo_eod
@@ -615,13 +615,7 @@ def render_screener():
     if not universe:
         return
     entries = [row.entry for row in universe]
-    expiries = active_expiry_options(entries)
-    if not expiries:
-        st.error("No unexpired stock F&O expiry months are available. Refresh the instrument list.")
-        return
-    # A previously stored November selection must not persist after expiry.
-    if st.session_state.get("fno_expiry") not in expiries:
-        st.session_state.pop("fno_expiry", None)
+    expiries = expiry_options(entries)
 
     st.markdown(
         """<div class="ccs-screen-head">
