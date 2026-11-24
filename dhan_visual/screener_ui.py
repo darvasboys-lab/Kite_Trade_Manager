@@ -539,7 +539,8 @@ def _free_ce5_panel(expiry):
 def _ce5_choice(symbol, dhan_calls, eod_calls, eod_date):
     """Sequential provider fallback; never mix spot and option dates."""
     if symbol in dhan_calls:
-        return dhan_calls[symbol], "Dhan LTP"
+        quote = dhan_calls[symbol]
+        return quote, f"Dhan snapshot · {quote.captured_at}"
     if symbol in eod_calls:
         return eod_calls[symbol], f"NSE EOD {eod_date}"
     return None, "Unavailable"
@@ -744,7 +745,7 @@ def render_screener():
                  "Do not interpret NSE EOD as a current or executable premium.",
         )
         config["CE source"] = st.column_config.TextColumn(
-            "CE data", help="Dhan LTP, NSE EOD with report date, or Unavailable.",
+            "CE data", help="Dhan request timestamp, NSE EOD report date, or Unavailable.",
             width="medium",
         )
         for title, note in (
