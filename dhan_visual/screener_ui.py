@@ -26,6 +26,7 @@ import time
 from dhan_visual.screener import choose_expiry, expiry_options, screen_rows
 from dhan_visual.option_panel import render_atm_panel
 from dhan_visual.straddle_panel import render_straddle_panel, available_otm_calls
+from dhan_visual.nse_eod_ce import NseEodError, parse_nse_fo_eod
 from dhan_visual.technical_ui import technical_values_for_table, technical_visible_stage, attach_technical_columns
 from dhan_visual.table_layout import (
     autofit_column_config, autofit_enabled, click_autofit, dataframe_key,
@@ -487,6 +488,63 @@ def _price_panel(universe, expiry, available, provider, manual):
     return provider, prices
 
 
+@st.cache_data(show_spinner=False, max_entries=3)
+def _parse_ce5_upload(payload: bytes):
+    """Keep full-universe archive parsing out of routine Streamlit reruns."""
+    return parse_nse_fo_eod(payload)
+
+
+def _free_ce5_panel(expiry):
+    """NSE public EOD fallback via one user-downloaded file; no site scraping."""
+    with st.expander("Free CE ≥5% option premiums · NSE daily file", expanded=False):
+        st.caption(
+            "Yahoo's NSE cash quotes do not include reliable NFO option chains. "
+            "Dhan's opt-in option-chain scan is tried first. For a free EOD "
+            "fallback, download ONE F&O-UDiFF Common Bhavcopy Final (.csv.zip) "
+            "from NSE All Reports → Derivatives, then upload it below. "
+            "No automatic NSE scraping or broker login is performed."
+        )
+        st.markdown(
+            "[Open NSE official derivatives reports]"
+            "(https://www.nseindia.com/all-reports-derivatives)"
+        )
+        uploaded = st.file_uploader(
+            "NSE F&O daily ZIP or CSV", type=["zip", "csv"],
+            key="fno_ce5_nse_eod_file",
+            help="One daily report covers all F&O stock option contracts. "
+                 "Files are parsed locally and not sent to a trading broker.",
+        )
+        if uploaded is None:
+            st.caption(
+                "No NSE EOD file uploaded. CE ≥5% remains N/A until a valid "
+                "Dhan option scan completes or an NSE EOD report is supplied."
+            )
+            return {}, ""
+        try:
+            snap = _parse_ce5_upload(uploaded.getvalue())
+        except NseEodError as exc:
+            st.error(f"Could not read NSE daily report: {exc}")
+            return {}, ""
+        calls = snap.quotes.get(expiry, {})
+        st.caption(
+            f"NSE report {snap.report_date} · {len(calls)} verified traded "
+            f"first-eligible 5%+ CE contracts for {expiry}. "
+            "EOD closing prices are NOT live quotes or executable bids."
+        )
+        if not calls:
+            st.warning("No valid CE data for this expiry month in the uploaded report.")
+        return calls, snap.report_date
+
+
+def _ce5_choice(symbol, dhan_calls, eod_calls, eod_date):
+    """Sequential provider fallback; never mix spot and option dates."""
+    if symbol in dhan_calls:
+        return dhan_calls[symbol], "Dhan LTP"
+    if symbol in eod_calls:
+        return eod_calls[symbol], f"NSE EOD {eod_date}"
+    return None, "Unavailable"
+
+
 def render_screener():
     universe = _auto_universe()
     if not universe:
@@ -630,6 +688,8 @@ def render_screener():
         available, expiry, technicals, compact=compact,
         technically_ready=r1_ready,
     )
+    eod_calls, eod_date = _free_ce5_panel(expiry)
+    dhan_ce5 = available_otm_calls(available, expiry)
     st.markdown(f"**{len(rows):,} displayed stocks** · {filled:,} with {provider} prices")
     if not rows:
         st.info("No stocks match the selected value filter. The source may also have missing prices.")
@@ -665,17 +725,27 @@ def render_screener():
         frame = attach_technical_columns(
             frame, technicals, stage=visible_stage,
         )
-        otm_calls = available_otm_calls(available, expiry)
-        # Single numeric column. A missing option-chain snapshot remains N/A.
-        frame["5%+ CE premium (%)"] = [
-            float(otm_calls[symbol].premium_pct) if symbol in otm_calls else None
+        # Try Dhan chain first; only then a user-uploaded NSE daily file.
+        # Each ratio uses its OWN source's same-time underlying, never Yahoo CMP.
+        ce5_selected = [
+            _ce5_choice(symbol, dhan_ce5, eod_calls, eod_date)
             for symbol in frame["Symbol"]
         ]
+        frame["5%+ CE premium (%)"] = [
+            float(quote.premium_pct) if quote is not None else None
+            for quote, _ in ce5_selected
+        ]
+        frame["CE source"] = [source for _, source in ce5_selected]
         config["5%+ CE premium (%)"] = st.column_config.NumberColumn(
             "CE ≥+5% (%)", format="%.2f%%", width="medium",
-            help="First real listed CE strike >= Dhan chain CMP × 1.05. "
-                 "CE LTP / Dhan CMP ×100. Populates from the SAME background "
-                 "ATM-straddle scan; no extra Dhan requests. Missing = N/A.",
+            help="First listed call strike >= source underlying ×1.05. "
+                 "Priority: Dhan option-chain LTP (opt-in scan), then "
+                 "user-uploaded NSE daily traded closing price. "
+                 "Do not interpret NSE EOD as a current or executable premium.",
+        )
+        config["CE source"] = st.column_config.TextColumn(
+            "CE data", help="Dhan LTP, NSE EOD with report date, or Unavailable.",
+            width="medium",
         )
         for title, note in (
             ("EMA 200", "Daily 200-session EMA"),
@@ -731,7 +801,7 @@ def render_screener():
         f"{provider} · {filled}/{len(available)} prices · "
         "☑ colored EMA = above EMA · ✅ above R1 · no tick = at/below · — waiting/unavailable · "
         "Yahoo indicators reveal EMA200 → EMA50 → EMA20 → EMA10 → R1 · "
-        "CE ≥5% from opt-in Dhan scan"
+        "CE ≥5%: opt-in Dhan LTP, then uploaded NSE EOD (never mixed)"
     )
     with st.expander("Source details and timestamps", expanded=False):
         st.caption(f"Instrument list: {(st.session_state.get('fno_universe_data') or (None, 'Unknown'))[1]}")
@@ -754,19 +824,27 @@ def render_screener():
             pd.DataFrame(rows).drop(columns=["Company"], errors="ignore"),
             technicals, stage=4,
         )
-        otm_calls = available_otm_calls(available, expiry)
-        exported["5%+ CE premium (%)"] = [
-            float(otm_calls[sym].premium_pct) if sym in otm_calls else None
+        export_selected = [
+            _ce5_choice(sym, dhan_ce5, eod_calls, eod_date)
             for sym in exported["Symbol"]
+        ]
+        exported["5%+ CE premium (%)"] = [
+            float(quote.premium_pct) if quote is not None else None
+            for quote, _ in export_selected
         ]
         exported["5%+ CE strike (₹)"] = [
-            float(otm_calls[sym].strike) if sym in otm_calls else None
-            for sym in exported["Symbol"]
+            float(quote.strike) if quote is not None else None
+            for quote, _ in export_selected
         ]
         exported["Dhan CMP for CE % (₹)"] = [
-            float(otm_calls[sym].underlying_ltp) if sym in otm_calls else None
+            float(dhan_ce5[sym].underlying_ltp) if sym in dhan_ce5 else None
             for sym in exported["Symbol"]
         ]
+        exported["NSE EOD underlying for CE % (₹)"] = [
+            float(quote.underlying_close) if source.startswith("NSE EOD") else None
+            for quote, source in export_selected
+        ]
+        exported["CE source"] = [source for _, source in export_selected]
         exported["Indicators as of"] = [
             technicals[sym].asof if sym in technicals else ""
             for sym in exported["Symbol"]
