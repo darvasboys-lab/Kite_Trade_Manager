@@ -626,6 +626,10 @@ def render_screener():
             # Keep numeric values and sorting; only the table display changes.
             frame["Contract value (₹L)"] = frame["Contract value (₹)"] / 100000
             frame = frame.drop(columns=["Contract value (₹)"])
+            frame = frame[[
+                "Symbol", "Company", "Last price (₹)", "Lot size",
+                "Contract value (₹L)", "Quote time", "Price source",
+            ]]
             config["Contract value (₹L)"] = st.column_config.NumberColumn(
                 "Price × Lot (₹L)", format="₹%.1fL"
             )
