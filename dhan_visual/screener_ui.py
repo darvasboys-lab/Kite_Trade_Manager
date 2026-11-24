@@ -28,6 +28,7 @@ from dhan_visual.option_panel import render_atm_panel
 from dhan_visual.straddle_panel import render_straddle_panel, available_otm_calls
 from dhan_visual.nse_eod_ce import NseEodError, parse_nse_fo_eod
 from dhan_visual.technical_ui import technical_values_for_table, technical_visible_stage, attach_technical_columns
+from dhan_visual.technical_worker import read_cached_technicals
 from dhan_visual.table_layout import (
     autofit_column_config, autofit_enabled, click_autofit, dataframe_key,
 )
@@ -336,13 +337,15 @@ def _start_yahoo_prices(universe, expiry, force=False):
     # Prior prices *only* determine priority when their price × lot is known.
     # Unknown stocks remain eligible and every stock is requested.
     earlier = old.get("quotes", {})
+    cached_technicals = read_cached_technicals()
     queue = SimpleQueue()
     if force:
         st.session_state.pop("fno_yahoo_snapshot", None)
     st.session_state["fno_yahoo_job"] = {
         "key": key, "queue": queue,
         "future": _market_pool().submit(
-            load_yahoo_all, list(universe), queue, earlier, expiry, 25
+            load_yahoo_all, list(universe), queue, earlier, expiry, 25,
+            technical_levels=cached_technicals,
         ),
         "started": now_utc(),
         "processed": 0,
@@ -675,7 +678,7 @@ def render_screener():
     # Technical download is separate from cash quotes and covers the full F&O
     # universe, not just the ₹7 lakh/selected-symbol table subset.
     technical_symbols = [item.entry.symbol for item in universe]
-    technicals = technical_values_for_table(technical_symbols)
+    technicals = technical_values_for_table(technical_symbols, priority_quotes=prices)
     visible_stage = technical_visible_stage(technical_symbols)
     technical_state = st.session_state.get("fno_technicals") or {}
     r1_ready = (
@@ -687,7 +690,7 @@ def render_screener():
     # AFTER the historical monthly R1 levels are available.
     render_r1_today_panel(
         available, expiry, technicals, compact=compact,
-        technically_ready=r1_ready,
+        technically_ready=r1_ready, priority_quotes=prices,
     )
     eod_calls, eod_date = _free_ce5_panel(expiry)
     dhan_ce5 = available_otm_calls(available, expiry)
@@ -816,7 +819,8 @@ def render_screener():
             "may be stale or delayed. Contract value is not option margin."
         )
     # The straddle panel scans the ENTIRE expiry universe, not the ₹7L-filtered table.
-    render_straddle_panel(available, expiry)
+    render_straddle_panel(available, expiry,
+                          priority_levels=technicals, priority_quotes=prices)
     render_atm_panel(available, rows, expiry)
     if rows:
         # Export fully computed cached levels without waiting for visual
