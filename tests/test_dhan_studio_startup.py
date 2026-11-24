@@ -262,7 +262,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
             app.button(key="fno_atm_load").click().run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
             load.assert_called_once()
-            self.assertEqual(load.call_args.args[:2], ("SBIN", "DEC-26"))
+            self.assertEqual(load.call_args.args[:2], ("SBIN", "NOV-26"))
             self.assertEqual(load.call_args.args[3], 1333)
             self.assertEqual(app.session_state["fno_atm_result"]["quote"].ce.ltp, Decimal("12"))
 
@@ -296,7 +296,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
             args, kwargs = pool.calls[0]
             self.assertEqual(args[0].__name__, "scan_all_straddles")
             self.assertEqual(len(args[1]), 2)
-            self.assertEqual(args[2], "DEC-26")
+            self.assertEqual(args[2], "NOV-26")
             app.run()
             self.assertEqual(len(pool.calls), 1)
 
