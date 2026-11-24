@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import plotly.graph_objects as go
 import streamlit as st
 from dhan_visual.strategy import Position, plan, exposure_after_fills, current_closeout
+from dhan_visual.table_layout import dataframe_key
 from dhan_visual.payoff import current_expiry_payoff, expiry_breakevens, theoretical_today_payoff
 
 st.set_page_config(page_title="Covered Call Strategy Builder", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
@@ -383,7 +384,10 @@ with manage:
         staged=[{"Batch":"First · MANUAL","Trigger":"—","Avg / target (₹)":f"{avg:,.2f}","Shares":qty,"Estimated cost (₹)":f"{avg*qty:,.2f}","Status":"Manual first buy (demo)"}]
         for s in pv.stages:
             staged.append({"Batch":f"Automatic {s.index}","Trigger":f"₹{s.trigger:,.2f}","Avg / target (₹)":f"{s.trigger:,.2f}","Shares":s.shares,"Estimated cost (₹)":f"{s.trigger*s.shares:,.2f}","Status":"Filled (demo)" if s.index<=done else "Pending (demo)"})
-        st.dataframe(staged,hide_index=True,use_container_width=True)
+        st.dataframe(
+            staged, hide_index=True, use_container_width=True,
+            key=dataframe_key("ccs_covered_call_stages", st.session_state),
+        )
         st.progress(min(shares/contract,1.0),text=f"Simulated coverage {shares}/{contract} shares ({shares/contract:.0%})")
         st.warning("A price trigger is NOT a guarantee that the order fills. Production activation requires Dhan order/holding reconciliation, risk checks and duplicate-buy protection.")
 

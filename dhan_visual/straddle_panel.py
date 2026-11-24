@@ -19,6 +19,7 @@ from .auto_auth import is_configured
 from .local_client_settings import read_client_id, save_client_id, valid_client_id
 from .option_panel import _local_creds
 from .straddle_scan import rank_straddles, scan_all_straddles
+from .table_layout import autofit_column_config, autofit_enabled, dataframe_key
 
 
 @st.cache_resource
@@ -251,7 +252,8 @@ def render_straddle_panel(available, expiry):
         )
         st.dataframe(
             df, use_container_width=True, hide_index=True, height=540,
-            column_config={
+            key=dataframe_key("ccs_straddle_rankings", st.session_state),
+            column_config=autofit_column_config({
                 "Rank": st.column_config.NumberColumn("#", format="%d"),
                 "Stock": st.column_config.TextColumn("Stock"),
                 "ATM strike (₹)": st.column_config.NumberColumn("ATM (₹)", format="₹%.2f"),
@@ -278,7 +280,7 @@ def render_straddle_panel(available, expiry):
                     "5%+ CE strike", format="₹%.2f",
                 ),
                 "Expiry": st.column_config.TextColumn("Expiry"),
-            },
+            }, autofit_enabled(st.session_state)),
         )
         st.download_button(
             "Export ranked straddles (CSV)",
@@ -304,6 +306,7 @@ def render_straddle_panel(available, expiry):
             st.dataframe(
                 [{"Stock": sym, "Reason": msg} for sym, msg in sorted(snap["errors"].items())],
                 hide_index=True, use_container_width=True,
+                key=dataframe_key("ccs_straddle_unavailable", st.session_state),
             )
         if snap["rows"]:
             ordered = rank_straddles(snap["rows"])
