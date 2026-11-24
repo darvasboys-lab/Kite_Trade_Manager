@@ -25,6 +25,7 @@ from dhan_visual.auto_auth import (
 import time
 from dhan_visual.screener import choose_expiry, expiry_options, screen_rows
 from dhan_visual.option_panel import render_atm_panel
+from dhan_visual.straddle_panel import render_straddle_panel
 
 
 @st.cache_resource
@@ -76,7 +77,7 @@ def _auto_universe():
     error = st.session_state.get("fno_universe_error")
     if data:
         a, b = st.columns([4, 1])
-        a.caption(f"**F&O list:** {data[1]}")
+        a.caption(f"F&O list · {len(data[0])} stocks loaded")
         if b.button("Refresh list", key="fno_refresh_universe"):
             _start_universe(force=True)
             st.rerun()
@@ -428,13 +429,10 @@ def _poll_market_data():
     dhan_busy = st.session_state.get("fno_dhan_job")
     yahoo_busy = st.session_state.get("fno_yahoo_job")
     if dhan_busy:
-        st.caption("Fetching all F&O cash-stock prices from Dhan in the background…")
+        st.caption("Dhan · updating prices…")
     if yahoo_busy:
         snap = st.session_state.get("fno_yahoo_snapshot") or {}
-        st.caption(
-            f"Yahoo backup: scanned {snap.get('processed', 0)}/{yahoo_busy['total']} "
-            "F&O stocks in automatic batches…"
-        )
+        st.caption(f"Yahoo · {snap.get('processed', 0)}/{yahoo_busy['total']} scanned")
 
 
 def _price_panel(universe, expiry, available):
@@ -464,16 +462,9 @@ def _price_panel(universe, expiry, available):
                 if sym in all_symbols
             }
             if st.session_state.get("fno_dhan_job"):
-                st.caption(
-                    f"**Dhan:** fetching prices automatically for all "
-                    f"{len(universe)} stock underlyings. No further click needed."
-                )
+                st.caption(f"Dhan · loading {len(universe)} stocks")
             elif snapshot.get("requested_at"):
-                st.caption(
-                    "Dhan bulk NSE_EQ snapshot · requested "
-                    + snapshot["requested_at"]
-                    + " · not an exchange last-trade timestamp"
-                )
+                st.caption(f"Dhan · {len(prices)} prices ready")
             for error in (snapshot.get("errors", []) or [])[:3]:
                 st.warning(error)
         else:
@@ -495,11 +486,7 @@ def _price_panel(universe, expiry, available):
         }
         total = len(universe)
         scanned = snap.get("processed", 0)
-        st.caption(
-            f"Yahoo backup: {scanned}/{total} symbols processed; "
-            f"{len(prices)} prices found. Indicative delayed historical bars, "
-            "not broker LTP."
-        )
+        st.caption(f"Yahoo · {len(prices)}/{total} priced · {scanned}/{total} scanned")
         for error in (snap.get("errors") or [])[:2]:
             st.warning(error)
 
@@ -510,11 +497,7 @@ def _price_panel(universe, expiry, available):
 
 def render_screener():
     st.subheader("NSE Stock F&O · Contract Value Screener")
-    st.caption(
-        "Stock F&O lots load automatically. Yahoo Finance is the default price source "
-        "and loads all stock prices in background patches. Dhan is optional. "
-        "Contract value = cash price × selected-expiry lot size."
-    )
+    st.caption("Yahoo default · automatic cash prices · contract value = CMP × lot size")
     universe = _auto_universe()
     if not universe:
         return
@@ -537,11 +520,7 @@ def render_screener():
     cols[3].metric("Still unpriced", f"{len(available) - filled:,}")
 
     if filled != len(available):
-        st.caption(
-            "A complete contract-value ranking requires quotes for every stock. "
-            "Until then, sorting and amount filters include priced stocks only. "
-            "Unquoted rows are N/A, never treated as ₹0."
-        )
+        st.caption("Partial prices · ranking is incomplete until all stocks are quoted.")
 
     st.markdown("#### Filter & sort")
     with st.container(border=True):
@@ -597,10 +576,7 @@ def render_screener():
         st.error(str(exc))
         return
     if no_prices_yet and preset != "All stocks":
-        st.info(
-            f"Showing available symbols and lot sizes while prices load. "
-            f"The **{preset}** filter will apply automatically when quotes arrive."
-        )
+        st.caption(f"Loading quotes · **{preset}** will apply when prices arrive.")
 
     st.markdown(f"**{len(rows):,} displayed stocks** · {filled:,} with {provider} prices")
     compact = st.toggle(
@@ -619,8 +595,6 @@ def render_screener():
             "Last price (₹)": st.column_config.NumberColumn(
                 "Cash price (₹)", format="₹%.2f"),
             "Lot size": st.column_config.NumberColumn("Lot size", format="%d"),
-            "Quote time": st.column_config.TextColumn("Quote time"),
-            "Price source": st.column_config.TextColumn("Source"),
         }
         if compact:
             # Keep numeric values and sorting; only the table display changes.
@@ -628,7 +602,7 @@ def render_screener():
             frame = frame.drop(columns=["Contract value (₹)"])
             frame = frame[[
                 "Symbol", "Company", "Last price (₹)", "Lot size",
-                "Contract value (₹L)", "Quote time", "Price source",
+                "Contract value (₹L)",
             ]]
             config["Contract value (₹L)"] = st.column_config.NumberColumn(
                 "Price × Lot (₹L)", format="₹%.1fL"
@@ -637,14 +611,26 @@ def render_screener():
             config["Contract value (₹)"] = st.column_config.NumberColumn(
                 "Price × Lot (₹)", format="₹%.0f"
             )
+        # Keep source/quote time in CSV and expandable notes, not the wide table.
+        frame = frame.drop(columns=["Quote time", "Price source"], errors="ignore")
         st.dataframe(
             frame, use_container_width=True, hide_index=True, height=580,
             column_config=config,
         )
-    st.caption(
-        f"**Data source:** {provider}. Contract value is the underlying notional "
-        "and is NOT option margin, broker execution cost or an investment recommendation."
-    )
+    st.caption(f"{provider} · {filled}/{len(available)} prices · indicative cash notional")
+    with st.expander("Source details and timestamps", expanded=False):
+        st.caption(f"Instrument list: {(st.session_state.get('fno_universe_data') or (None, 'Unknown'))[1]}")
+        if provider == "Yahoo Finance":
+            details = st.session_state.get("fno_yahoo_snapshot") or {}
+        else:
+            details = st.session_state.get("fno_dhan_snapshot") or {}
+        st.caption(f"Latest quote request: {details.get('requested_at', 'not yet')}")
+        st.caption(
+            "Quote-request time is not exchange last-trade time. Yahoo bar closes "
+            "may be stale or delayed. Contract value is not option margin."
+        )
+    # The straddle panel scans the ENTIRE expiry universe, not the ₹7L-filtered table.
+    render_straddle_panel(available, expiry)
     render_atm_panel(available, rows, expiry)
     if rows:
         exported = io.StringIO()

@@ -197,8 +197,13 @@ def _read_json(client_id: str, token: str, url: str, payload: dict,
 
 def load_atm_options(symbol: str, expiry_month: str, lot_size: int,
                      cash_security_id: int, client_id: str, token: str,
-                     session=None) -> AtmOptionQuote:
-    """User-initiated, two authenticated read-only requests for ONE stock."""
+                     session=None, *, verified_expiry: str | None = None) -> AtmOptionQuote:
+    """Read-only ATM for a stock.
+
+    If an exact, active expiry has been independently verified from Dhan's
+    instrument master, skip expirylist and request only the option chain.
+    The single-stock UI continues to resolve expiry via Dhan expirylist.
+    """
     if not re.fullmatch(r"[A-Z0-9&-]{1,25}", symbol):
         raise OptionDataError("Invalid NSE F&O stock symbol")
     secid = cash_security_id if isinstance(cash_security_id, int) and cash_security_id > 0 else None
@@ -211,8 +216,19 @@ def load_atm_options(symbol: str, expiry_month: str, lot_size: int,
     if not secid:
         raise OptionDataError("Dhan NSE cash security ID is unavailable for this stock")
     instrument = {"UnderlyingScrip": secid, "UnderlyingSeg": "NSE_EQ"}
-    expiry_response = _read_json(client_id, token, EXPIRIES_URL, instrument, session=session)
-    expiry = nearest_active_expiry(expiry_response, expiry_month)
+    if verified_expiry is None:
+        expiry_response = _read_json(client_id, token, EXPIRIES_URL, instrument, session=session)
+        expiry = nearest_active_expiry(expiry_response, expiry_month)
+    else:
+        try:
+            actual = date.fromisoformat(verified_expiry)
+        except (TypeError, ValueError) as exc:
+            raise OptionDataError("Verified F&O expiry is invalid") from exc
+        year, month = _month_number(expiry_month)
+        if (actual.year != year or actual.month != month
+                or actual < datetime.now(IST).date()):
+            raise OptionDataError("Verified F&O expiry is not active in the selected month")
+        expiry = actual.isoformat()
     chain_response = _read_json(
         client_id, token, OPTION_CHAIN_URL, {**instrument, "Expiry": expiry}, session=session
     )
