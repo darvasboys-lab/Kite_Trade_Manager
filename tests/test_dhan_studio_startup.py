@@ -445,6 +445,22 @@ class PayoffStudioStartupTests(unittest.TestCase):
             app.selectbox(key="fno_value_preset").set_value("All stocks").run()
             self.assertEqual(len(app.dataframe[0].value), 2)
 
+    def test_dark_mode_button_toggles_without_broker_calls(self):
+        app = app_with_catalogue()
+        pool = FakePool()
+        with patch("dhan_visual.screener_ui._market_pool", return_value=pool), \
+             patch("dhan_visual.straddle_panel.scan_all_straddles") as scan:
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertFalse(app.session_state["ccs_dark_mode"])
+            app.button(key="ccs_theme_button").click().run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertTrue(app.session_state["ccs_dark_mode"])
+            app.button(key="ccs_theme_button").click().run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertFalse(app.session_state["ccs_dark_mode"])
+            scan.assert_not_called()
+
     def test_no_manual_list_upload_or_50_stock_hard_cap(self):
         source = (APP.parent / "screener_ui.py").read_text(encoding="utf-8")
         # No manual stock-list upload: the optional uploader is ONLY for
