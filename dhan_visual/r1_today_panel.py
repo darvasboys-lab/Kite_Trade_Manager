@@ -22,6 +22,7 @@ import streamlit as st
 from .r1_today import IST, R1TodayCross, scan_r1_today
 from .screener import Quote, screen_rows
 from .straddle_panel import available_otm_calls
+from .load_priority import strongest_first
 from .table_layout import autofit_column_config, autofit_enabled, dataframe_key
 from .technical_ui import attach_technical_columns
 from .tradingview_links import clickable_stock_frame, TRADINGVIEW_SYMBOL_DISPLAY
@@ -128,7 +129,8 @@ def _drain(job, snap):
 
 @st.fragment(run_every="5s")
 def render_r1_today_panel(available, expiry: str, technicals,
-                          compact: bool, technically_ready: bool):
+                          compact: bool, technically_ready: bool,
+                          priority_quotes=None):
     today = datetime.now(IST).date()
     key = _r1_key(available, expiry, technicals, today)
     history = st.session_state.setdefault("ccs_r1_today_snapshots", {})
@@ -148,7 +150,10 @@ def render_r1_today_panel(available, expiry: str, technicals,
     another_active = bool(active and job["key"] != key)
 
     # A date/month rollover makes an old scan ineligible; don't start two.
-    symbols = [item.entry.symbol for item in available if expiry in item.entry.lots]
+    symbols = strongest_first(
+        [item.entry.symbol for item in available if expiry in item.entry.lots],
+        technicals, priority_quotes, today=today,
+    )
     if technically_ready and not active and snap["status"] == "waiting":
         queue, stop = SimpleQueue(), Event()
         r1_values = {
