@@ -148,6 +148,8 @@ def render_fyers_settings():
             forget_vault()
             st.session_state.pop("_fyers_access", None)
             st.session_state.pop("_fyers_session_note", None)
+            st.session_state.pop("fyers_local_app_id", None)
+            st.session_state.pop("fyers_local_app_secret", None)
             st.session_state["fno_fyers_disconnect_next_run"] = True
             st.rerun()
     else:
@@ -319,7 +321,8 @@ def _fyers_chain_heartbeat():
         st.rerun(scope="app")
 
 
-def fyers_chain_calls(available, expiry: str, *, force=False) -> dict:
+def fyers_chain_calls(available, expiry: str, *, force=False,
+                      page="home") -> dict:
     access = connected_fyers()
     if not access:
         return {}
@@ -342,12 +345,12 @@ def fyers_chain_calls(available, expiry: str, *, force=False) -> dict:
         with st.expander("FYERS scan diagnostics", expanded=False):
             for error in snap["errors"]:
                 st.caption(error)
-    if st.button("↻ Refresh FYERS option chains", key="fyers_chain_refresh",
+    if st.button("↻ Refresh FYERS option chains", key=f"fyers_chain_refresh_{page}",
                  disabled=bool(st.session_state.get("fno_fyers_chain_job"))):
         _start_fyers_chain(access, symbols, expiry, force=True)
         st.rerun()
     if st.session_state.get("fno_fyers_chain_job"):
-        if st.button("■ Stop FYERS scan", key="fyers_chain_stop"):
+        if st.button("■ Stop FYERS scan", key=f"fyers_chain_stop_{page}"):
             st.session_state["fno_fyers_chain_job"]["cancel"].set()
     return snap.get("calls") or {}
 
