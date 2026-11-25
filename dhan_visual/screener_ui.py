@@ -40,7 +40,7 @@ from dhan_visual.quote_routing import (
 from dhan_visual.dhan_readonly_check import check_dhan_data_plan, DhanProfileError
 from dhan_visual.dhan_integration_state import (
     verified_account, token_still_current, load_manual_token,
-    refresh_verified_token, save_manual_token,
+    refresh_verified_token, save_manual_token, parse_dhan_token_expiry,
 )
 from dhan_visual.technical_ui import technical_values_for_table, technical_visible_stage, attach_technical_columns
 from dhan_visual.technical_worker import read_cached_technicals
@@ -292,6 +292,27 @@ def _auto_login_panel(cid, manual_token, *, allow_login=True):
     return ""
 
 
+def _confirmed_dhan_profile(cid, token):
+    """Recognize only an explicitly checked, same-account, same-token profile.
+
+    The profile check is never a background login and cannot authenticate a
+    different token or account. Its token expiration also bounds reuse.
+    """
+    if not valid_client_id(cid) or not isinstance(token, str) or len(token) < 16:
+        return None
+    entry = st.session_state.get("fno_dhan_profile_status") or {}
+    if (entry.get("cid") != cid or
+            entry.get("token_fingerprint") != sha256(token.encode()).hexdigest()):
+        return None
+    profile = entry.get("status")
+    if profile is None:
+        return None
+    expiry = parse_dhan_token_expiry(profile.token_validity)
+    if expiry is not None and expiry <= datetime.now(timezone.utc):
+        return None
+    return profile
+
+
 def _dhan_credentials(*, need_market=False):
     """One-time broker onboarding, then a compact status with token renewal.
 
@@ -371,6 +392,21 @@ def _dhan_credentials(*, need_market=False):
             )
             st.session_state["fno_first_dhan_hint_seen"] = True
 
+    connection_token = available_token
+    if not connection_token and auto_current:
+        if (st.session_state.get("dhan_auto_access_cid") == current_id
+                and isinstance(session_auto, AutoAccess) and session_auto.usable()):
+            connection_token = session_auto.token
+        elif isinstance(cached_auto, AutoAccess) and cached_auto.usable():
+            connection_token = cached_auto.token
+    connected_profile = _confirmed_dhan_profile(current_id, connection_token)
+    if verified is None and connected_profile is not None:
+        st.success("✓ Dhan connected · account identity verified (read-only)")
+        if not connected_profile.data_ready:
+            st.warning("Dhan Data API plan inactive · option chains unavailable.")
+        else:
+            st.caption("Data API ACTIVE · verify one stock below to activate Live CE.")
+
     setup_open = verified is None or (
         not (available_token or auto_available) or needs_token
     )
@@ -410,10 +446,64 @@ def _dhan_credentials(*, need_market=False):
             "Securely remember this verified token on this Windows PC "
             "(until expiry)",
             value=True, key="dhan_remember_manual_token",
-            help="Optional. Saves ONLY after both one-time checks succeed, "
-                 "or after a verified token-only renewal. "
-                 "A manual token cannot work after its 24-hour expiry.",
+            help="Optional secure storage in Windows Credential Manager "
+                 "after you click Connect, or after token renewal. "
+                 "A manual token still expires after about 24 hours.",
         )
+        # Profile authentication is the first explicit step. Unlike the
+        # one-stock option test, it can show the Dhan funds balance immediately.
+        if verified is None:
+            candidate = (
+                manual or cached_manual
+                or (
+                    session_auto.token
+                    if (st.session_state.get("dhan_auto_access_cid") == current_id
+                        and isinstance(session_auto, AutoAccess)
+                        and session_auto.usable())
+                    else ""
+                )
+                or (cached_auto.token if isinstance(cached_auto, AutoAccess)
+                    and cached_auto.usable() else "")
+            )
+            profile_ok = _confirmed_dhan_profile(current_id, candidate)
+            if profile_ok is None:
+                if st.button(
+                    "Connect to Dhan", key="dhan_connect_button",
+                    type="primary", use_container_width=True,
+                    help="Read-only GET /v2/profile. No orders, no new token.",
+                ):
+                    if not valid_client_id(current_id) or len(candidate) < 16:
+                        st.error("Enter a valid Client ID and Dhan access token.")
+                    else:
+                        with st.spinner("Verifying Dhan account…"):
+                            try:
+                                profile = check_dhan_data_plan(current_id, candidate)
+                                st.session_state["fno_dhan_profile_status"] = {
+                                    "cid": current_id, "status": profile,
+                                    "token_fingerprint": sha256(
+                                        candidate.encode()
+                                    ).hexdigest(),
+                                }
+                                if remember and manual:
+                                    try:
+                                        save_manual_token(
+                                            current_id, candidate,
+                                            profile.token_validity,
+                                        )
+                                    except AutoAuthError:
+                                        st.warning(
+                                            "Account connected, but the token could "
+                                            "not be saved securely. Check token "
+                                            "validity or Windows Credential Manager."
+                                        )
+                                st.rerun()
+                            except DhanProfileError as exc:
+                                st.error(str(exc))
+            else:
+                st.caption(
+                    "✓ Connection verified. Balance loads above. "
+                    "Next, verify one option chain below to complete setup."
+                )
         if verified is not None:
             if st.button(
                 "Verify renewed token · skip full setup",
@@ -658,8 +748,10 @@ def _poll_dhan_funds():
 def _dhan_funds_panel(cid, token):
     """Top strip; a read-only GET every five minutes, never on every rerun."""
     status = verified_account(cid) if valid_client_id(cid) else None
-    if status is None:
-        return  # no funds requested or displayed for an unverified account
+    # Funds require only an explicitly successful, token-matched Dhan
+    # profile check. Stock-option CE verification is a separate second step.
+    if status is None and _confirmed_dhan_profile(cid, token) is None:
+        return  # no funds request before user clicks Connect
     if len(token) < 16:
         st.metric("Dhan available balance", "—", help="Token renewal needed")
         return
@@ -694,6 +786,7 @@ def _dhan_funds_panel(cid, token):
             help="Dhan available trading balance, from GET /v2/fundlimit. "
                  "Not an available options margin guarantee.",
         )
+        st.success("✓ Balance fetched successfully")
         st.caption(f"Funds snapshot · {entry.checked_at} UTC")
     else:
         st.metric("Dhan available balance", "—")
