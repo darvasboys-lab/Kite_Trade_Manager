@@ -18,6 +18,7 @@ from .fyers_readonly import (
     validate_app_id, _valid_secret,
 )
 from .ce_eod_remote import IST
+from .broker_control import broker_allowed
 
 
 @st.cache_resource
@@ -26,6 +27,8 @@ def _fyers_pool():
 
 
 def connected_fyers() -> FyersAccess | None:
+    if not broker_allowed("FYERS"):
+        return None
     access = st.session_state.get("_fyers_access")
     if isinstance(access, FyersAccess) and access.valid():
         return access
@@ -39,6 +42,13 @@ def connected_fyers() -> FyersAccess | None:
 
 def render_fyers_settings():
     st.markdown("### FYERS · read-only market data")
+    if not broker_allowed("FYERS"):
+        st.caption(
+            "FYERS is paused. Select FYERS above as the ONLY active broker "
+            "to authenticate. Its saved App ID, Secret and valid token "
+            "remain in Windows Credential Manager."
+        )
+        return
     st.caption(
         "FYERS supplies market quotes and genuine CE/PE option chains. "
         "Dhan is a separate connection; FYERS cannot place orders from this app. "
@@ -369,6 +379,9 @@ def fyers_chain_calls(available, expiry: str, *, force=False,
 
 
 def render_fyers_straddles(available, expiry: str):
+    if not broker_allowed("FYERS"):
+        st.caption("FYERS not selected. Choose FYERS as active broker to see its options.")
+        return
     snap = st.session_state.get("fno_fyers_chain_snapshot") or {}
     values = snap.get("straddles") or {}
     stocks = {x.entry.symbol: x.entry.lots.get(expiry) for x in available}

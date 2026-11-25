@@ -53,6 +53,7 @@ from dhan_visual.tradingview_links import (
     clickable_stock_frame, TRADINGVIEW_SYMBOL_DISPLAY,
 )
 from dhan_visual.r1_today_panel import render_r1_today_panel
+from dhan_visual.broker_control import active_broker, broker_allowed
 from dhan_visual.fyers_ui import (
     connected_fyers, fyers_cash_prices, fyers_chain_calls,
     render_fyers_settings, render_fyers_straddles,
@@ -178,6 +179,8 @@ def _auto_disable(cid):
 
 
 def _start_auto_login(cid, force=False):
+    if not broker_allowed("Dhan"):
+        return
     job = st.session_state.get("dhan_auto_auth_job")
     if job and not job["future"].done():
         return
@@ -201,6 +204,8 @@ def _start_auto_login(cid, force=False):
 
 def _schedule_auto_profile_check(cid: str, token: str) -> None:
     """One read-only profile check per valid auto-token, asynchronously."""
+    if not broker_allowed("Dhan"):
+        return
     if not valid_client_id(cid) or not isinstance(token, str) or len(token) < 16:
         return
     fingerprint = sha256(token.encode()).hexdigest()
@@ -228,6 +233,8 @@ def _schedule_auto_profile_check(cid: str, token: str) -> None:
 @st.fragment(run_every="15s")
 def _auto_login_heartbeat(cid):
     """Process saved TOTP login/profile jobs and renew expiring tokens."""
+    if not broker_allowed("Dhan"):
+        return
     if not is_configured(cid):
         return
     profile_job = st.session_state.get("dhan_auto_profile_job")
@@ -393,6 +400,8 @@ def _dhan_credentials(*, need_market=False):
     time-limited Dhan token is valid forever. Only explicit button clicks
     authenticate or store a manual token. No calls to order endpoints.
     """
+    if not broker_allowed("Dhan"):
+        return "", ""
     saved = read_client_id()
     default_id = os.environ.get("DHAN_CLIENT_ID", "") or saved
     current_id = str(
@@ -867,6 +876,8 @@ def _poll_dhan_funds():
 
 def _dhan_funds_panel(cid, token):
     """Top strip; a read-only GET every five minutes, never on every rerun."""
+    if not broker_allowed("Dhan"):
+        return
     status = verified_account(cid) if valid_client_id(cid) else None
     # Funds require only an explicitly successful, token-matched Dhan
     # profile check. Stock-option CE verification is a separate second step.
@@ -924,12 +935,24 @@ def _price_panel(universe, expiry, available, provider, manual, credentials=None
     no authorized Dhan token is available. Each row retains its own source.
     """
     all_symbols = {row.entry.symbol for row in universe}
+    if provider == "FYERS" and not broker_allowed("FYERS"):
+        return "FYERS paused", {}
     if provider == "FYERS":
         cash = fyers_cash_prices(sorted(all_symbols), force=manual)
         if not connected_fyers():
             st.info("FYERS is not connected yet. Open Settings to authorize a "
                     "non-trading app; NSE EOD remains available.")
         return "FYERS · read-only", cash
+    if not broker_allowed("Dhan"):
+        # Broker switching/public mode may not issue Dhan GETs or token renewals.
+        key = _start_yahoo_prices(universe, expiry, force=manual)
+        snap = st.session_state.get("fno_yahoo_snapshot") or {}
+        if snap.get("key") == key:
+            return "Yahoo Finance (Dhan paused)", {
+                sym: quote for sym, quote in (snap.get("quotes") or {}).items()
+                if sym in all_symbols
+            }
+        return "Yahoo Finance (Dhan paused)", {}
     cid, token = credentials if credentials is not None else _dhan_credentials(
         need_market=True,
     )
@@ -1223,10 +1246,12 @@ def _tejhq_eod_panel(available, expiry):
 
 
 def _free_ce5_panel(expiry, dhan_count=0, available=None):
-    """Explicit EOD/Live choice: never silently substitute one for another."""
+    """Options are constrained to the one active broker or public EOD."""
     from dhan_visual.otm_home import page_two_ce_mode_changed
+    choices = (["EOD", "FYERS"] if active_broker() == "FYERS" else
+               ["EOD", "Live"] if active_broker() == "Dhan" else ["EOD"])
     mode = st.radio(
-        "CE ≥+5% data", ["EOD", "FYERS", "Live"], horizontal=True,
+        "CE ≥+5% data", choices, horizontal=True,
         key="fno_ce5_mode", index=0,
         on_change=page_two_ce_mode_changed,
         help="EOD: official NSE F&O daily close (free). FYERS: "
@@ -1507,9 +1532,9 @@ def render_screener():
 
     # Apply post-verification routing before rendering Streamlit's radio
     # widget. Never modify a widget-owned session key after it exists.
-    if st.session_state.pop("fno_activate_auto_quote_on_next_run", False):
+    if st.session_state.pop("fno_activate_auto_quote_on_next_run", False) and broker_allowed("Dhan"):
         st.session_state["fno_price_provider"] = AUTO_SOURCE
-    if st.session_state.pop("fno_fyers_select_on_next_run", False):
+    if st.session_state.pop("fno_fyers_select_on_next_run", False) and broker_allowed("FYERS"):
         st.session_state["fno_price_provider"] = "FYERS"
         st.session_state["fno_ce5_mode"] = "FYERS"
         st.session_state["fno_home_ce_source"] = "FYERS"
@@ -1568,8 +1593,13 @@ def render_screener():
             )
     with source_col:
         with st.popover("◉ Source", use_container_width=True):
+            choices = (
+                ["FYERS", "Yahoo Finance"] if active_broker() == "FYERS"
+                else [AUTO_SOURCE, "Dhan", "Yahoo Finance"]
+                if active_broker() == "Dhan" else ["Yahoo Finance"]
+            )
             provider = st.radio(
-                "Quote source", [AUTO_SOURCE, "FYERS", "Dhan", "Yahoo Finance"],
+                "Quote source", choices,
                 index=0, key="fno_price_provider", horizontal=False,
                 help="FYERS uses a separate free read-only account. Auto: "
                      "Dhan LTP if entitled, otherwise Yahoo/NSE EOD.",
@@ -1593,7 +1623,7 @@ def render_screener():
     available = [row for row in universe if expiry in row.entry.lots]
     # No credential forms on Page 2. They live exclusively in Settings.
     # Home and Page 2 use one saved token and one shared quote snapshot.
-    dhan_credentials = _local_creds()
+    dhan_credentials = _local_creds() if broker_allowed("Dhan") else ("", "")
     provider, all_prices = _price_panel(
         universe, expiry, available, provider, manual,
         credentials=dhan_credentials,
@@ -1605,13 +1635,13 @@ def render_screener():
     # Options and free daily cash references are independently source-labeled.
     # Compute the CE ratio ONLY from the same EOD report's underlying;
     # never calculate it from a delayed Yahoo/Dhan stock price.
-    dhan_ce5 = available_otm_calls(available, expiry)
+    dhan_ce5 = available_otm_calls(available, expiry) if broker_allowed("Dhan") else {}
     if "fno_ce5_mode" not in st.session_state:
         profile = _confirmed_dhan_profile(*dhan_credentials)
         st.session_state["fno_ce5_mode"] = (
             "Live" if profile is not None and profile.data_ready else "EOD"
         )
-    if st.session_state.pop("fno_activate_live_on_next_run", False):
+    if st.session_state.pop("fno_activate_live_on_next_run", False) and broker_allowed("Dhan"):
         profile = _confirmed_dhan_profile(*dhan_credentials)
         if profile is not None and profile.data_ready:
             st.session_state["fno_ce5_mode"] = "Live"
@@ -1840,10 +1870,10 @@ def render_screener():
             available, expiry,
             st.session_state.get("fno_eod_selected_snapshot"),
         )
-        # Preserve the existing Dhan straddle panel and its manual controls.
-        # In EOD mode it cannot auto-fetch paid broker option chains.
-        render_straddle_panel(available, expiry,
-                              priority_levels=technicals, priority_quotes=prices)
+        # Existing Dhan manual controls are available only in Dhan mode.
+        if broker_allowed("Dhan"):
+            render_straddle_panel(available, expiry,
+                                  priority_levels=technicals, priority_quotes=prices)
     elif ce_mode == "FYERS":
         render_fyers_straddles(available, expiry)
     else:
@@ -1909,6 +1939,13 @@ def render_dhan_settings():
     render_fyers_settings()
     st.divider()
     st.markdown("### Settings · Dhan connection")
+    if not broker_allowed("Dhan"):
+        st.caption(
+            "Dhan paused. Saved login/TOTP/token remain on this PC. "
+            "Select Dhan as the active broker above to resume its "
+            "saved session without logging in again while valid."
+        )
+        return
     st.caption(
         "Enter credentials on this PC. Connection and funds are verified "
         "read-only; option-chain verification shares prices with Home."
