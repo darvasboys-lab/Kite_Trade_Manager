@@ -79,6 +79,10 @@ def _tech_heartbeat(symbols, priority_quotes=None, fyers_access=None):
     snap = _get_snapshot(symbols)
     key = snap["key"]
     job = st.session_state.get("fno_technical_job")
+    if job and job.get("key") != key and job.get("stop"):
+        # A source/expiry change invalidates the old job. Cancel safely
+        # before launching a new read-only FYERS or Yahoo history pass.
+        job["stop"].set()
     changed = False
     if job and job.get("key") == key:
         queue = job["queue"]
