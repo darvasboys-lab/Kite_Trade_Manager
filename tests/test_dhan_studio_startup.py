@@ -152,7 +152,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
         self.assertEqual(app.tabs[1].label, "⌕ Market Screener")
         self.assertEqual(
             app.dataframe[0].value.columns.tolist(),
-            ["Stock", "CMP (₹)", "Lot size", "Contract size (₹)", "5%+ OTM CE (%)", "ATM Straddle Total (₹)", "Straddle (%)"],
+            ["Stock", "CMP (₹)", "Futures Price (₹)", "Lot size", "Contract size (₹)", "5%+ OTM CE (%)", "ATM Straddle Total (₹)", "Straddle (%)"],
         )
         self.assertEqual(app.radio(key="fno_price_provider").value, "Auto (Dhan → Yahoo)")
         self.assertEqual(app.selectbox(key="fno_value_preset").value, "Below ₹7 lakh")
@@ -324,7 +324,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
             scan.assert_not_called()
             self.assertEqual(
                 app.dataframe[0].value.columns.tolist(),
-                ["Stock", "CMP (₹)", "Lot size", "Contract size (₹)", "5%+ OTM CE (%)", "ATM Straddle Total (₹)", "Straddle (%)"],
+                ["Stock", "CMP (₹)", "Futures Price (₹)", "Lot size", "Contract size (₹)", "5%+ OTM CE (%)", "ATM Straddle Total (₹)", "Straddle (%)"],
             )
 
     def test_only_one_home_option_worker_from_profile_verified_token(self):
