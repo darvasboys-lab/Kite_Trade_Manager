@@ -49,7 +49,8 @@ def _r1_key(available, expiry: str, levels, day) -> str:
 
 def crossed_r1_frame(available, expiry: str,
                      crossed: dict[str, R1TodayCross],
-                     technicals, otm_calls, *, compact: bool) -> pd.DataFrame:
+                     technicals, otm_calls, *, compact: bool,
+                     provider: str = "Yahoo") -> pd.DataFrame:
     """Full financial/technical row for EVERY verified R1 breakout today.
 
     Quote reference is the last verified intraday Yahoo 15m Close from the
@@ -61,7 +62,7 @@ def crossed_r1_frame(available, expiry: str,
     active = [item.entry for item in available if expiry in item.entry.lots]
     quotes = {
         sym: Quote(event.latest_close, event.latest_bar_time + " IST",
-                   "Yahoo NSE 15m breakout check")
+                   f"{provider} NSE 15m breakout check")
         for sym, event in crossed.items()
     }
     rows = [
@@ -130,9 +131,13 @@ def _drain(job, snap):
 @st.fragment(run_every="5s")
 def render_r1_today_panel(available, expiry: str, technicals,
                           compact: bool, technically_ready: bool,
-                          priority_quotes=None, ce_calls=None):
+                          priority_quotes=None, ce_calls=None,
+                           fyers_access=None):
     today = datetime.now(IST).date()
     key = _r1_key(available, expiry, technicals, today)
+    provider = "FYERS" if fyers_access is not None else "Yahoo"
+    if fyers_access is not None:
+        key += ":FYERS"
     history = st.session_state.setdefault("ccs_r1_today_snapshots", {})
     snap = history.get(key)
     if snap is None:
@@ -161,11 +166,14 @@ def render_r1_today_panel(available, expiry: str, technicals,
             for sym in symbols if sym in technicals
         }
         snap["status"] = "scanning"
+        kwargs = {"today": today}
+        if fyers_access is not None:
+            kwargs["fyers_access"] = fyers_access
         st.session_state["ccs_r1_today_job"] = {
             "key": key, "queue": queue, "stop": stop,
             "future": _r1_pool().submit(
                 scan_r1_today, symbols, r1_values, queue, stop,
-                today=today,
+                **kwargs,
             ),
         }
         job = st.session_state["ccs_r1_today_job"]
@@ -178,7 +186,7 @@ def render_r1_today_panel(available, expiry: str, technicals,
             st.markdown("#### ↗ Crossed Monthly R1 Today")
             st.caption(
                 f"{today.strftime('%d %b')} · "
-                "verified upward 15m NSE high through current-month R1 · "
+                f"{provider} verified upward 15m NSE high through current-month R1 · "
                 "includes previous-close-confirmed opening gap-ups"
             )
         with control:
@@ -187,7 +195,7 @@ def render_r1_today_panel(available, expiry: str, technicals,
             refresh = st.button(
                 "↻ Recheck", key="ccs_r1_today_refresh",
                 disabled=active or not technically_ready,
-                help="Run another paced, full-universe 15-minute Yahoo check.",
+                help=f"Run another paced {provider} 15-minute crossing check.",
                 use_container_width=True,
             )
         if refresh:
@@ -197,7 +205,7 @@ def render_r1_today_panel(available, expiry: str, technicals,
             st.rerun(scope="fragment")
         if not technically_ready:
             st.caption(
-                "Preparing monthly R1 levels from the paced Yahoo daily-history "
+                f"Preparing monthly R1 levels from the paced {provider} daily-history "
                 "scan; the crossover check begins automatically after R1 is ready."
             )
         else:
@@ -212,18 +220,18 @@ def render_r1_today_panel(available, expiry: str, technicals,
             if active:
                 st.progress(
                     min(1., snap["checked"] / max(1, snap["total"])),
-                    text="Checking NSE 15m history in paced Yahoo batches…",
+                    text=f"Checking NSE 15m history in paced {provider} batches…",
                 )
             if another_active:
                 st.caption("An earlier R1 scan is still running; results will be scoped to today's date.")
             if snap["status"].startswith("error:"):
-                st.warning("Yahoo R1 scan was interrupted; partial confirmed results remain visible.")
+                st.warning(f"{provider} R1 scan was interrupted; partial confirmed results remain visible.")
 
             if snap["crossed"]:
                 df = crossed_r1_frame(
                     available, expiry, snap["crossed"], technicals,
                     ce_calls if ce_calls is not None else available_otm_calls(available, expiry),
-                    compact=compact,
+                    compact=compact, provider=provider,
                 )
                 if not df.empty:
                     display = clickable_stock_frame(
@@ -236,7 +244,7 @@ def render_r1_today_panel(available, expiry: str, technicals,
                             help="Open NSE stock chart in TradingView.", width="small",
                         ),
                         "Last price (₹)": st.column_config.NumberColumn(
-                            "Yahoo 15m CMP", format="₹%.2f",
+                            f"{provider} 15m close", format="₹%.2f",
                         ),
                         "Lot size": st.column_config.NumberColumn(
                             "Lot", format="%d",
@@ -282,7 +290,7 @@ def render_r1_today_panel(available, expiry: str, technicals,
                 st.caption("No verified upward monthly R1 crossings in today's checked stocks.")
             elif snap["status"] == "complete":
                 st.caption(
-                    "No confirmed crossings in available Yahoo data. Some "
+                    f"No confirmed crossings in available {provider} data. Some "
                     "stocks have insufficient intraday/R1 evidence."
                 )
             with st.expander("R1 crossover method and incomplete coverage", expanded=False):
@@ -296,7 +304,7 @@ def render_r1_today_panel(available, expiry: str, technicals,
                 )
                 st.caption(
                     "If the price later drops below R1, the stock remains in the "
-                    "crossed-today list and is marked Back below. Yahoo intraday "
+                    f"crossed-today list and is marked Back below. {provider} intraday "
                     "history is delayed/limited and may be unavailable. Cross candle "
                     "shows its 15-minute starting time, not an exact trade timestamp."
                 )
@@ -306,5 +314,5 @@ def render_r1_today_panel(available, expiry: str, technicals,
                     f"Scan date {today.isoformat()} IST · "
                     f"verified {max(0, snap['checked']-snap['unknown'])}"
                     f"/{snap['total']} · unknown {snap['unknown']} · "
-                    "no alerts/orders or broker requests"
+                    "no orders or alerts; read-only data only"
                 )
