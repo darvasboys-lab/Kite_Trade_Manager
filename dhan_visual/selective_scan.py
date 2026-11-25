@@ -188,7 +188,8 @@ def run_automatic_batch(access, available, snapshot, *, now=None):
 @st.fragment(run_every="3s")
 def _automatic_scan_heartbeat():
     """Only mounted on Home; never continue after navigation or logout."""
-    if (st.session_state.get("ccs_legacy_full_scan")
+    if (st.session_state.get("ccs_stock_strategy_active")
+            or st.session_state.get("ccs_legacy_full_scan")
             or st.session_state.get("ccs_selective_page") != "◎ OTM CE Home"):
         return
     access = connected_fyers()
@@ -243,6 +244,10 @@ def _display(frame, *, market=False):
 
 
 def render_selective_home():
+    from .stock_strategy_ui import ACTIVE, launch_strategy, render_stock_strategy
+    if st.session_state.get(ACTIVE):
+        render_stock_strategy()
+        return
     st.markdown("### OTM Covered Call")
     st.caption("Select filters first. Nothing is fetched from FYERS or Yahoo until you apply a scan.")
     access = connected_fyers()
@@ -364,6 +369,19 @@ def render_selective_home():
         st.caption("Options requested " + snapshot["options_at"] + " · each stock checked once; cached quotes are not refreshed automatically.")
     frame = _manual_futures_column(frame, snapshot["expiry"])
     _display(frame)
+    if not frame.empty:
+        st.markdown("#### Build strategy")
+        a, b, c = st.columns([1.5,1,1])
+        chosen = a.selectbox("Stock", frame["Stock"].tolist(), key="ccs_strategy_stock")
+        selected_row = frame.loc[frame["Stock"] == chosen].iloc[0]
+        entry = next(item.entry for item in available if item.entry.symbol == chosen)
+        ce = selected_row["5%+ OTM CE (%)"]
+        straddle = selected_row["ATM Straddle Total (₹)"]
+        if b.button(f"CE {ce:.2f}% · Build", key="ccs_strategy_from_ce", use_container_width=True):
+            launch_strategy(chosen, entry, snapshot["expiry"], "Covered call")
+        if c.button(f"Straddle ₹{straddle:.2f} · Build" if pd.notna(straddle) else "Straddle · Build",
+                    key="ccs_strategy_from_straddle", disabled=pd.isna(straddle), use_container_width=True):
+            launch_strategy(chosen, entry, snapshot["expiry"], "Short straddle")
 
 
 def render_selective_market():
