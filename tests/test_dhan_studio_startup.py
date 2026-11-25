@@ -700,6 +700,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
              patch("dhan_visual.option_panel.check_dhan_data_plan") as duplicate, \
              patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()), \
              patch("dhan_visual.screener_ui._funds_pool", return_value=funds), \
+             patch("dhan_visual.straddle_panel.nse_regular_session", return_value=True), \
              patch("dhan_visual.straddle_panel.scan_all_straddles") as options:
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
@@ -1448,13 +1449,13 @@ class PayoffStudioStartupTests(unittest.TestCase):
              patch("dhan_visual.straddle_panel.scan_all_straddles") as scan:
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-            self.assertFalse(app.session_state["ccs_dark_mode"])
-            app.button(key="ccs_theme_button").click().run()
-            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
             self.assertTrue(app.session_state["ccs_dark_mode"])
             app.button(key="ccs_theme_button").click().run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
             self.assertFalse(app.session_state["ccs_dark_mode"])
+            app.button(key="ccs_theme_button").click().run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertTrue(app.session_state["ccs_dark_mode"])
             scan.assert_not_called()
 
     def test_no_manual_list_upload_or_50_stock_hard_cap(self):

@@ -243,7 +243,7 @@ def _display(frame, *, market=False):
 
 
 def render_selective_home():
-    st.markdown("### OTM Covered Call · Data-saving scan")
+    st.markdown("### OTM Covered Call")
     st.caption("Select filters first. Nothing is fetched from FYERS or Yahoo until you apply a scan.")
     access = connected_fyers()
     if not access:
@@ -260,24 +260,28 @@ def render_selective_home():
     snapshot = _snapshot(access)
     default_expiry = snapshot["expiry"] if snapshot and snapshot["expiry"] in expiries else choose_expiry(entries)
     with st.form("selective_scan_filters"):
-        expiry = st.radio("Option month", expiries,
+        st.markdown("#### Quick Scan")
+        left, right = st.columns(2)
+        expiry = left.radio("Option month", expiries,
                           index=expiries.index(default_expiry), horizontal=True,
                           key="selective_expiry_choice")
-        maximum = st.radio("Contract size below", list(range(4, 11)),
+        maximum = right.radio("Contract size below", list(range(4, 11)),
                            index=(snapshot["maximum"]-4 if snapshot else 3),
                            format_func=lambda value: f"₹{value}L", horizontal=True,
                            key="selective_contract_choice")
-        minimum = st.radio("5%+ OTM CE premium above", [2, 3, 4, 5, 6, 7, 8],
+        minimum = left.radio("5%+ OTM CE premium above", [2, 3, 4, 5, 6, 7, 8],
                            index=(snapshot["minimum"]-2 if snapshot else 0),
                            format_func=lambda value: f"{value}%", horizontal=True,
                            key="selective_premium_choice")
-        r1_filter = st.radio("Monthly R1 filter", [R1_ALL, R1_ABOVE],
+        r1_filter = right.radio("Monthly R1 filter", [R1_ALL, R1_ABOVE],
                              index=int(bool(snapshot and snapshot.get("r1_filter") == R1_ABOVE)),
                              horizontal=True, key="selective_r1_choice",
                              help="Above R1 only excludes both below/equal R1 and unknown R1. "
                                   "History is requested only after contract and CE filters.")
-        apply = st.form_submit_button("Apply filters / Start scan", type="primary",
-                                      use_container_width=True)
+        note, action = st.columns([2, 1])
+        note.caption("Read-only · no market-data requests before Start scan.")
+        apply = action.form_submit_button("Apply filters / Start scan", type="primary",
+                                         use_container_width=True)
     if apply:
         key = _scope(access, [], expiry)
         available = _universe_rows(universe, expiry)
@@ -309,12 +313,17 @@ def render_selective_home():
     available = _universe_rows(universe, snapshot["expiry"])
     candidates = contract_candidates(available, snapshot)
     pending = set(candidates["Stock"]) - snapshot["attempted"]
-    a, b, c = st.columns(3)
+    checked = len(set(candidates["Stock"]) & snapshot["attempted"])
+    frame = qualified_rows(available, snapshot)
+    a, b, c, d = st.columns(4)
     a.metric("Cash quotes", len(snapshot["cash"]))
     b.metric("Contract-qualified", len(candidates))
-    c.metric("Option chains checked", len(set(candidates["Stock"]) & snapshot["attempted"]))
+    c.metric("Option chains checked", f"{checked} / {len(candidates)}")
+    d.metric("Qualifying opportunities", len(frame))
     st.caption(f"Applied: below ₹{snapshot['maximum']} lakh · CE > {snapshot['minimum']}% · {snapshot['expiry']} · {snapshot.get('r1_filter', R1_ALL)} · CMP snapshot {snapshot['cash_at'] or 'not loaded'}")
-    x, y, z = st.columns([2, 1.4, 1])
+    st.progress(checked / len(candidates) if len(candidates) else 0.0,
+                text=f"{checked} of {len(candidates)} option chains checked")
+    x, y = st.columns(2)
     work_pending = automatic_work_pending(available, snapshot)
     today = datetime.now(IST).date().isoformat()
     if snapshot.get("scan_day") != today:
@@ -329,8 +338,6 @@ def render_selective_home():
     if y.button("New scan / refresh all", key="selective_reset"):
         st.session_state.pop(STATE, None)
         st.rerun()
-    if z.button("Auto-fit", key="selective_autofit"):
-        click_autofit(st.session_state)
     if snapshot.get("auto_scan") and work_pending:
         _automatic_scan_heartbeat()
     elif work_pending and not snapshot["stopped"]:
@@ -340,7 +347,11 @@ def render_selective_home():
     if snapshot["error"]:
         st.warning(snapshot["error"] + " · Stopped. No automatic retries. Start a new scan manually when appropriate.")
     frame = qualified_rows(available, snapshot)
-    st.markdown(f"**{len(frame)} qualifying stocks** · {len(pending)} eligible option chains not yet checked")
+    title, fit = st.columns([3, 1])
+    title.markdown("#### Qualified Opportunities")
+    title.caption(f"{len(frame)} qualifying stocks · {len(pending)} eligible option chains not yet checked")
+    if fit.button("Auto-fit", key="selective_autofit", use_container_width=True):
+        click_autofit(st.session_state)
     unknown_r1 = sum(r1_status(cmp, snapshot["levels"].get(symbol)) == "—"
                      for symbol, cmp in zip(premium_rows(available, snapshot)["Stock"],
                                             premium_rows(available, snapshot)["CMP (₹)"]))
