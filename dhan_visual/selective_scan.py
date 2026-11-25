@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
+import time
 import pandas as pd
 import streamlit as st
 
@@ -20,7 +21,8 @@ from .r1_today import session_r1_cross
 from .tradingview_links import clickable_stock_frame, TRADINGVIEW_SYMBOL_DISPLAY
 from .table_layout import dataframe_key, autofit_column_config, autofit_enabled, click_autofit
 
-BATCH = 20
+BATCH = 35
+BATCH_INTERVAL_SECONDS = 60.0
 HISTORY_BATCH = 10
 STATE = "ccs_selective_scan"
 R1_ALL = "Include all stocks"
@@ -37,7 +39,8 @@ def new_snapshot(key, expiry, maximum, minimum, r1_filter=R1_ALL):
                 cash={}, calls={}, straddles={}, attempted=set(), levels={},
                 r1_filter=r1_filter, levels_day="", history_attempted=set(),
                 crosses={}, r1_day="", cash_at="", options_at="", epoch=None,
-                error="", stopped=False)
+                error="", stopped=False, auto_scan=False, next_batch_at=0.0,
+                scan_day="")
 
 
 def contract_candidates(available, snapshot):
@@ -144,6 +147,66 @@ def next_option_batch(access, available, snapshot, *, limit=BATCH):
     return done
 
 
+def pending_option_symbols(available, snapshot):
+    return [s for s in contract_candidates(available, snapshot)["Stock"]
+            if s not in snapshot["attempted"]]
+
+
+def automatic_work_pending(available, snapshot):
+    return bool(pending_option_symbols(available, snapshot)
+                or pending_r1_symbols(available, snapshot))
+
+
+def run_automatic_batch(access, available, snapshot, *, now=None):
+    """At most one batch per minute; all requests share existing FYERS pacing.
+
+    Synchronous execution on the Streamlit session thread prevents overlapping
+    automatic batches. A late tick never catches up by issuing extra batches.
+    """
+    now = time.monotonic() if now is None else now
+    if (not snapshot.get("auto_scan") or snapshot["stopped"]
+            or not snapshot["cash_at"]):
+        return False
+    if snapshot.get("scan_day") != datetime.now(IST).date().isoformat():
+        snapshot["auto_scan"] = False
+        return False
+    if not automatic_work_pending(available, snapshot):
+        snapshot["auto_scan"] = False
+        return False
+    if now < snapshot.get("next_batch_at", 0.0):
+        return False
+    # Reserve the next time slot BEFORE doing I/O, including on error.
+    snapshot["next_batch_at"] = now + BATCH_INTERVAL_SECONDS
+    next_option_batch(access, available, snapshot)
+    if not snapshot["stopped"]:
+        load_shortlist_history(access, snapshot, pending_r1_symbols(available, snapshot))
+    if snapshot["stopped"] or not automatic_work_pending(available, snapshot):
+        snapshot["auto_scan"] = False
+    return True
+
+
+@st.fragment(run_every="3s")
+def _automatic_scan_heartbeat():
+    """Only mounted on Home; never continue after navigation or logout."""
+    if (st.session_state.get("ccs_legacy_full_scan")
+            or st.session_state.get("ccs_selective_page") != "◎ OTM CE Home"):
+        return
+    access = connected_fyers()
+    snapshot = _snapshot(access)
+    data = st.session_state.get("fno_universe_data")
+    if not snapshot or not data or not snapshot.get("auto_scan"):
+        return
+    available = _universe_rows(data[0], snapshot["expiry"])
+    if run_automatic_batch(access, available, snapshot):
+        st.rerun(scope="app")
+    elif not snapshot.get("auto_scan"):
+        st.rerun(scope="app")
+    else:
+        seconds = max(0, int(snapshot.get("next_batch_at", 0) - time.monotonic()))
+        st.caption(f"Automatic scan active · next batch in ~{seconds}s · "
+                   f"up to {BATCH} new option chains per minute.")
+
+
 def _snapshot(access):
     snap = st.session_state.get(STATE)
     if not access or not snap or snap["key"] != _scope(access, [], snap["expiry"]):
@@ -234,12 +297,11 @@ def render_selective_home():
             except Exception:
                 snapshot["error"] = "Stock quote request stopped."
                 snapshot["stopped"] = True
-        if not snapshot["attempted"] and snapshot["cash_at"] and not snapshot["stopped"]:
-            with st.spinner("Checking first eligible option contracts…"):
-                next_option_batch(access, available, snapshot)
-        if not snapshot["stopped"]:
-            with st.spinner("Checking monthly R1 for shortlisted stocks…"):
-                load_shortlist_history(access, snapshot, pending_r1_symbols(available, snapshot))
+        if snapshot["cash_at"] and not snapshot["stopped"]:
+            snapshot["scan_day"] = datetime.now(IST).date().isoformat()
+            snapshot["auto_scan"] = automatic_work_pending(available, snapshot)
+            with st.spinner("Checking eligible option chains and shortlisted R1…"):
+                run_automatic_batch(access, available, snapshot)
     if not snapshot:
         return
     _ensure_history_day(snapshot, datetime.now(IST).date())
@@ -252,24 +314,28 @@ def render_selective_home():
     c.metric("Option chains checked", len(set(candidates["Stock"]) & snapshot["attempted"]))
     st.caption(f"Applied: below ₹{snapshot['maximum']} lakh · CE > {snapshot['minimum']}% · {snapshot['expiry']} · {snapshot.get('r1_filter', R1_ALL)} · CMP snapshot {snapshot['cash_at'] or 'not loaded'}")
     x, y, z = st.columns([2, 1.4, 1])
-    if x.button(f"Scan next {min(BATCH, len(pending))} option chains",
-                key="selective_next_options", disabled=not pending or snapshot["stopped"] or not snapshot["cash_at"]):
-        with st.spinner("Checking eligible option contracts…"):
-            next_option_batch(access, available, snapshot)
-            load_shortlist_history(access, snapshot, pending_r1_symbols(available, snapshot))
+    work_pending = automatic_work_pending(available, snapshot)
+    today = datetime.now(IST).date().isoformat()
+    if snapshot.get("scan_day") != today:
+        snapshot["auto_scan"] = False
+    automatic = bool(snapshot.get("auto_scan"))
+    if x.button("Pause automatic scan" if automatic else "Resume automatic scan",
+                key="selective_auto_scan",
+                disabled=not work_pending or snapshot["stopped"] or not snapshot["cash_at"]
+                         or snapshot.get("scan_day") != today):
+        snapshot["auto_scan"] = not automatic
         st.rerun()
     if y.button("New scan / refresh all", key="selective_reset"):
         st.session_state.pop(STATE, None)
         st.rerun()
     if z.button("Auto-fit", key="selective_autofit"):
         click_autofit(st.session_state)
-    r1_pending = pending_r1_symbols(available, snapshot)
-    if r1_pending and st.button(
-            f"Check R1 for next {min(HISTORY_BATCH, len(r1_pending))} shortlisted stocks",
-            key="selective_next_r1", disabled=snapshot["stopped"]):
-        with st.spinner("Loading shortlisted daily history…"):
-            load_shortlist_history(access, snapshot, r1_pending)
-        st.rerun()
+    if snapshot.get("auto_scan") and work_pending:
+        _automatic_scan_heartbeat()
+    elif work_pending and not snapshot["stopped"]:
+        st.caption("Automatic scan paused. Resume to check remaining stocks.")
+    elif not snapshot["stopped"]:
+        st.success("All eligible option chains and shortlisted R1 histories checked.")
     if snapshot["error"]:
         st.warning(snapshot["error"] + " · Stopped. No automatic retries. Start a new scan manually when appropriate.")
     frame = qualified_rows(available, snapshot)
@@ -281,9 +347,9 @@ def render_selective_home():
         st.caption(f"{unknown_r1} contract/CE matches have unverified R1; "
                    "above-only mode excludes these until verified.")
     if pending:
-        st.caption("Partial scan: more matches may exist in the unscanned stocks. Continue only if needed.")
+        st.caption("Partial scan: more matches may exist in the unscanned stocks. Automatic batches run only on Home while active.")
     if snapshot["options_at"]:
-        st.caption("Options requested " + snapshot["options_at"] + " · cached snapshot; not automatically refreshed.")
+        st.caption("Options requested " + snapshot["options_at"] + " · each stock checked once; cached quotes are not refreshed automatically.")
     frame = _manual_futures_column(frame, snapshot["expiry"])
     _display(frame)
 
