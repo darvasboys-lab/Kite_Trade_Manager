@@ -57,11 +57,15 @@ def _local_creds():
         else ""
     )
     cached_auto = read_cached_token(cid) if cid and is_configured(cid) else None
-    token = (
-        manual or auto_token
-        or (cached_auto.token if cached_auto else "")
-        or (load_manual_token(cid) if cid else "")
-    )
+    # A saved, opt-in PIN/TOTP login is the authoritative token source.
+    # Never send an old pasted JWT to Dhan merely because the secure
+    # auto-renewal job is still running.
+    if cid and is_configured(cid):
+        return cid, (
+            auto_token or
+            (cached_auto.token if cached_auto and cached_auto.usable() else "")
+        )
+    token = manual or (load_manual_token(cid) if cid else "")
     return cid, token
 
 
