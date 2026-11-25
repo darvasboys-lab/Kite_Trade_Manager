@@ -32,6 +32,80 @@ def fyers_straddle(expiry="DEC-26"):
 
 
 class PreferredFYERSHomeTests(unittest.TestCase):
+    def test_futures_quote_only_accepts_exact_requested_contracts(self):
+        from dhan_visual.fyers_readonly import fetch_futures_quotes
+        payload = {"d": [
+            {"s": "ok", "n": "NSE:TCS26DECFUT", "v": {"lp": 1005}},
+            {"s": "ok", "n": "NSE:TCS-EQ", "v": {"lp": 1}},
+            {"s": "ok", "n": "NSE:SBIN26NOVFUT", "v": {"lp": 2}},
+            {"s": "ok", "n": "NSE:SBIN26DECFUT", "v": {"lp": 0}},
+        ]}
+        with patch("dhan_visual.fyers_readonly._get", return_value=payload) as get:
+            quotes = fetch_futures_quotes(valid_access(), ["TCS", "SBIN"], "DEC-26")
+        self.assertEqual(set(quotes), {"TCS"})
+        self.assertEqual(quotes["TCS"].price, Decimal("1005"))
+        self.assertEqual(get.call_args.args[1], "/data/quotes")
+        self.assertEqual(get.call_args.args[2]["symbols"], "NSE:TCS26DECFUT,NSE:SBIN26DECFUT")
+
+    def test_home_futures_are_manual_and_expiry_scoped(self):
+        app = app_with_catalogue()
+        app.session_state["fno_home_expiry"] = "DEC-26"
+        app.session_state["fno_expiry"] = "DEC-26"
+        app.session_state["_fyers_access"] = valid_access()
+        app.session_state["ccs_active_broker"] = "FYERS"
+        app.session_state["fno_ce5_mode"] = "FYERS"
+        app.session_state["fno_home_ce_source"] = "FYERS"
+        app.session_state["fno_price_provider"] = "FYERS"
+        pool = FakePool()
+        with patch("dhan_visual.fyers_ui._fyers_pool", return_value=pool), \
+             patch("dhan_visual.fyers_ui.read_app_from_vault", return_value=None), \
+             patch("dhan_visual.fyers_ui.read_access_from_vault", return_value=None), \
+             patch("dhan_visual.otm_home.fetch_futures_quotes", return_value={
+                 "TCS": Quote(Decimal("1005"), "offline", "FYERS futures LTP"),
+             }) as fetch:
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            fetch.assert_not_called()
+            self.assertNotIn("Futures Price (₹)", app.dataframe[0].value.columns)
+            self.assertNotIn("Futures vs CMP (%)", app.dataframe[0].value.columns)
+            app.button(key="fno_home_refresh_futures").click().run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            fetch.assert_called_once()
+            home = app.dataframe[0].value
+            self.assertEqual(home.loc[home.Stock == "TCS", "Futures Price (₹)"].iloc[0], 1005)
+            self.assertIn("Futures vs CMP (%)", home.columns)
+            app.run()
+            fetch.assert_called_once()
+            app.button(key="fno_home_refresh_futures").click().run()
+            self.assertNotIn("Futures Price (₹)", app.dataframe[0].value.columns)
+            self.assertNotIn("Futures vs CMP (%)", app.dataframe[0].value.columns)
+            fetch.assert_called_once()
+            app.button(key="fno_home_refresh_futures").click().run()
+            self.assertEqual(fetch.call_count, 2)
+            app.selectbox(key="fno_home_expiry").set_value("NOV-26").run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(fetch.call_count, 2)
+            self.assertNotIn("Futures Price (₹)", app.dataframe[0].value.columns)
+            self.assertNotIn("Futures vs CMP (%)", app.dataframe[0].value.columns)
+
+
+    def test_signed_futures_basis(self):
+        import pandas as pd
+        from dhan_visual.otm_home import attach_futures_columns
+        frame = pd.DataFrame({"Stock": ["A", "B", "C", "D", "E", "F"],
+                              "CMP (₹)": [1000, 1000, 1000, 0, None, 1000]})
+        quotes = {
+            s: Quote(Decimal(p), "offline", "FYERS futures LTP")
+            for s, p in (("A", "1010"), ("B", "980"), ("C", "1000"),
+                         ("D", "1000"), ("E", "1000"))
+        }
+        data = attach_futures_columns(frame, quotes)
+        self.assertEqual(data["Futures vs CMP (%)"].iloc[:3].tolist(), [1.0, -2.0, 0.0])
+        self.assertTrue(data["Futures vs CMP (%)"].iloc[3:].isna().all())
+        self.assertEqual(data["Futures Price (₹)"].iloc[3:5].tolist(), [1000.0, 1000.0])
+        self.assertTrue(pd.isna(data["Futures Price (₹)"].iloc[5]))
+        self.assertNotIn("Futures Price (₹)", frame.columns)
+
     def test_contract_size_and_straddle_percent(self):
         from dataclasses import replace
         atm = replace(fyers_straddle(), call_ltp=Decimal("40"), put_ltp=Decimal("35"))

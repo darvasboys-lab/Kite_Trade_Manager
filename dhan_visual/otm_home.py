@@ -16,6 +16,7 @@ import streamlit as st
 from .ce_eod_remote import IST
 from .fyers_ui import connected_fyers, fyers_cash_prices, fyers_chain_calls, _scope
 from .broker_control import active_broker, broker_allowed
+from .fyers_readonly import fetch_futures_quotes, FyersDataError
 from .ce_eod_store import load_local_eod, save_verified_report, eod_cash_quotes
 from .nse_eod_ce import NseEodError, NseEodSnapshot, parse_nse_fo_eod
 from .dhan_integration_state import (
@@ -174,6 +175,89 @@ def filter_home_contracts(frame: pd.DataFrame, maximum_lakh: float) -> pd.DataFr
     return frame.loc[values.notna() & (values < limit)].reset_index(drop=True)
 
 
+def attach_futures_columns(frame: pd.DataFrame, quotes: dict) -> pd.DataFrame:
+    """Numeric signed basis relative to displayed CMP; no invented prices."""
+    frame = frame.copy()
+    futures, basis = [], []
+    for symbol, cash in zip(frame["Stock"], frame["CMP (₹)"]):
+        try:
+            future = Decimal(str(quotes[symbol].price)) if symbol in quotes else None
+        except (InvalidOperation, TypeError, ValueError):
+            future = None
+        try:
+            spot = Decimal(str(cash))
+        except (InvalidOperation, TypeError, ValueError):
+            spot = None
+        if future is None or not future.is_finite() or future <= 0:
+            futures.append(None)
+            basis.append(None)
+            continue
+        futures.append(float(future))
+        basis.append(
+            float((future - spot) / spot * 100)
+            if spot is not None and spot.is_finite() and spot > 0 else None
+        )
+    frame.insert(2, "Futures Price (₹)", futures)
+    frame.insert(3, "Futures vs CMP (%)", basis)
+    return frame
+
+
+def _toggle_home_futures(key: str) -> None:
+    if st.session_state.get("fno_home_futures_visible") == key:
+        st.session_state.pop("fno_home_futures_visible", None)
+        st.session_state.pop("fno_home_futures_request", None)
+        st.session_state.pop("fno_home_futures_snapshot", None)
+    else:
+        st.session_state["fno_home_futures_visible"] = key
+        st.session_state["fno_home_futures_request"] = key
+
+
+def _manual_futures_column(frame: pd.DataFrame, expiry: str) -> pd.DataFrame:
+    """One eye control: show/fetch once, hide without any broker request."""
+    access = connected_fyers() if broker_allowed("FYERS") else None
+    key = _scope(access, [], expiry) if access else None
+    symbols = frame["Stock"].tolist()
+    if key is None or st.session_state.get("fno_home_futures_visible") != key:
+        st.session_state.pop("fno_home_futures_visible", None)
+        st.session_state.pop("fno_home_futures_request", None)
+        st.session_state.pop("fno_home_futures_snapshot", None)
+    visible = key is not None and st.session_state.get("fno_home_futures_visible") == key
+    st.button(
+        "Hide futures" if visible else "Show futures",
+        icon=":material/visibility_off:" if visible else ":material/visibility:",
+        key="fno_home_refresh_futures",
+        disabled=not visible and (not access or not symbols),
+        on_click=_toggle_home_futures, args=(key,),
+        help="Hide both futures columns, or reveal and fetch the selected expiry once. "
+             "Requires FYERS and displayed stocks. No automatic futures requests.",
+    )
+    if not visible:
+        return frame
+    snapshot = st.session_state.get("fno_home_futures_snapshot") or {}
+    if snapshot.get("key") != key:
+        snapshot = {}
+    request = st.session_state.pop("fno_home_futures_request", None)
+    if request == key and access and symbols:
+        try:
+            with st.spinner("Fetching selected-month futures prices…"):
+                quotes = fetch_futures_quotes(access, symbols, expiry)
+            snapshot = {"key": key, "quotes": quotes,
+                        "at": datetime.now(IST).strftime("%d %b %H:%M:%S")}
+            st.session_state["fno_home_futures_snapshot"] = snapshot
+        except FyersDataError as exc:
+            st.warning(str(exc))
+        except Exception:
+            st.warning("Unexpected FYERS futures-data error. Hide and show to retry.")
+    quotes = snapshot.get("quotes") or {}
+    if snapshot:
+        st.caption(
+            f"Futures {expiry} · {sum(s in quotes for s in symbols)}/{len(symbols)} "
+            f"prices · last requested {snapshot['at']} IST · manual snapshot; may be stale. "
+            "Basis uses displayed CMP, which can have a different timestamp."
+        )
+    return attach_futures_columns(frame, quotes)
+
+
 @st.fragment(run_every="3s")
 def _otm_table(available, expiry, *, cid, token, cash_quotes):
     key = _scan_key(available, expiry)
@@ -225,6 +309,7 @@ def _otm_table(available, expiry, *, cid, token, cash_quotes):
     universe_count = len(frame)
     unpriced = int(frame["Contract size (₹)"].isna().sum())
     frame = filter_home_contracts(frame, maximum)
+    frame = _manual_futures_column(frame, expiry)
     if maximum:
         st.caption(
             f"{len(frame)}/{universe_count} stocks below ₹{maximum:g} lakh"
@@ -260,6 +345,16 @@ def _otm_table(available, expiry, *, cid, token, cash_quotes):
                 "CMP (₹)", format="₹%.2f", width="medium",
                 help="Cash quote where available; otherwise a dated NSE "
                      "F&O underlying close, NOT a live CMP.",
+            ),
+            "Futures Price (₹)": st.column_config.NumberColumn(
+                "Futures Price (₹)", format="₹%.2f", width="medium",
+                help="FYERS monthly futures LTP for the selected expiry, "
+                     "loaded only when you click the eye button.",
+            ),
+            "Futures vs CMP (%)": st.column_config.NumberColumn(
+                "Futures vs CMP (%)", format="%+.2f%%", width="medium",
+                help="(Futures price − displayed CMP) ÷ CMP × 100. "
+                     "Positive = premium; negative = discount. Not annualized.",
             ),
             "Lot size": st.column_config.NumberColumn(
                 "Lot size", format="%d", width="small",
