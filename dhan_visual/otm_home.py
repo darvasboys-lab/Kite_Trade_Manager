@@ -14,7 +14,7 @@ import pandas as pd
 import streamlit as st
 
 from .ce_eod_remote import IST
-from .fyers_ui import connected_fyers, fyers_cash_prices, fyers_chain_calls
+from .fyers_ui import connected_fyers, fyers_cash_prices, fyers_chain_calls, _scope
 from .broker_control import active_broker, broker_allowed
 from .ce_eod_store import load_local_eod, save_verified_report, eod_cash_quotes
 from .nse_eod_ce import NseEodError, NseEodSnapshot, parse_nse_fo_eod
@@ -170,7 +170,17 @@ def _otm_table(available, expiry, *, cid, token, cash_quotes):
         fyers_snap = st.session_state.get("fno_fyers_chain_snapshot") or {}
         # A snapshot for a prior expiry must never appear as this month's CE
         # or ATM straddle. Each row uses the existing single FYERS chain scan.
-        if fyers_snap.get("expiry") == expiry and broker_allowed("FYERS"):
+        access = connected_fyers()
+        requested_symbols = sorted({
+            item.entry.symbol for item in available if expiry in item.entry.lots
+        })
+        fresh = (
+            access is not None and requested_symbols
+            and fyers_snap.get("key") == _scope(access, requested_symbols, expiry)
+            and fyers_snap.get("expiry") == expiry
+            and broker_allowed("FYERS")
+        )
+        if fresh:
             selected = fyers_snap.get("calls") or {}
             straddles = fyers_snap.get("straddles") or {}
         else:
