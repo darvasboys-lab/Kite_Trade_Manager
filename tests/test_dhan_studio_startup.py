@@ -44,6 +44,100 @@ class FakePool:
 
 
 class PayoffStudioStartupTests(unittest.TestCase):
+    def test_saved_totp_autostarts_even_with_eod_default_and_stale_manual_token(self):
+        """Saved opt-in PIN/TOTP should never ask for a manual JWT to start."""
+        app = app_with_catalogue()
+        cid = "1234567890"
+        app.session_state["dhan_local_cid"] = cid
+        app.session_state["dhan_local_access_token"] = "EXPIRED_MANUAL_TOKEN_FOR_TESTS"
+        app.session_state["fno_ce5_mode"] = "EOD"
+        pool = FakePool()
+        with patch("dhan_visual.screener_ui.is_configured", return_value=True), \
+             patch("dhan_visual.option_panel.is_configured", return_value=True), \
+             patch("dhan_visual.otm_home.is_configured", return_value=True), \
+             patch("dhan_visual.screener_ui.read_cached_token", return_value=None), \
+             patch("dhan_visual.option_panel.read_cached_token", return_value=None), \
+             patch("dhan_visual.screener_ui._market_pool", return_value=pool), \
+             patch("dhan_visual.screener_ui.load_or_generate") as generate, \
+             patch("dhan_visual.straddle_panel.scan_all_straddles") as options:
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            auth_calls = [
+                args for args, kwargs in pool.calls
+                if args[0].__name__ == "load_or_generate"
+            ]
+            self.assertEqual(len(auth_calls), 1)
+            self.assertEqual(auth_calls[0][1], cid)
+            self.assertIsNotNone(app.session_state.get("dhan_auto_auth_job"))
+            self.assertTrue(app.button(key="dhan_connect_button").disabled)
+            self.assertTrue(any(
+                "PIN + permanent TOTP secret saved securely" in str(n.value)
+                for n in app.success
+            ))
+            self.assertTrue(any(
+                "Saved Dhan PIN/TOTP detected" in str(n.value)
+                for n in app.info
+            ))
+            generate.assert_not_called()  # worker is intentionally pending
+            options.assert_not_called()
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(
+                sum(args[0].__name__ == "load_or_generate"
+                    for args, _ in pool.calls), 1,
+            )
+
+    def test_valid_auto_token_preferred_over_old_manual_and_profile_checked_once(self):
+        """Auto token wins for options/cash, profile check async, no new token."""
+        from datetime import timedelta, timezone
+        from dhan_visual.auto_auth import AutoAccess
+        from dhan_visual.dhan_readonly_check import DhanProfileStatus
+        app = app_with_catalogue()
+        cid, fresh = "1234567890", "FRESH_AUTO_TOKEN_FOR_OFFLINE_TESTS"
+        app.session_state["dhan_local_cid"] = cid
+        app.session_state["dhan_local_access_token"] = "EXPIRED_MANUAL_TOKEN_FOR_TESTS"
+        app.session_state["dhan_auto_access"] = AutoAccess(
+            fresh, datetime.now(timezone.utc) + timedelta(hours=8),
+            "Windows Credential Manager",
+        )
+        app.session_state["dhan_auto_access_cid"] = cid
+        pool = FakePool()
+        with patch("dhan_visual.screener_ui.is_configured", return_value=True), \
+             patch("dhan_visual.option_panel.is_configured", return_value=True), \
+             patch("dhan_visual.otm_home.is_configured", return_value=True), \
+             patch("dhan_visual.screener_ui.read_cached_token", return_value=None), \
+             patch("dhan_visual.option_panel.read_cached_token", return_value=None), \
+             patch("dhan_visual.screener_ui._market_pool", return_value=pool), \
+             patch("dhan_visual.screener_ui.load_or_generate") as generate, \
+             patch("dhan_visual.otm_home.check_dhan_data_plan",
+                   return_value=DhanProfileStatus(
+                       "Active", "2026-12-31", "25/11/2099 20:00",
+                       True, "2026-11-25T08:00:00+00:00",
+                   )) as manual_check:
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(
+                sum(args[0].__name__ == "check_dhan_data_plan"
+                    for args, _ in pool.calls), 1,
+            )
+            self.assertEqual(
+                sum(args[0].__name__ == "load_or_generate"
+                    for args, _ in pool.calls), 0,
+            )
+            app.button(key="otm_home_check_connection").click().run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            manual_check.assert_called_once_with(cid, fresh)
+            self.assertEqual(
+                app.session_state["fno_dhan_profile_status"]["token_fingerprint"],
+                hashlib.sha256(fresh.encode()).hexdigest(),
+            )
+            generate.assert_not_called()
+            app.run()
+            self.assertEqual(
+                sum(args[0].__name__ == "check_dhan_data_plan"
+                    for args, _ in pool.calls), 1,
+            )
+
     def test_main_dashboard_executes_without_exception(self):
         pool = FakePool()
         with patch("dhan_visual.screener_ui._market_pool", return_value=pool):
