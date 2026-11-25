@@ -23,6 +23,7 @@ from .local_client_settings import read_client_id, save_client_id, valid_client_
 from .option_panel import _local_creds
 from .straddle_scan import otm_call_5_from_atm, rank_straddles, scan_all_straddles
 from .load_priority import strongest_first
+from .quote_routing import nse_regular_session
 from .table_layout import autofit_column_config, autofit_enabled, dataframe_key
 from .tradingview_links import clickable_stock_frame, TRADINGVIEW_SYMBOL_DISPLAY
 
@@ -240,6 +241,7 @@ def render_straddle_panel(available, expiry, *, priority_levels=None,
             and not busy
             and total > 0
             and st.session_state.get("fno_ce5_mode") == "Live"
+            and nse_regular_session()
             and valid_client_id(cid) and len(token) >= 16
             and verified_account(cid) is not None
             and st.session_state.get("fno_straddle_auto_started_key") != auto_key
