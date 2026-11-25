@@ -19,6 +19,10 @@ CACHE = "ccs_stock_strategy_cache"
 
 
 def launch_strategy(symbol, entry, expiry, preset):
+    # Pause automatic scanning while this separate on-demand data workspace is active.
+    scan = st.session_state.get("ccs_selective_scan")
+    if scan:
+        scan["auto_scan"] = False
     st.session_state[ACTIVE] = dict(symbol=symbol, lots=dict(entry.lots),
                                     expiry=expiry, preset=preset)
     st.rerun()
@@ -78,7 +82,7 @@ def render_stock_strategy():
     if back.button("← Back to shortlist",key="ccs_strategy_back",use_container_width=True):
         st.session_state.pop(ACTIVE,None)
         st.rerun()
-    st.caption("Read-only strategy modelling · hypothetical fills at displayed or edited prices · no orders")
+    st.caption("Read-only strategy modelling · hypothetical fills at displayed or edited prices · no orders. Home scan is paused; resume after returning.")
     access = connected_fyers()
     if not access:
         st.warning("Connect FYERS in Settings before loading market data.")
