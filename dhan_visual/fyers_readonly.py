@@ -497,3 +497,51 @@ def fetch_daily_levels(access: FyersAccess, ticker: str, *,
     frame = pd.DataFrame(valid, columns=["Date", "Open", "High", "Low", "Close"])
     frame = frame.set_index("Date")
     return calculate_levels(frame, current_month=day)
+
+
+def fetch_r1_intraday_bars(access: FyersAccess, ticker: str, *,
+                           day: date | None = None, now: datetime | None = None,
+                           get=None):
+    """FYERS genuine completed 15-minute candles for today's R1 crossover.
+
+    Prior-session bars are retained solely for gap-up validation. We never
+    assume a high or LTP alone proves an intraday cross.
+    """
+    import pandas as pd
+    day = day or datetime.now(INDIA).date()
+    local_now = (now or datetime.now(INDIA)).astimezone(INDIA)
+    if day != local_now.date():
+        raise FyersDataError("Intraday crossover can only be evaluated for today's date.")
+    first = datetime.combine(day - timedelta(days=7), time(9, 15), INDIA)
+    last_completed_start = local_now - timedelta(minutes=15)
+    if last_completed_start <= first:
+        raise FyersDataError("No completed FYERS 15-minute candles available yet.")
+    response = _get(access, "/data/history", {
+        "symbol": nse_equity_symbol(ticker), "resolution": "15",
+        "date_format": "0",
+        "range_from": str(int(first.timestamp())),
+        "range_to": str(int(local_now.timestamp())),
+        "cont_flag": "1",
+    }, get=get)
+    rows = response.get("candles")
+    if not isinstance(rows, list) or len(rows) > 600:
+        raise FyersDataError("FYERS intraday response missing/beyond expected size.")
+    values = []
+    for bar in rows:
+        if not isinstance(bar, list) or len(bar) < 6:
+            continue
+        try:
+            stamp = datetime.fromtimestamp(int(bar[0]), INDIA)
+            o, h, low, close = [_positive(v) for v in bar[1:5]]
+            if (first <= stamp <= last_completed_start
+                    and o and h and low and close
+                    and h >= low and h >= o and h >= close):
+                values.append((pd.Timestamp(stamp), float(o), float(h),
+                               float(low), float(close)))
+        except (OSError, ValueError, TypeError, OverflowError):
+            continue
+    if not values:
+        raise FyersDataError("No verified, completed FYERS 15-minute OHLC bars.")
+    return pd.DataFrame(
+        values, columns=["Date", "Open", "High", "Low", "Close"],
+    ).set_index("Date")
