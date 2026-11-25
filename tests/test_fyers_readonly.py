@@ -154,7 +154,7 @@ class FyersDataOnlyTests(unittest.TestCase):
         self.assertIsNotNone(levels.ema200)
         self.assertIsNotNone(levels.ema50)
         self.assertIsNotNone(levels.monthly_r1)
-        self.assertEqual(levels.asof, "2026-11-25")
+        self.assertEqual(levels.asof, "2026-11-24")
         self.assertEqual(get.call_args.kwargs["params"]["resolution"], "D")
 
     def test_token_expiry_respects_0630_ist(self):
