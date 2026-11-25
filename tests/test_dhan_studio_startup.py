@@ -21,9 +21,11 @@ def example():
     ]
 
 
-def app_with_catalogue(home_limit=0.0):
+def app_with_catalogue(home_limit=0.0, *, legacy=True):
     from streamlit.testing.v1 import AppTest
     app = AppTest.from_file(str(APP), default_timeout=35)
+    if legacy:
+        app.session_state["ccs_legacy_full_scan"] = True
     app.session_state["fno_universe_data"] = (example(), "Verified unit fixture")
     # Existing tests inspect option rows even before cash quotes arrive.
     # Pass None to exercise the actual default contract-size filter.
