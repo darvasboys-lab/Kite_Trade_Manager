@@ -11,6 +11,7 @@ from dhan_visual.ce_eod_remote import IST
 from dhan_visual.selective_scan import (
     new_snapshot, contract_candidates, qualified_rows, next_option_batch,
     pending_r1_symbols, load_shortlist_history, r1_status, R1_ABOVE, R1_ALL,
+    BATCH, BATCH_INTERVAL_SECONDS, run_automatic_batch,
 )
 from test_dhan_studio_startup import app_with_catalogue, example
 
@@ -41,6 +42,54 @@ def levels(pivot="950"):
 
 
 class SelectiveScanTests(unittest.TestCase):
+    def test_automatic_batches_are_bounded_minute_spaced_and_never_repeat(self):
+        from dhan_visual.dhan_market import DhanUnderlying
+        from dhan_visual.screener import Underlying
+        universe = [DhanUnderlying(Underlying(f"STOCK{i}", f"Stock {i}",
+                    {"DEC-26": 100}), i+1) for i in range(80)]
+        snap = new_snapshot("key", "DEC-26", 7, 2)
+        snap.update(cash={item.entry.symbol: Quote(Decimal("1000"), "offline", "FYERS")
+                          for item in universe}, cash_at="now", auto_scan=True,
+                    scan_day=datetime.now(IST).date().isoformat())
+        with patch("dhan_visual.selective_scan.resolve_expiry_timestamp", return_value=("123", "2026-12-29")) as resolve, \
+             patch("dhan_visual.selective_scan.fetch_chain", return_value=(None, None)) as chain, \
+             patch("dhan_visual.selective_scan.fetch_daily_levels") as daily:
+            self.assertEqual(BATCH, 35)
+            self.assertEqual(BATCH_INTERVAL_SECONDS, 60)
+            self.assertTrue(run_automatic_batch(access(), universe, snap, now=100))
+            self.assertEqual(chain.call_count, 35)
+            self.assertFalse(run_automatic_batch(access(), universe, snap, now=159.9))
+            snap["auto_scan"] = False
+            self.assertFalse(run_automatic_batch(access(), universe, snap, now=160))
+            snap["auto_scan"] = True
+            self.assertTrue(run_automatic_batch(access(), universe, snap, now=160))
+            self.assertEqual(chain.call_count, 70)
+            self.assertTrue(run_automatic_batch(access(), universe, snap, now=1000))
+            self.assertEqual(chain.call_count, 80)
+            self.assertFalse(snap["auto_scan"])
+            self.assertFalse(run_automatic_batch(access(), universe, snap, now=1060))
+            self.assertEqual(len({c.args[1] for c in chain.call_args_list}), 80)
+            resolve.assert_called_once()
+            daily.assert_not_called()
+
+    def test_automatic_batch_halts_on_error_or_old_scan_day(self):
+        from dhan_visual.fyers_readonly import FyersDataError
+        snap = new_snapshot("key", "DEC-26", 7, 2)
+        snap.update(cash=quotes(), cash_at="now", auto_scan=True, scan_day="2000-01-01")
+        with patch("dhan_visual.selective_scan.resolve_expiry_timestamp", return_value=("123", "2026-12-29")), \
+             patch("dhan_visual.selective_scan.fetch_chain", side_effect=FyersDataError("rate limit")) as chain, \
+             patch("dhan_visual.selective_scan.fetch_daily_levels") as daily:
+            self.assertFalse(run_automatic_batch(access(), example(), snap, now=100))
+            self.assertFalse(snap["auto_scan"])
+            chain.assert_not_called()
+            snap.update(auto_scan=True, scan_day=datetime.now(IST).date().isoformat())
+            self.assertTrue(run_automatic_batch(access(), example(), snap, now=160))
+            self.assertTrue(snap["stopped"])
+            self.assertFalse(snap["auto_scan"])
+            self.assertFalse(run_automatic_batch(access(), example(), snap, now=220))
+            chain.assert_called_once()
+            daily.assert_not_called()
+
     def test_r1_filter_strict_and_history_only_for_premium_matches(self):
         snap = new_snapshot("key", "DEC-26", 8, 2, R1_ABOVE)
         snap["cash"] = quotes()
