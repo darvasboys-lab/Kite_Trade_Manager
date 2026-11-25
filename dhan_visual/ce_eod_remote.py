@@ -28,6 +28,9 @@ class EodDownloadResult:
     source_url: str
     message: str
     checked: tuple[str, ...]
+    # Successful response bytes can be safely cached after strict validation.
+    # No account, token or broker information is sent to the public archive.
+    payload: bytes | None = None
 
 
 def archive_url(day: date) -> str:
@@ -92,7 +95,8 @@ def fetch_published_nse_eod(*, now: datetime | None = None,
                 if snapshot.report_date != day.isoformat():
                     raise NseEodError("NSE archive's report date does not match URL")
                 return EodDownloadResult(
-                    snapshot, url, f"NSE F&O EOD {snapshot.report_date}", tuple(checked)
+                    snapshot, url, f"NSE F&O EOD {snapshot.report_date}",
+                    tuple(checked), bytes(data),
                 )
         except (requests.RequestException, NseEodError, OSError) as exc:
             return EodDownloadResult(

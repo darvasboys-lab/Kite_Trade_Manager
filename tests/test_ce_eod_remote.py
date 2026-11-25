@@ -53,6 +53,7 @@ class AutomaticEodTests(unittest.TestCase):
         result = fetch_published_nse_eod(now=now, get=get)
         self.assertEqual(result.checked, ("2026-11-23",))
         self.assertEqual(result.snapshot.report_date, "2026-11-23")
+        self.assertEqual(result.payload, data)
         self.assertEqual(result.snapshot.quotes["DEC-26"]["TCS"].premium_pct, 2)
         get.assert_called_once()
         self.assertEqual(get.call_args.kwargs["allow_redirects"], False)
@@ -75,6 +76,7 @@ class AutomaticEodTests(unittest.TestCase):
                 get = Mock(return_value=FakeResponse(status))
                 result = fetch_published_nse_eod(now=now, get=get)
                 self.assertIsNone(result.snapshot)
+                self.assertIsNone(result.payload)
                 self.assertIn(str(status), result.message)
                 self.assertEqual(get.call_count, 1)
 
