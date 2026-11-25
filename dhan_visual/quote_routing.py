@@ -7,11 +7,27 @@ other users retain the free Yahoo screener. Rate-limit failures back off.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime, time, timedelta, timezone
 
 
 AUTO_SOURCE = "Auto (Dhan → Yahoo)"
 DEFAULT_DHAN_SECONDS = 300  # 5 minutes between full cash LTP snapshots
 DHAN_LIMIT_BACKOFF_SECONDS = 1800  # 30 minutes after an HTTP 429
+OFF_HOURS_SECONDS = 3600
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def nse_regular_session(now: datetime | None = None) -> bool:
+    """Conservative regular-hours gate (not a substitute for holiday calendar)."""
+    instant = now or datetime.now(IST)
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=IST)
+    local = instant.astimezone(IST)
+    return (
+        local.weekday() < 5
+        and time(9, 15) <= local.time() <= time(15, 30)
+    )
+
 
 
 def choose_cash_source(choice: str, *, verified: bool, token_available: bool) -> str:
@@ -43,12 +59,15 @@ def retry_window_seconds(errors: list[str] | tuple[str, ...]) -> int:
 
 def should_fetch_again(last_attempt: float | None, *, now: float,
                        errors: list[str] | tuple[str, ...] = (),
-                       manual: bool = False) -> bool:
+                       manual: bool = False, market_open: bool = True) -> bool:
     if last_attempt is None:
         return True
     if now < last_attempt:
         return False
-    window = retry_window_seconds(errors)
+    window = max(
+        retry_window_seconds(errors),
+        DEFAULT_DHAN_SECONDS if market_open else OFF_HOURS_SECONDS,
+    )
     # User refresh is allowed, but NOT when broker returned rate limit.
     if manual and window != DHAN_LIMIT_BACKOFF_SECONDS:
         return now - last_attempt >= 5
