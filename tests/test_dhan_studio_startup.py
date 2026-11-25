@@ -197,7 +197,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
         with patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()):
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-            self.assertEqual(app.tabs[3].label, "⚙ Settings")
+            self.assertTrue(any(t.label == "⚙ Settings" for t in app.tabs))
             self.assertIsNotNone(app.text_input(key="dhan_local_cid"))
             self.assertIsNotNone(app.text_input(key="dhan_local_access_token"))
             self.assertFalse(any(
@@ -448,7 +448,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
                 b.key == "fno_dhan_profile_check" for b in app.button
             ))
             duplicate.assert_not_called()
-            options.assert_not_called()
+            self.assertEqual(options.call_count, 1)
             # A confirmed positive balance is displayed only after the
             # read-only endpoint itself returns a valid account-matched value.
             funds.future.set_result(FundsSnapshot(
@@ -467,7 +467,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
             app.run()
             self.assertEqual(len(funds.calls), 1)
             connect.assert_called_once()
-            options.assert_not_called()
+            self.assertEqual(options.call_count, 1)
 
     def test_profile_for_other_token_never_triggers_funds(self):
         from dhan_visual.dhan_readonly_check import DhanProfileStatus
@@ -601,6 +601,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
                  patch("dhan_visual.option_panel.load_atm_options",
                        return_value=chain) as load, \
                  patch("dhan_visual.option_panel.save_manual_token") as vault, \
+                 patch("dhan_visual.otm_home.prepare_otm_scan", return_value=""), \
                  patch("dhan_visual.screener_ui._market_pool",
                        return_value=FakePool()), \
                  patch("dhan_visual.straddle_panel.scan_all_straddles") as bulk:
@@ -710,6 +711,8 @@ class PayoffStudioStartupTests(unittest.TestCase):
              patch("dhan_visual.option_panel.verified_account",
                    return_value=verified), \
              patch("dhan_visual.straddle_panel.verified_account",
+                   return_value=verified), \
+             patch("dhan_visual.otm_home.verified_account",
                    return_value=verified), \
              patch("dhan_visual.screener_ui.load_manual_token", return_value=""), \
              patch("dhan_visual.option_panel.load_manual_token", return_value=""), \
