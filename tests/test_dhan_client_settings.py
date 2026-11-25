@@ -63,6 +63,9 @@ class ClientIdSettingsTests(unittest.TestCase):
 
         app_file = Path(__file__).resolve().parents[1] / "dhan_visual" / "app.py"
         app = AppTest.from_file(str(app_file), default_timeout=35)
+        # Settings is deliberately lazy: explicitly open it for credential tests.
+        app.session_state["ccs_selective_page"] = "⚙ Settings"
+        app.session_state["ccs_active_broker"] = "Dhan"
         app.session_state["fno_universe_data"] = (
             [DhanUnderlying(Underlying("TCS", "TCS", {"NOV-26": 225}), 11536)],
             "Verified fixture",
@@ -86,6 +89,9 @@ class ClientIdSettingsTests(unittest.TestCase):
 
         app_file = Path(__file__).resolve().parents[1] / "dhan_visual" / "app.py"
         app = AppTest.from_file(str(app_file), default_timeout=35)
+        # Settings is deliberately lazy: explicitly open it for credential tests.
+        app.session_state["ccs_selective_page"] = "⚙ Settings"
+        app.session_state["ccs_active_broker"] = "Dhan"
         app.session_state["fno_universe_data"] = (
             [DhanUnderlying(Underlying("TCS", "TCS", {"NOV-26": 225}), 11536)],
             "Verified fixture",
