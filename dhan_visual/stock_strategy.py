@@ -36,16 +36,16 @@ def expiry_legs(legs, expiry):
     return [leg for leg in legs if leg.kind == "Equity" or leg.expiry == expiry]
 
 
-def payoff(legs, spot):
-    return sum(leg.payoff(spot) for leg in legs)
+def payoff(legs, spot, charges=0.):
+    return sum(leg.payoff(spot) for leg in legs)-charges
 
 
-def payoff_summary(legs):
+def payoff_summary(legs, charges=0.):
     """Exact extrema on S >= 0, including the unbounded right-hand tail."""
     if not legs:
         return dict(max_profit=0., max_loss=0., breakevens=[], flat_zero=False)
     points = sorted({0., *(leg.strike for leg in legs if leg.kind in ("CE", "PE"))})
-    values = [payoff(legs, p) for p in points]
+    values = [payoff(legs, p, charges) for p in points]
     slope = sum((1 if leg.side == "Buy" else -1)*leg.units
                 for leg in legs if leg.kind in ("CE", "Equity", "Futures"))
     roots = []

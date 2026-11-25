@@ -244,12 +244,14 @@ def _display(frame, *, market=False):
 
 
 def render_selective_home():
+    from .workspace_ui import prepare_filters, save_scan_controls, remember_pref, render_historical_shortlist
     from .stock_strategy_ui import ACTIVE, launch_strategy, render_stock_strategy
     if st.session_state.get(ACTIVE):
         render_stock_strategy()
         return
     st.markdown("### OTM Covered Call")
     st.caption("Select filters first. Nothing is fetched from FYERS or Yahoo until you apply a scan.")
+    render_historical_shortlist()
     access = connected_fyers()
     if not access:
         st.info("Connect and select FYERS in Settings to use the data-saving scan.")
@@ -264,6 +266,7 @@ def render_selective_home():
         return
     snapshot = _snapshot(access)
     default_expiry = snapshot["expiry"] if snapshot and snapshot["expiry"] in expiries else choose_expiry(entries)
+    prepare_filters(expiries)
     with st.form("selective_scan_filters"):
         st.markdown("#### Quick Scan")
         left, right = st.columns(2)
@@ -357,6 +360,7 @@ def render_selective_home():
     title.caption(f"{len(frame)} qualifying stocks · {len(pending)} eligible option chains not yet checked")
     if fit.button("Auto-fit", key="selective_autofit", use_container_width=True):
         click_autofit(st.session_state)
+        remember_pref("autofit",True)
     unknown_r1 = sum(r1_status(cmp, snapshot["levels"].get(symbol)) == "—"
                      for symbol, cmp in zip(premium_rows(available, snapshot)["Stock"],
                                             premium_rows(available, snapshot)["CMP (₹)"]))
@@ -367,6 +371,7 @@ def render_selective_home():
         st.caption("Partial scan: more matches may exist in the unscanned stocks. Automatic batches run only on Home while active.")
     if snapshot["options_at"]:
         st.caption("Options requested " + snapshot["options_at"] + " · each stock checked once; cached quotes are not refreshed automatically.")
+    save_scan_controls(snapshot,frame)
     frame = _manual_futures_column(frame, snapshot["expiry"])
     _display(frame)
     if not frame.empty:

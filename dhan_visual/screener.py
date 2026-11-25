@@ -6,6 +6,8 @@ No broker accounts, order imports, credentials or background workers.
 """
 from __future__ import annotations
 
+from .api_monitor import record
+
 import csv
 import io
 import math
@@ -208,6 +210,7 @@ def fetch_yahoo_quotes(symbols: list[str], batch_size: int = 25) -> tuple[dict[s
         group = symbols[offset:offset + batch_size]
         tickers = " ".join(as_yahoo_symbol(s) for s in group)
         try:
+            record("Yahoo")
             frame = yf.download(
                 tickers=tickers, interval="15m", period="5d", group_by="ticker",
                 auto_adjust=False, progress=False, threads=True, timeout=12,
@@ -219,6 +222,7 @@ def fetch_yahoo_quotes(symbols: list[str], batch_size: int = 25) -> tuple[dict[s
         missing = [symbol for symbol in group if symbol not in quotes]
         if missing:
             try:
+                record("Yahoo")
                 daily = yf.download(
                     tickers=" ".join(as_yahoo_symbol(s) for s in missing),
                     interval="1d", period="5d", group_by="ticker",

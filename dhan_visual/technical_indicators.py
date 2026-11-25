@@ -7,6 +7,8 @@ No synthetic OHLC, no forward-fill, no intraday history and no broker orders.
 """
 from __future__ import annotations
 
+from .api_monitor import record
+
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -135,6 +137,7 @@ def download_history_batch(symbols: list[str], *, current_month: date) -> tuple[
         raise ValueError("Batch must contain 1–10 stock F&O symbols")
     import yfinance as yf
 
+    record("Yahoo")
     frame = yf.download(
         tickers=" ".join(as_yahoo_symbol(x) for x in symbols),
         interval="1d", period="2y", group_by="ticker",
