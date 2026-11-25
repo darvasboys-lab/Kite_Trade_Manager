@@ -157,6 +157,34 @@ class FyersDataOnlyTests(unittest.TestCase):
         self.assertEqual(levels.asof, "2026-11-24")
         self.assertEqual(get.call_args.kwargs["params"]["resolution"], "D")
 
+    def test_fyers_r1_todays_completed_15m_cross_is_verified(self):
+        from dhan_visual.r1_today import session_r1_cross
+        day = date(2026, 11, 25)
+        now = datetime(2026, 11, 25, 10, 2, tzinfo=fy.INDIA)
+        def bar(y, m, d, hh, mm, o, h, lo, close):
+            return [
+                int(datetime(y, m, d, hh, mm, tzinfo=fy.INDIA).timestamp()),
+                o, h, lo, close, 100,
+            ]
+        payload = {"s": "ok", "candles": [
+            bar(2026, 11, 23, 15, 15, 95, 97, 94, 95),
+            bar(2026, 11, 25, 9, 15, 99, 101, 98, 100.5),
+            bar(2026, 11, 25, 9, 30, 100.5, 102, 100, 101),
+            bar(2026, 11, 25, 9, 45, 101, 105, 101, 104),
+        ]}
+        get = Mock(return_value=FakeHTTP(payload))
+        with patch.object(fy, "_rate_gate"):
+            candles = fy.fetch_r1_intraday_bars(
+                self.access, "TCS", day=day, now=now, get=get,
+            )
+        # At 10:02 the 9:45 bar has not yet finished; skip it.
+        self.assertEqual(len(candles), 3)
+        crossing, close = session_r1_cross(
+            candles, Decimal("100"), day,
+        )
+        self.assertEqual(crossing.first_bar_time, "09:15")
+        self.assertEqual(close, Decimal("101.0"))
+
     def test_token_expiry_respects_0630_ist(self):
         early = datetime(2026, 11, 25, 6, 29, tzinfo=fy.INDIA)
         late = datetime(2026, 11, 25, 6, 31, tzinfo=fy.INDIA)
