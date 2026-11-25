@@ -28,7 +28,7 @@ from .screener import choose_expiry, expiry_options
 from .straddle_panel import (
     _scan_key, _drain_events, available_otm_calls, prepare_otm_scan,
 )
-from .table_layout import dataframe_key, autofit_column_config
+from .table_layout import dataframe_key, autofit_column_config, autofit_enabled
 from .screener_ui import (
     _auto_universe, _dhan_funds_panel, _start_dhan_prices,
     _start_yahoo_prices, _universe_key,
@@ -137,7 +137,7 @@ def _otm_table(available, expiry, *, cid, token, cash_quotes):
                      "the Dhan option-chain underlying price. Missing data "
                      "is blank, not a zero or synthetic option premium.",
             ),
-        }),
+        }, autofit_enabled(st.session_state)),
     )
     if mode == "Live" and (not priced or (state and state.get("errors"))):
         with st.expander("Why is an OTM CE value missing?", expanded=False):
