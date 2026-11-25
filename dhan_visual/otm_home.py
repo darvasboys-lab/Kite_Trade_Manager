@@ -225,6 +225,28 @@ def render_otm_home():
     else:
         st.warning("Dhan not connected · enter details in Settings")
 
+    if valid_client_id(cid) and len(token) >= 16:
+        if st.button(
+            "Check Dhan connection", key="otm_home_check_connection",
+            help="One read-only Dhan Profile GET. Confirms current token "
+                 "and Data API entitlement, without repeating setup.",
+        ):
+            try:
+                result = check_dhan_data_plan(cid, token)
+                st.session_state["fno_dhan_profile_status"] = {
+                    "cid": cid, "status": result,
+                    "token_fingerprint": sha256(token.encode()).hexdigest(),
+                }
+                if result.data_ready:
+                    st.toast("✓ Dhan account and Data API verified", icon="✅")
+                else:
+                    st.warning(
+                        "Dhan connected, but Data API subscription is inactive."
+                    )
+                st.rerun()
+            except DhanProfileError as exc:
+                st.error(str(exc))
+
     # Compact account balance from the same read-only funds endpoint, no
     # duplicate broker request between Home and Page 2.
     if profile or saved:
