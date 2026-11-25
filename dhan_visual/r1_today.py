@@ -16,6 +16,8 @@ no broker API calls, no streamlit context and no TradingView requests.
 """
 from __future__ import annotations
 
+from .api_monitor import record
+
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
@@ -173,6 +175,7 @@ def yahoo_r1_batch(symbols: list[str], r1_by_symbol: dict[str, Decimal],
         raise ValueError("R1 batch must contain 1–6 underlying symbols")
     import yfinance as yf
 
+    record("Yahoo")
     raw = yf.download(
         tickers=" ".join(as_yahoo_symbol(sym) for sym in symbols),
         interval="15m", period="5d", group_by="ticker",
