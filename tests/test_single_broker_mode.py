@@ -22,10 +22,10 @@ class SingleBrokerUITests(unittest.TestCase):
              patch("dhan_visual.screener_ui.read_dhan_balance") as dhan_funds:
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-            self.assertEqual(app.radio(key="ccs_active_broker").value, "Dhan")
-            app.radio(key="ccs_active_broker").set_value("FYERS").run()
+            self.assertEqual(app.radio(key="ccs_broker_requested").value, "Dhan")
+            app.radio(key="ccs_broker_requested").set_value("FYERS").run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-            self.assertEqual(app.radio(key="ccs_active_broker").value, "FYERS")
+            self.assertEqual(app.radio(key="ccs_broker_requested").value, "FYERS")
             self.assertEqual(app.radio(key="fno_ce5_mode").value, "FYERS")
             self.assertEqual(app.radio(key="fno_home_ce_source").value, "FYERS")
             self.assertEqual(app.radio(key="fno_price_provider").value, "FYERS")
@@ -34,9 +34,9 @@ class SingleBrokerUITests(unittest.TestCase):
             dhan_api.assert_not_called()
             dhan_funds.assert_not_called()
             self.assertEqual(len(fyers.calls), 0)  # Not authorized yet
-            app.radio(key="ccs_active_broker").set_value("Dhan").run()
+            app.radio(key="ccs_broker_requested").set_value("Dhan").run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-            self.assertEqual(app.radio(key="ccs_active_broker").value, "Dhan")
+            self.assertEqual(app.radio(key="ccs_broker_requested").value, "Dhan")
             self.assertEqual(app.radio(key="fno_ce5_mode").value, "EOD")
             self.assertEqual(app.radio(key="fno_price_provider").value, "Auto (Dhan → Yahoo)")
 
@@ -79,7 +79,7 @@ class SingleBrokerUITests(unittest.TestCase):
              patch("dhan_visual.fyers_ui.read_access_from_vault", return_value=None):
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-            app.radio(key="ccs_active_broker").set_value("FYERS").run()
+            app.radio(key="ccs_broker_requested").set_value("FYERS").run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
             self.assertEqual(app.session_state["ccs_pending_broker"], "FYERS")
             self.assertEqual(app.session_state["ccs_active_broker"], "Dhan")
@@ -91,7 +91,7 @@ class SingleBrokerUITests(unittest.TestCase):
             ))
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-            self.assertEqual(app.radio(key="ccs_active_broker").value, "FYERS")
+            self.assertEqual(app.radio(key="ccs_broker_requested").value, "FYERS")
             self.assertIsNone(app.session_state.get("ccs_pending_broker"))
 
 
