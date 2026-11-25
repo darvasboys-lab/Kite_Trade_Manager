@@ -45,7 +45,8 @@ def _local_creds():
         or ""
     ).strip()
     auto = st.session_state.get("dhan_auto_access")
-    if not token and isinstance(auto, AutoAccess) and auto.usable():
+    if (not token and isinstance(auto, AutoAccess) and auto.usable()
+            and st.session_state.get("dhan_auto_access_cid") == cid):
         token = auto.token
     if not token and cid and is_configured(cid):
         old = read_cached_token(cid)
@@ -183,6 +184,7 @@ def render_atm_panel(available, filtered_rows, expiry):
                             access = load_or_generate(cid)
                             access_token = access.token
                             st.session_state["dhan_auto_access"] = access
+                            st.session_state["dhan_auto_access_cid"] = cid
                         except AutoAuthError as exc:
                             st.error(f"Dhan option-chain authentication failed: {exc}")
                 if len(access_token) < 16:
