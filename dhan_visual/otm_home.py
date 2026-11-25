@@ -14,6 +14,7 @@ import pandas as pd
 import streamlit as st
 
 from .ce_eod_remote import IST
+from .ce_eod_store import load_local_eod, save_verified_report, eod_cash_quotes
 from .nse_eod_ce import NseEodError, NseEodSnapshot, parse_nse_fo_eod
 from .dhan_integration_state import (
     verified_account, token_still_current,
@@ -338,11 +339,17 @@ def render_otm_home():
         verified=bool(saved and token and token_still_current(saved)),
         token_available=bool(token),
     )
-    if selected_source == "Dhan":
+    if selected_source == "Dhan" and inactive:
+        # Profile and funds GET remain available even when market quotes are
+        # blocked. Do not repeatedly call paid-only quote endpoints.
+        if provider == AUTO_SOURCE:
+            _start_yahoo_prices(universe, expiry)
+        else:
+            st.caption("Dhan market-data plan inactive · using NSE EOD "
+                       "reference prices when a daily report is available.")
+    elif selected_source == "Dhan":
         if valid_client_id(cid) and token:
             _start_dhan_prices(universe, cid, token)
-        # A user explicitly selected Dhan: never quietly switch to Yahoo.
-        # The full Page 2 will display broker-credential diagnostics.
     else:
         _start_yahoo_prices(universe, expiry)
 
@@ -386,6 +393,14 @@ def render_otm_home():
         # Home, not hidden on Page 2. Works offline without any broker API.
         imported = st.session_state.get("fno_ce5_home_uploaded") or {}
         snap = imported.get("snapshot")
+        local_snap, local_label = load_local_eod()
+        if (local_snap is not None and
+                (not isinstance(snap, NseEodSnapshot)
+                 or local_snap.report_date > snap.report_date)):
+            snap = local_snap
+            st.session_state["fno_ce5_home_uploaded"] = {
+                "snapshot": snap, "filename": local_label,
+            }
         if isinstance(snap, NseEodSnapshot):
             count = len(snap.quotes.get(expiry, {}))
             st.success(
@@ -410,7 +425,14 @@ def render_otm_home():
             )
             if uploaded is not None:
                 try:
-                    snapshot = validate_home_eod_upload(uploaded.getvalue())
+                    raw_report = uploaded.getvalue()
+                    snapshot = validate_home_eod_upload(raw_report)
+                    # The last valid NSE report is available after app restart,
+                    # without saving any Dhan credentials or calling its API.
+                    saved_snapshot = save_verified_report(raw_report)
+                    if saved_snapshot.report_date > snapshot.report_date:
+                        snapshot = saved_snapshot
+                    snap = snapshot
                     st.session_state["fno_ce5_home_uploaded"] = {
                         "snapshot": snapshot, "filename": uploaded.name,
                     }
@@ -425,7 +447,7 @@ def render_otm_home():
                             f"stock CE closing prices for {expiry}. "
                             "Try an expiry month that exists in the report."
                         )
-                except (NseEodError, ValueError) as exc:
+                except (NseEodError, ValueError, OSError) as exc:
                     st.error(f"Cannot use the selected NSE file: {exc}")
             st.caption(
                 "Reports contain closing prices and may include "
@@ -434,4 +456,27 @@ def render_otm_home():
             )
 
     cash = _cash_quotes(universe, cid, token)
+    if mode == "EOD":
+        # Historical spot references can fill a blank cash column, but must
+        # never replace genuine available Dhan or Yahoo prices.
+        snap_options = [
+            candidate for candidate in (
+                (st.session_state.get("fno_ce5_home_uploaded") or {}).get("snapshot"),
+                st.session_state.get("fno_eod_selected_snapshot"),
+            ) if isinstance(candidate, NseEodSnapshot)
+        ]
+        if snap_options:
+            best = max(snap_options, key=lambda candidate: candidate.report_date)
+            reference = eod_cash_quotes(best)
+            fallback_count = sum(
+                1 for sym in reference
+                if sym not in cash and sym in {i.entry.symbol for i in available}
+            )
+            cash = merge_dhan_yahoo(reference, cash)
+            if fallback_count:
+                st.caption(
+                    f"NSE F&O report {best.report_date} · {fallback_count} "
+                    "historical closing references fill missing CMP cells. "
+                    "Not live stock prices."
+                )
     _otm_table(available, expiry, cid=cid, token=token, cash_quotes=cash)

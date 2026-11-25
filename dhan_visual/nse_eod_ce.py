@@ -6,7 +6,7 @@ The close and underlying reference MUST come from the same dated NSE report.
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 import io
@@ -39,9 +39,28 @@ class NseEodCall:
 
 
 @dataclass(frozen=True)
+class NseEodStraddle:
+    symbol: str
+    expiry: str
+    strike: Decimal
+    underlying_close: Decimal
+    call_close: Decimal
+    put_close: Decimal
+    combined_close: Decimal
+    premium_pct: Decimal
+    report_date: str
+    call_volume: int
+    put_volume: int
+
+
+@dataclass(frozen=True)
 class NseEodSnapshot:
     report_date: str
     quotes: dict[str, dict[str, NseEodCall]]
+    # Same-date reference underlying closes, including stocks with no priced
+    # 5%+ CE. Never substitute these historical closes for live LTP.
+    underlyings: dict[str, Decimal] = field(default_factory=dict)
+    straddles: dict[str, dict[str, NseEodStraddle]] = field(default_factory=dict)
 
 
 def _number(raw: str) -> Decimal | None:
@@ -113,6 +132,9 @@ def parse_nse_fo_eod(payload: bytes) -> NseEodSnapshot:
     asof = None
     groups: dict[tuple[str, str], dict[date, list[tuple[Decimal, Decimal, Decimal, int]]]] = {}
     seen_stock_ce = 0
+    observed_spots: dict[str, set[Decimal]] = {}
+    # Each monthly ATM pair must have one exact expiry and one exact strike.
+    atm_groups: dict = {}
     for row_index, row in enumerate(reader, start=1):
         if row_index > MAX_RECORDS:
             raise NseEodError("NSE daily report exceeds record safety limit")
@@ -125,7 +147,30 @@ def parse_nse_fo_eod(payload: bytes) -> NseEodSnapshot:
             raise NseEodError("NSE CSV contains multiple business dates")
         if (row.get("FinInstrmTp") or "").strip().upper() != "STO":
             continue
-        if (row.get("OptnTp") or "").strip().upper() != "CE":
+        symbol_for_spot = (row.get("TckrSymb") or "").strip().upper()
+        underlying_for_spot = _number(row.get("UndrlygPric", ""))
+        expiry_for_spot = _date(row.get("XpryDt", ""))
+        if (symbol_for_spot and underlying_for_spot
+                and expiry_for_spot and expiry_for_spot >= day):
+            observed_spots.setdefault(symbol_for_spot, set()).add(underlying_for_spot)
+        option_type = (row.get("OptnTp") or "").strip().upper()
+        if (option_type in ("CE", "PE") and symbol_for_spot
+                and underlying_for_spot and expiry_for_spot
+                and expiry_for_spot >= day):
+            candidate_strike = _number(row.get("StrkPric", ""))
+            if candidate_strike is not None:
+                candidate_close = _number(row.get("ClsPric", "")) or Decimal(0)
+                candidate_volume = _number(row.get("TtlTradgVol", ""))
+                traded = (int(candidate_volume)
+                          if candidate_volume is not None
+                          and candidate_volume == int(candidate_volume) else 0)
+                legs = atm_groups.setdefault(
+                    (symbol_for_spot, _month(expiry_for_spot)), {}
+                ).setdefault(expiry_for_spot, {}).setdefault(candidate_strike, {})
+                legs.setdefault(option_type, []).append(
+                    (underlying_for_spot, candidate_close, traded)
+                )
+        if option_type != "CE":
             continue
         seen_stock_ce += 1
         symbol = (row.get("TckrSymb") or "").strip().upper()
@@ -171,4 +216,39 @@ def parse_nse_fo_eod(payload: bytes) -> NseEodSnapshot:
             report_date=asof.isoformat(), volume=volume,
         )
         result.setdefault(month, {})[symbol] = quote
-    return NseEodSnapshot(report_date=asof.isoformat(), quotes=result)
+    underlyings = {
+        symbol: next(iter(prices))
+        for symbol, prices in observed_spots.items() if len(prices) == 1
+    }
+    straddles: dict[str, dict[str, NseEodStraddle]] = {}
+    for (symbol, month), expiry_map in atm_groups.items():
+        if len(expiry_map) != 1:
+            continue
+        expiry, strikes = next(iter(expiry_map.items()))
+        valid_spot = underlyings.get(symbol)
+        if not valid_spot or not strikes:
+            continue
+        nearest = min(strikes, key=lambda strike: (abs(strike-valid_spot), strike))
+        legs = strikes[nearest]
+        calls, puts = legs.get("CE", []), legs.get("PE", [])
+        # Reject duplicate/missing legs and never substitute another strike.
+        if len(calls) != 1 or len(puts) != 1:
+            continue
+        ce_spot, call_close, ce_volume = calls[0]
+        pe_spot, put_close, pe_volume = puts[0]
+        if (ce_spot != valid_spot or pe_spot != valid_spot
+                or call_close <= 0 or put_close <= 0):
+            continue
+        combined = call_close + put_close
+        straddles.setdefault(month, {})[symbol] = NseEodStraddle(
+            symbol=symbol, expiry=expiry.isoformat(), strike=nearest,
+            underlying_close=valid_spot, call_close=call_close,
+            put_close=put_close, combined_close=combined,
+            premium_pct=combined / valid_spot * Decimal(100),
+            report_date=asof.isoformat(),
+            call_volume=ce_volume, put_volume=pe_volume,
+        )
+    return NseEodSnapshot(
+        report_date=asof.isoformat(), quotes=result,
+        underlyings=underlyings, straddles=straddles,
+    )
