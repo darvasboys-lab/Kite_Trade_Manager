@@ -1127,6 +1127,11 @@ def render_screener():
            </div>""", unsafe_allow_html=True,
     )
 
+    # Apply post-verification routing before rendering Streamlit's radio
+    # widget. Never modify a widget-owned session key after it exists.
+    if st.session_state.pop("fno_activate_auto_quote_on_next_run", False):
+        st.session_state["fno_price_provider"] = AUTO_SOURCE
+
     # Compact one-row toolbar: visible expiry + three tucked-away controls.
     # All prior Streamlit widget keys are preserved for saved user selections.
     expiry_col, search_col, filters_col, source_col, autofit_col = st.columns(
