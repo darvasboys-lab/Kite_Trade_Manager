@@ -422,7 +422,10 @@ def _dhan_credentials(*, need_market=False):
     # so its existing interference warning remains and user consent is required.
     current_id = current_id.strip()
     automatic = _auto_login_panel(
-        current_id, manual, allow_login=need_market,
+        current_id,
+        "" if verified is not None and not token_still_current(verified)
+        else manual,
+        allow_login=need_market,
     )
     secure = load_manual_token(current_id) if valid_client_id(current_id) else ""
     # A previously verified (but now expired) manual token cannot trigger
