@@ -700,6 +700,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
              patch("dhan_visual.option_panel.check_dhan_data_plan") as duplicate, \
              patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()), \
              patch("dhan_visual.screener_ui._funds_pool", return_value=funds), \
+             patch("dhan_visual.straddle_panel.nse_regular_session", return_value=True), \
              patch("dhan_visual.straddle_panel.scan_all_straddles") as options:
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
