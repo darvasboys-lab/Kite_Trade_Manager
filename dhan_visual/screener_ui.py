@@ -1555,6 +1555,38 @@ def render_screener():
         sym: quote for sym, quote in all_prices.items()
         if sym in {row.entry.symbol for row in available}
     }
+    # Options and free daily cash references are independently source-labeled.
+    # Compute the CE ratio ONLY from the same EOD report's underlying;
+    # never calculate it from a delayed Yahoo/Dhan stock price.
+    dhan_ce5 = available_otm_calls(available, expiry)
+    if "fno_ce5_mode" not in st.session_state:
+        profile = _confirmed_dhan_profile(*dhan_credentials)
+        st.session_state["fno_ce5_mode"] = (
+            "Live" if profile is not None and profile.data_ready else "EOD"
+        )
+    if st.session_state.pop("fno_activate_live_on_next_run", False):
+        profile = _confirmed_dhan_profile(*dhan_credentials)
+        if profile is not None and profile.data_ready:
+            st.session_state["fno_ce5_mode"] = "Live"
+    eod_calls, eod_date = _free_ce5_panel(
+        expiry, dhan_count=len(dhan_ce5), available=available,
+    )
+    ce_mode = st.session_state.get("fno_ce5_mode", "EOD")
+    eod_fallback = 0
+    if ce_mode == "EOD":
+        local_snapshot = st.session_state.get("fno_eod_selected_snapshot")
+        if local_snapshot is not None:
+            valid_symbols = {row.entry.symbol for row in available}
+            for sym, quote in eod_cash_quotes(local_snapshot).items():
+                if sym in valid_symbols and sym not in prices:
+                    prices[sym] = quote
+                    eod_fallback += 1
+            if eod_fallback:
+                st.caption(
+                    f"NSE F&O EOD {local_snapshot.report_date} · "
+                    f"{eod_fallback} historical underlying closing prices used "
+                    "where Yahoo/Dhan was unavailable (not live CMP)."
+                )
     filled = len(prices)
     st.markdown(
         f'<div class="ccs-market-strip">'
@@ -1602,19 +1634,6 @@ def render_screener():
         visible_stage == 4
         and technical_state.get("status") == "complete"
     )
-    dhan_ce5 = available_otm_calls(available, expiry)
-    # Across browser/app restarts a verified Dhan connection defaults to
-    # Live CE. A user-selected EOD preference still survives normal reruns.
-    if ("fno_ce5_mode" not in st.session_state
-            and verified_account(dhan_credentials[0]) is not None):
-        st.session_state["fno_ce5_mode"] = "Live"
-    if st.session_state.pop("fno_activate_live_on_next_run", False):
-        # Safe to update before the CE radio widget exists in this run.
-        st.session_state["fno_ce5_mode"] = "Live"
-    eod_calls, eod_date = _free_ce5_panel(
-        expiry, dhan_count=len(dhan_ce5), available=available,
-    )
-    ce_mode = st.session_state.get("fno_ce5_mode", "EOD")
     selected_ce = eod_calls if ce_mode == "EOD" else dhan_ce5
     # The lightweight first Home page and the full screener show the
     # same source+expiry CE data. Do NOT fetch a second option-chain.
@@ -1628,7 +1647,7 @@ def render_screener():
         technically_ready=r1_ready, priority_quotes=prices,
         ce_calls=selected_ce,
     )
-    st.markdown(f"**{len(rows):,} displayed stocks** · {filled:,} with {provider} prices")
+    st.markdown(f"**{len(rows):,} displayed stocks** · {filled:,} cash prices/references available")
     if not rows:
         st.info("No stocks match the selected value filter. The source may also have missing prices.")
     else:
@@ -1636,7 +1655,9 @@ def render_screener():
         config = {
             "Symbol": st.column_config.TextColumn("Stock"),
             "Last price (₹)": st.column_config.NumberColumn(
-                "Cash price (₹)", format="₹%.2f"),
+                "Cash price (₹)", format="₹%.2f",
+                help="May be live/delayed data or the dated NSE F&O EOD "
+                     "underlying reference where no other cash quote was available."),
             "Lot size": st.column_config.NumberColumn("Lot size", format="%d"),
         }
         if compact:
