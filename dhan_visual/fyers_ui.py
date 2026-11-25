@@ -384,8 +384,16 @@ def render_fyers_straddles(available, expiry: str):
         st.caption("FYERS not selected. Choose FYERS as active broker to see its options.")
         return
     snap = st.session_state.get("fno_fyers_chain_snapshot") or {}
-    values = snap.get("straddles") or {}
     stocks = {x.entry.symbol: x.entry.lots.get(expiry) for x in available}
+    access = connected_fyers()
+    symbols = sorted(sym for sym, lot in stocks.items() if lot)
+    matching = bool(
+        access and symbols and snap.get("expiry") == expiry
+        and snap.get("key") == _scope(access, symbols, expiry)
+    )
+    # Do not reuse a previously authorized token's option prices, and do not
+    # display stale strike rows from a different expiry or stock universe.
+    values = (snap.get("straddles") or {}) if matching else {}
     rows = []
     for ticker, x in values.items():
         if ticker not in stocks or not stocks[ticker]:
