@@ -180,6 +180,83 @@ class PayoffStudioStartupTests(unittest.TestCase):
             self.assertEqual(job["cid"], cid)
             self.assertEqual(job["key"], _scan_key(example(), "DEC-26"))
 
+    def test_inactive_data_plan_blocks_home_and_page_two_option_workers(self):
+        """No option-chain requests after a current Dhan plan rejection."""
+        from datetime import timedelta
+        from dhan_visual.dhan_readonly_check import DhanProfileStatus
+        from dhan_visual.dhan_integration_state import VerifiedIntegration
+        cid, token = "1234567890", "INACTIVE_PLAN_TOKEN_FOR_TEST"
+        expiry = (datetime.now(IST) + timedelta(hours=10)).strftime("%d/%m/%Y %H:%M")
+        saved = VerifiedIntegration(
+            cid, datetime.now(IST).isoformat(), "TCS",
+            "2026-12-29", "Active",
+            (datetime.now(IST) + timedelta(hours=10)).isoformat(),
+        )
+        app = app_with_catalogue()
+        app.session_state["dhan_local_cid"] = cid
+        app.session_state["dhan_local_access_token"] = token
+        app.session_state["fno_home_expiry"] = "DEC-26"
+        app.session_state["fno_expiry"] = "DEC-26"
+        app.session_state["fno_ce5_mode"] = "Live"
+        app.session_state["fno_dhan_profile_status"] = {
+            "cid": cid,
+            "token_fingerprint": hashlib.sha256(token.encode()).hexdigest(),
+            "status": DhanProfileStatus(
+                "Deactive", "2026-11-26", expiry,
+                True, datetime.now(IST).isoformat(),
+            ),
+        }
+        with patch("dhan_visual.screener_ui._market_pool",
+                   return_value=FakePool()), \
+             patch("dhan_visual.screener_ui._funds_pool",
+                   return_value=FakePool()), \
+             patch("dhan_visual.otm_home.verified_account",
+                   return_value=saved), \
+             patch("dhan_visual.straddle_panel.verified_account",
+                   return_value=saved), \
+             patch("dhan_visual.screener_ui.verified_account",
+                   return_value=saved), \
+             patch("dhan_visual.straddle_panel.nse_regular_session",
+                   return_value=True), \
+             patch("dhan_visual.straddle_panel._straddle_pool",
+                   return_value=FakePool()) as pool:
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(len(pool.calls), 0)
+            self.assertTrue(any(
+                "data api plan is inactive" in str(node.value).lower()
+                for node in app.warning
+            ))
+            app.button(key="fno_straddle_start").click().run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            # Explicit Page 2 Start is rejected just like automatic Home.
+            self.assertEqual(len(pool.calls), 0)
+
+    def test_home_ratio_is_dhan_owned_even_if_displayed_cash_cmp_differs(self):
+        from dhan_visual.otm_home import otm_home_dataframe
+        from dhan_visual.straddle_scan import OtmCall5Quote
+        call = OtmCall5Quote(
+            "TCS", "2026-12-29", Decimal("105"),
+            Decimal("100"), Decimal("2"), Decimal("2"), "offline",
+        )
+        frame = otm_home_dataframe(
+            example(),
+            {"TCS": Quote(Decimal("103"), "offline", "Yahoo Finance")},
+            {"TCS": call},
+        )
+        self.assertEqual(
+            frame.loc[frame["Stock"] == "TCS", "CMP (₹)"].iloc[0],
+            103.0,
+        )
+        self.assertEqual(
+            frame.loc[frame["Stock"] == "TCS", "5%+ OTM CE (%)"].iloc[0],
+            2.0,
+        )
+        self.assertTrue(
+            frame.loc[frame["Stock"] == "SBIN",
+                      "5%+ OTM CE (%)"].isna().all()
+        )
+
     def test_home_and_screener_expiry_selectors_stay_in_sync(self):
         app = app_with_catalogue()
         with patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()):
