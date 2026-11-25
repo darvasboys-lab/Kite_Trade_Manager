@@ -160,7 +160,7 @@ class FyersDataOnlyTests(unittest.TestCase):
     def test_fyers_r1_todays_completed_15m_cross_is_verified(self):
         from dhan_visual.r1_today import session_r1_cross
         day = date(2026, 11, 25)
-        now = datetime(2026, 11, 25, 10, 2, tzinfo=fy.INDIA)
+        now = datetime(2026, 11, 25, 9, 55, tzinfo=fy.INDIA)
         def bar(y, m, d, hh, mm, o, h, lo, close):
             return [
                 int(datetime(y, m, d, hh, mm, tzinfo=fy.INDIA).timestamp()),
@@ -177,7 +177,7 @@ class FyersDataOnlyTests(unittest.TestCase):
             candles = fy.fetch_r1_intraday_bars(
                 self.access, "TCS", day=day, now=now, get=get,
             )
-        # At 10:02 the 9:45 bar has not yet finished; skip it.
+        # At 09:55 the 09:45 bar is still forming; skip it.
         self.assertEqual(len(candles), 3)
         crossing, close = session_r1_cross(
             candles, Decimal("100"), day,
