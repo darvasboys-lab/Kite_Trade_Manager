@@ -206,6 +206,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
                 True, datetime.now(IST).isoformat(),
             ),
         }
+        pool = FakePool()
         with patch("dhan_visual.screener_ui._market_pool",
                    return_value=FakePool()), \
              patch("dhan_visual.screener_ui._funds_pool",
@@ -219,7 +220,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
              patch("dhan_visual.straddle_panel.nse_regular_session",
                    return_value=True), \
              patch("dhan_visual.straddle_panel._straddle_pool",
-                   return_value=FakePool()) as pool:
+                   return_value=pool):
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
             self.assertEqual(len(pool.calls), 0)
