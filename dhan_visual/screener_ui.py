@@ -399,8 +399,10 @@ def _dhan_credentials(*, need_market=False):
         or ""
     ).strip()
     cached_manual = load_manual_token(current_id) if valid_client_id(current_id) else ""
-    available_token = existing_manual or cached_manual
     auto_available = bool(valid_client_id(current_id) and is_configured(current_id))
+    # Persisted, explicitly opted-in TOTP takes priority over a legacy
+    # manual token. Never claim a stale pasted token is today's connection.
+    available_token = "" if auto_available else (existing_manual or cached_manual)
     cached_auto = read_cached_token(current_id) if auto_available else None
     # A freshly generated Dhan TOTP token may be valid even when the
     # original setup-time manual token has expired.
@@ -415,7 +417,7 @@ def _dhan_credentials(*, need_market=False):
     )
     needs_token = bool(
         verified is not None and not (
-            token_still_current(verified) or auto_current
+            auto_current if auto_available else token_still_current(verified)
         )
     )
     # Avoid showing the complete onboarding form once the broker has passed
@@ -474,8 +476,9 @@ def _dhan_credentials(*, need_market=False):
         else:
             st.caption("Data API ACTIVE · verify one stock below to activate Live CE.")
 
-    setup_open = verified is None or (
-        not (available_token or auto_available) or needs_token
+    setup_open = (
+        (verified is None and not auto_available)
+        or (not auto_available and needs_token)
     )
     with st.expander(
         "Dhan setup · one-time (read-only)" if verified is None
@@ -501,14 +504,27 @@ def _dhan_credentials(*, need_market=False):
         elif current_id:
             st.warning("Enter a numeric Dhan Client ID")
 
-        manual = st.text_input(
-            "Dhan access token",
-            value=os.environ.get("DHAN_ACCESS_TOKEN", ""),
-            type="password",
-            key="dhan_local_access_token",
-            help="Get a current token from Dhan Web. "
-                 "This is a password field; no access token is sent to ChatGPT.",
-        ).strip()
+        if auto_available:
+            st.success(
+                "✓ Dhan PIN + permanent TOTP secret saved securely. "
+                "A fresh access token is generated automatically as needed."
+            )
+            st.caption(
+                "Manual access tokens are optional. Automatic generation "
+                "will use the saved credentials in Windows Credential Manager."
+            )
+        with st.expander(
+            "Manual access token · fallback only",
+            expanded=not auto_available,
+        ):
+            manual = st.text_input(
+                "Dhan access token",
+                value=os.environ.get("DHAN_ACCESS_TOKEN", ""),
+                type="password",
+                key="dhan_local_access_token",
+                help="Optional when PIN and TOTP are saved. "
+                     "Never paste your broker token into chat.",
+            ).strip()
         remember = st.checkbox(
             "Securely remember this verified token on this Windows PC "
             "(until expiry)",
@@ -520,27 +536,50 @@ def _dhan_credentials(*, need_market=False):
         # Profile authentication is the first explicit step. Unlike the
         # one-stock option test, it can show the Dhan funds balance immediately.
         if verified is None:
+            automatic_candidate = (
+                session_auto.token
+                if (st.session_state.get("dhan_auto_access_cid") == current_id
+                    and isinstance(session_auto, AutoAccess)
+                    and session_auto.usable())
+                else ""
+            ) or (
+                cached_auto.token
+                if isinstance(cached_auto, AutoAccess) and cached_auto.usable()
+                else ""
+            )
             candidate = (
-                manual or cached_manual
-                or (
-                    session_auto.token
-                    if (st.session_state.get("dhan_auto_access_cid") == current_id
-                        and isinstance(session_auto, AutoAccess)
-                        and session_auto.usable())
-                    else ""
-                )
-                or (cached_auto.token if isinstance(cached_auto, AutoAccess)
-                    and cached_auto.usable() else "")
+                automatic_candidate if auto_available
+                else (manual or cached_manual)
             )
             profile_ok = _confirmed_dhan_profile(current_id, candidate)
             if profile_ok is None:
+                if auto_available and not automatic_candidate:
+                    if st.session_state.get("dhan_auto_auth_job"):
+                        st.info("Generating a Dhan access token securely…")
+                    elif st.session_state.get("dhan_auto_error"):
+                        st.warning(
+                            "Automatic login could not be completed; "
+                            "see the TOTP status below."
+                        )
+                    else:
+                        st.caption(
+                            "Automatic token generation is enabled. "
+                            "The login starts without manual token entry."
+                        )
                 if st.button(
-                    "Connect to Dhan", key="dhan_connect_button",
+                    "Connect to Dhan" if not auto_available
+                    else "Verify Dhan connection",
+                    key="dhan_connect_button",
                     type="primary", use_container_width=True,
-                    help="Read-only GET /v2/profile. No orders, no new token.",
+                    disabled=auto_available and not automatic_candidate,
+                    help="Read-only GET /v2/profile. No orders. "
+                         "Saved PIN/TOTP will supply a generated token.",
                 ):
                     if not valid_client_id(current_id) or len(candidate) < 16:
-                        st.error("Enter a valid Client ID and Dhan access token.")
+                        st.error(
+                            "Enter your Client ID. With saved TOTP enabled, "
+                            "the app generates a token automatically."
+                        )
                     else:
                         with st.spinner("Verifying Dhan account…"):
                             try:
@@ -551,7 +590,7 @@ def _dhan_credentials(*, need_market=False):
                                         candidate.encode()
                                     ).hexdigest(),
                                 }
-                                if remember and manual:
+                                if remember and manual and not auto_available:
                                     try:
                                         save_manual_token(
                                             current_id, candidate,
@@ -572,7 +611,7 @@ def _dhan_credentials(*, need_market=False):
                     "✓ Connection verified. Balance loads above. "
                     "Next, verify one option chain below to complete setup."
                 )
-        if verified is not None:
+        if verified is not None and not auto_available:
             if st.button(
                 "Verify renewed token · skip full setup",
                 key="dhan_renew_token_only",
@@ -609,13 +648,20 @@ def _dhan_credentials(*, need_market=False):
     )
     automatic = _auto_login_panel(
         current_id,
-        "" if old_manual_expired else manual,
-        allow_login=need_market,
+        "" if auto_available or old_manual_expired else manual,
+        # Once a user has explicitly opted in and saved PIN/TOTP, resume
+        # automatic token generation even on an EOD-only first launch.
+        allow_login=need_market or auto_available,
     )
-    secure = load_manual_token(current_id) if valid_client_id(current_id) else ""
+    secure = (
+        load_manual_token(current_id)
+        if valid_client_id(current_id) and not auto_available else ""
+    )
     # A previously verified (but now expired) manual token cannot trigger
     # automatic quote calls. The explicit token-only renewal button above
     # remains available, and an independently current auto token can work.
+    if auto_available:
+        return current_id, automatic
     if old_manual_expired:
         return current_id, (automatic or secure)
     return current_id, (manual or automatic or secure)
@@ -1688,6 +1734,7 @@ def render_dhan_settings():
         st.session_state.get("fno_ce5_mode") == "Live"
         or st.session_state.get("fno_price_provider") == "Dhan"
         or (cid and verified_account(cid) is not None)
+        or (valid_client_id(cid) and is_configured(cid))
     )
     _dhan_credentials(need_market=need_market)
     loaded = st.session_state.get("fno_universe_data")
