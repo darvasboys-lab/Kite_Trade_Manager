@@ -167,10 +167,13 @@ def _display(frame, *, market=False):
         "Futures Price (₹)": st.column_config.NumberColumn("Futures Price (₹)", format="₹%.2f"),
         "Futures vs CMP (%)": st.column_config.NumberColumn("Futures vs CMP (%)", format="%+.2f%%"),
     }
-    if market:
-        frame = clickable_stock_frame(frame, source="Stock", target="TradingView chart")
-        config["Stock"] = None
-        config["TradingView chart"] = st.column_config.LinkColumn("Stock", display_text=TRADINGVIEW_SYMBOL_DISPLAY)
+    # Display-only link: retain raw NSE symbols in snapshots and CSV exports.
+    frame = clickable_stock_frame(frame, source="Stock", target="TradingView chart")
+    config["Stock"] = None
+    config["TradingView chart"] = st.column_config.LinkColumn(
+        "Stock", display_text=TRADINGVIEW_SYMBOL_DISPLAY,
+        help="Click the stock symbol to open its NSE cash chart in TradingView.",
+    )
     st.dataframe(frame, hide_index=True, use_container_width=True, height=520,
                  key=dataframe_key("selective_market" if market else "selective_home", st.session_state),
                  column_config=autofit_column_config(config, autofit_enabled(st.session_state)))
