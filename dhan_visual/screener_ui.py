@@ -985,12 +985,58 @@ def _free_ce5_panel(expiry, dhan_count=0, available=None):
              "option-chain LTP. No Yahoo options are fabricated.",
     )
     if mode == "Live":
+        # Stock cash LTP is NOT an options premium. A separate, paced Dhan
+        # option-chain scan is necessary to calculate the actual 5%+ CE.
         job = st.session_state.get("fno_straddle_job")
-        st.caption(
-            f"Dhan Live CE · {dhan_count} stock snapshots · "
-            + ("scanning in background (rate limited)" if job
-               else "awaiting or using last completed Dhan scan")
-        )
+        cid = str(st.session_state.get("dhan_local_cid") or read_client_id()).strip()
+        verified = bool(valid_client_id(cid) and verified_account(cid))
+        snap = (st.session_state.get("fno_straddle_snapshots") or {})
+        candidates = [
+            state for state in snap.values()
+            if isinstance(state, dict) and state.get("month") == expiry
+            and state.get("client_id") == cid
+        ]
+        current = max(candidates, key=lambda s: s.get("processed", 0)) if candidates else {}
+        total = len(available or [])
+        checked = int(current.get("processed", 0))
+        errors = current.get("errors") or {}
+        if job:
+            st.caption(
+                f"Dhan CE option chains · {checked}/{total} stocks checked · "
+                f"{dhan_count} usable 5%+ CE quotes · rate-limited scan running"
+            )
+        elif dhan_count:
+            st.caption(
+                f"Dhan CE · {dhan_count}/{total} verified option premiums · "
+                f"{checked} stocks checked · last snapshot, not a live stream"
+            )
+        elif not verified:
+            st.warning(
+                "CE unavailable: Dhan options integration has not yet passed "
+                "the one-stock profile + option-chain check. "
+                "Complete Dhan setup below; cash quotes alone are insufficient."
+            )
+        elif current.get("fatal"):
+            st.warning(f"CE scan stopped: {current['fatal']}")
+        elif current.get("started"):
+            st.warning(
+                f"No valid 5%+ CE prices from {checked} attempted stocks. "
+                "See Unavailable stocks and quote details below."
+            )
+        else:
+            st.info(
+                "Live CE requires Dhan option-chain snapshots; these are separate "
+                "from cash LTPs. Start the paced scan below."
+            )
+        if verified and not job:
+            if st.button(
+                "↻ Fetch 5%+ CE & ATM straddles",
+                key="fno_ce5_fetch_live",
+                help="One read-only, sequential Dhan option-chain pass; "
+                     "uses the same response for 5%+ CE and ATM straddle.",
+            ):
+                st.session_state["fno_ce5_scan_requested"] = expiry
+                st.rerun()
         return {}, ""
 
     _eod_start()
