@@ -14,6 +14,7 @@ import pandas as pd
 import streamlit as st
 
 from .ce_eod_remote import IST
+from .fyers_ui import connected_fyers, fyers_cash_prices, fyers_chain_calls
 from .ce_eod_store import load_local_eod, save_verified_report, eod_cash_quotes
 from .nse_eod_ce import NseEodError, NseEodSnapshot, parse_nse_fo_eod
 from .dhan_integration_state import (
@@ -152,6 +153,9 @@ def _otm_table(available, expiry, *, cid, token, cash_quotes):
             st.session_state.get("fno_shared_ce") or {},
             st.session_state.get("fno_ce5_home_uploaded") or {},
         )
+    elif mode == "FYERS":
+        fyers_snap = st.session_state.get("fno_fyers_chain_snapshot") or {}
+        selected = fyers_snap.get("calls") or {}
     else:
         selected = calls
     frame = otm_home_dataframe(available, cash_quotes, selected)
@@ -162,6 +166,11 @@ def _otm_table(available, expiry, *, cid, token, cash_quotes):
             f"Dhan option chain · {priced}/{total} CE premiums · "
             f"{attempted} stocks attempted · "
             f"{'scanning' if st.session_state.get('fno_straddle_job') else 'snapshot'}"
+        )
+    elif mode == "FYERS":
+        st.caption(
+            f"FYERS option chain · {priced}/{total} genuine +5% CE LTP "
+            "references · read-only · authorize in Settings"
         )
     else:
         st.caption(
@@ -181,7 +190,7 @@ def _otm_table(available, expiry, *, cid, token, cash_quotes):
             "5%+ OTM CE (%)": st.column_config.NumberColumn(
                 "CE ≥ +5% (%)", format="%.2f%%", width="medium",
                 help="First genuine listed CE strike at or above 105% of "
-                     "the Dhan option-chain underlying price. Missing data "
+                     "the same-source underlying spot price. Missing data "
                      "is blank, not a zero or synthetic option premium.",
             ),
         }, autofit_enabled(st.session_state)),
@@ -225,6 +234,14 @@ def render_otm_home():
 
     if st.session_state.pop("fno_activate_auto_quote_on_next_run", False):
         st.session_state["fno_price_provider"] = AUTO_SOURCE
+    if st.session_state.pop("fno_fyers_select_on_next_run", False):
+        st.session_state["fno_price_provider"] = "FYERS"
+        st.session_state["fno_ce5_mode"] = "FYERS"
+        st.session_state["fno_home_ce_source"] = "FYERS"
+    if st.session_state.pop("fno_fyers_disconnect_next_run", False):
+        st.session_state["fno_price_provider"] = AUTO_SOURCE
+        st.session_state["fno_ce5_mode"] = "EOD"
+        st.session_state["fno_home_ce_source"] = "EOD"
     pending_live = st.session_state.pop("fno_activate_live_on_next_run", False)
     # Respect an ACTIVE Data API subscription only; a working Dhan login
     # without the data plan cannot supply genuine CE option LTP.
@@ -240,9 +257,8 @@ def render_otm_home():
         )
     if pending_live and not inactive:
         st.session_state["fno_ce5_mode"] = "Live"
-    if inactive:
-        # On a profile-verified inactive subscription, free EOD is the
-        # only operational options feed. Do not strand Home in Live mode.
+    if inactive and st.session_state.get("fno_ce5_mode") == "Live":
+        # Inactive Dhan data cannot disable independent FYERS data.
         st.session_state["fno_ce5_mode"] = "EOD"
     current_mode = st.session_state["fno_ce5_mode"]
     if ("fno_home_ce_source" not in st.session_state
@@ -263,7 +279,7 @@ def render_otm_home():
             )
         with mode_col:
             st.radio(
-                "CE source", ["EOD", "Live"],
+                "CE source", ["EOD", "FYERS", "Live"],
                 key="fno_home_ce_source", horizontal=True,
                 on_change=home_ce_mode_changed,
             )
@@ -341,7 +357,9 @@ def render_otm_home():
         verified=bool(saved and token and token_still_current(saved)),
         token_available=bool(token),
     )
-    if selected_source == "Dhan" and inactive:
+    if provider == "FYERS":
+        fyers_cash_prices([item.entry.symbol for item in universe])
+    elif selected_source == "Dhan" and inactive:
         # Profile and funds GET remain available even when market quotes are
         # blocked. Do not repeatedly call paid-only quote endpoints.
         if provider == AUTO_SOURCE:
@@ -357,7 +375,13 @@ def render_otm_home():
 
     # OTM CE has priority over Page 2's EMA/R1 preparation. Start the
     # identical Dhan worker even with profile-only onboarding completed.
-    if mode == "Live":
+    if mode == "FYERS":
+        if connected_fyers():
+            fyers_chain_calls(available, expiry)
+        else:
+            st.info("Open Settings → FYERS to authorize your "
+                    "non-trading account and load genuine CE/PE prices.")
+    elif mode == "Live":
         status = prepare_otm_scan(available, expiry)
         col_a, col_b = st.columns([1.5, 2.5])
         with col_a:
@@ -502,6 +526,9 @@ def render_otm_home():
             )
 
     cash = _cash_quotes(universe, cid, token)
+    if provider == "FYERS" and connected_fyers():
+        fyers_quotes = fyers_cash_prices([item.entry.symbol for item in universe])
+        cash = merge_dhan_yahoo(fyers_quotes, cash)
     if mode == "EOD":
         # Historical spot references can fill a blank cash column, but must
         # never replace genuine available Dhan or Yahoo prices.
