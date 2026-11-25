@@ -14,6 +14,8 @@ class FyersAppUITests(unittest.TestCase):
             "ABCD1234-100", "offline-fyers-api-test-token",
             datetime.now(timezone.utc) + timedelta(hours=9),
         )
+        app.session_state["ccs_active_broker"] = "FYERS"
+        app.session_state["ccs_broker_committed"] = "FYERS"
         app.session_state["fno_ce5_mode"] = "FYERS"
         app.session_state["fno_home_ce_source"] = "FYERS"
         app.session_state["fno_price_provider"] = "FYERS"
