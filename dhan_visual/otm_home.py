@@ -223,7 +223,7 @@ def _otm_table(available, expiry, *, cid, token, cash_quotes):
                      "is blank, not a zero or synthetic option premium.",
             ),
             "ATM Straddle Total (₹)": st.column_config.NumberColumn(
-                "ATM CE + PE (₹)", format="₹%.2f", width="medium",
+                "ATM Straddle Total (₹)", format="₹%.2f", width="medium",
                 help="Total premium per share at the nearest listed ATM "
                      "strike: actual CE LTP + PE LTP for the SAME stock, "
                      "strike, expiry and broker option-chain response. "
