@@ -361,6 +361,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
             app = app_with_catalogue()
             app.session_state["fno_expiry"] = "DEC-26"
             app.session_state["fno_ce5_mode"] = "Live"
+            app.session_state["fno_price_provider"] = "Yahoo Finance"
             app.session_state["dhan_local_cid"] = client
             app.session_state["dhan_local_access_token"] = token
             # Explicit opt-out: do not save a test key in the OS credential vault.
@@ -396,6 +397,10 @@ class PayoffStudioStartupTests(unittest.TestCase):
                 self.assertFalse(app.exception, [str(x.message) for x in app.exception])
                 load.assert_called_once()
                 record.assert_called_once()
+                self.assertEqual(
+                    app.radio(key="fno_price_provider").value,
+                    "Auto (Dhan → Yahoo)",
+                )
                 vault.assert_not_called()  # no vault without opt-in
                 self.assertTrue(state_path.exists())
                 self.assertIsNotNone(verified_account(client, state_path))
