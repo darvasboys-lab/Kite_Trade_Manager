@@ -266,8 +266,7 @@ def _strategy_cell_callback(key, frame, entries, expiry, snapshot_key, scan_day)
     access = connected_fyers()
     snapshot = _snapshot(access)
     if (not snapshot or snapshot["key"] != snapshot_key
-            or snapshot["expiry"] != expiry or snapshot.get("scan_day") != scan_day
-            or scan_day != datetime.now(IST).date().isoformat()):
+            or snapshot["expiry"] != expiry or snapshot.get("scan_day") != scan_day):
         return
     target = strategy_cell_target(st.session_state.get(key), frame)
     if target and target[0] in entries:
