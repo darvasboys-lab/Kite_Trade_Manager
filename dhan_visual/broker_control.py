@@ -120,7 +120,14 @@ def _pending_status():
 
 
 def render_single_broker_selector() -> None:
-    st.session_state.setdefault(ACTIVE_KEY, "Dhan")
+    # Preserve FYERS as the active source when updating from an older app
+    # session that already selected FYERS before the selector existed.
+    if ACTIVE_KEY not in st.session_state:
+        old_fyers = (
+            st.session_state.get("fno_price_provider") == "FYERS"
+            or st.session_state.get("fno_ce5_mode") == "FYERS"
+        )
+        st.session_state[ACTIVE_KEY] = "FYERS" if old_fyers else "Dhan"
     st.session_state.setdefault(SELECTION_KEY, active_broker())
     # A pending switch updates ACTIVE_KEY, which is *not* widget-owned.
     # It can safely complete in a fragment rerun after previous jobs finish.
