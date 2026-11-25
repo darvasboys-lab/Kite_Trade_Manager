@@ -112,29 +112,41 @@ def _cash_quotes(universe, cid: str, token: str):
 
 
 def otm_home_dataframe(available, cash_quotes, calls, *,
-                       eod=False) -> pd.DataFrame:
-    """Exactly three columns; missing option quotes are NaN, never fabricated.
+                       eod=False, straddles=None, expiry=None) -> pd.DataFrame:
+    """Four-column Home table; never invent an absent option-chain premium.
 
-    The price shown is the CASH CMP source; the CE % uses the option-chain's
-    OWN underlying price from its same Dhan response (or NSE EOD own close).
+    CE % is calculated by the broker parser from the SAME option-chain
+    underlying. The ATM total (₹ per share, CE LTP + PE LTP) is shown only
+    when BOTH real ATM legs have the same symbol and selected expiry.
+    No cross-provider fallback is permitted for the options columns.
     """
     items = []
+    straddles = straddles or {}
     for entry in available:
         symbol = entry.entry.symbol
         option = calls.get(symbol)
         quote = cash_quotes.get(symbol)
-        if option is None:
-            ce_pct = None
-        else:
-            ce_pct = float(option.premium_pct)
+        ce_pct = float(option.premium_pct) if option is not None else None
         cash = float(quote.price) if quote is not None else None
+        atm = straddles.get(symbol)
+        total = None
+        if (expiry is not None and atm is not None
+                and getattr(atm, "symbol", None) == symbol
+                and getattr(atm, "expiry", None) == expiry):
+            ce, pe = getattr(atm, "call_ltp", None), getattr(atm, "put_ltp", None)
+            if ce is not None and pe is not None and ce > 0 and pe > 0:
+                total = float(ce + pe)
         items.append({
             "Stock": symbol,
             "CMP (₹)": cash,
             "5%+ OTM CE (%)": ce_pct,
+            "ATM Straddle Total (₹)": total,
         })
     return pd.DataFrame(
-        items, columns=["Stock", "CMP (₹)", "5%+ OTM CE (%)"]
+        items, columns=[
+            "Stock", "CMP (₹)", "5%+ OTM CE (%)",
+            "ATM Straddle Total (₹)",
+        ]
     )
 
 
@@ -156,11 +168,27 @@ def _otm_table(available, expiry, *, cid, token, cash_quotes):
         )
     elif mode == "FYERS":
         fyers_snap = st.session_state.get("fno_fyers_chain_snapshot") or {}
-        selected = fyers_snap.get("calls") or {}
+        # A snapshot for a prior expiry must never appear as this month's CE
+        # or ATM straddle. Each row uses the existing single FYERS chain scan.
+        if fyers_snap.get("expiry") == expiry and broker_allowed("FYERS"):
+            selected = fyers_snap.get("calls") or {}
+            straddles = fyers_snap.get("straddles") or {}
+        else:
+            selected, straddles = {}, {}
     else:
         selected = calls
-    frame = otm_home_dataframe(available, cash_quotes, selected)
+    if mode == "Live":
+        straddles = (
+            state.get("rows") or {} if state and state.get("client_id") == cid
+            and broker_allowed("Dhan") else {}
+        )
+    elif mode == "EOD":
+        straddles = {}
+    frame = otm_home_dataframe(
+        available, cash_quotes, selected, straddles=straddles, expiry=expiry,
+    )
     total, priced = len(frame), int(frame["5%+ OTM CE (%)"].notna().sum())
+    straddle_count = int(frame["ATM Straddle Total (₹)"].notna().sum())
     attempted = int(state.get("processed", 0)) if state else 0
     if mode == "Live":
         st.caption(
@@ -170,8 +198,8 @@ def _otm_table(available, expiry, *, cid, token, cash_quotes):
         )
     elif mode == "FYERS":
         st.caption(
-            f"FYERS option chain · {priced}/{total} genuine +5% CE LTP "
-            "references · read-only · authorize in Settings"
+            f"FYERS option chain · {priced}/{total} genuine +5% CE LTP · "
+            f"{straddle_count}/{total} ATM CE+PE totals · read-only"
         )
     else:
         st.caption(
@@ -193,6 +221,14 @@ def _otm_table(available, expiry, *, cid, token, cash_quotes):
                 help="First genuine listed CE strike at or above 105% of "
                      "the same-source underlying spot price. Missing data "
                      "is blank, not a zero or synthetic option premium.",
+            ),
+            "ATM Straddle Total (₹)": st.column_config.NumberColumn(
+                "ATM CE + PE (₹)", format="₹%.2f", width="medium",
+                help="Total premium per share at the nearest listed ATM "
+                     "strike: actual CE LTP + PE LTP for the SAME stock, "
+                     "strike, expiry and broker option-chain response. "
+                     "Blank until both positive prices are available. "
+                     "Not per-lot profit or guaranteed executable credit.",
             ),
         }, autofit_enabled(st.session_state)),
     )
