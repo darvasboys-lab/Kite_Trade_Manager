@@ -7,7 +7,7 @@ Both pages use the SAME option-chain queue/snapshot, no duplicate CE calls.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 
 import pandas as pd
@@ -113,7 +113,7 @@ def _cash_quotes(universe, cid: str, token: str):
 
 def otm_home_dataframe(available, cash_quotes, calls, *,
                        eod=False, straddles=None, expiry=None) -> pd.DataFrame:
-    """Four-column Home table; never invent an absent option-chain premium.
+    """Home table with selected-expiry contract value and ATM premium ratio.
 
     CE % is calculated by the broker parser from the SAME option-chain
     underlying. The ATM total (₹ per share, CE LTP + PE LTP) is shown only
@@ -127,7 +127,16 @@ def otm_home_dataframe(available, cash_quotes, calls, *,
         option = calls.get(symbol)
         quote = cash_quotes.get(symbol)
         ce_pct = float(option.premium_pct) if option is not None else None
-        cash = float(quote.price) if quote is not None else None
+        # Preserve Decimal arithmetic and reject invalid or missing cash data.
+        try:
+            price = Decimal(str(quote.price)) if quote is not None else None
+        except (InvalidOperation, TypeError, ValueError):
+            price = None
+        if price is not None and (not price.is_finite() or price <= 0):
+            price = None
+        cash = float(price) if price is not None else None
+        lot = entry.entry.lots.get(expiry)
+        contract = float(price * lot) if price is not None and lot else None
         atm = straddles.get(symbol)
         total = None
         if (expiry is not None and atm is not None
@@ -139,15 +148,30 @@ def otm_home_dataframe(available, cash_quotes, calls, *,
         items.append({
             "Stock": symbol,
             "CMP (₹)": cash,
+            "Lot size": lot,
+            "Contract size (₹)": contract,
             "5%+ OTM CE (%)": ce_pct,
             "ATM Straddle Total (₹)": total,
+            "Straddle (%)": (
+                float((Decimal(str(total)) / price) * 100)
+                if total is not None and price is not None else None
+            ),
         })
     return pd.DataFrame(
         items, columns=[
-            "Stock", "CMP (₹)", "5%+ OTM CE (%)",
-            "ATM Straddle Total (₹)",
+            "Stock", "CMP (₹)", "Lot size", "Contract size (₹)",
+            "5%+ OTM CE (%)", "ATM Straddle Total (₹)", "Straddle (%)",
         ]
     )
+
+
+def filter_home_contracts(frame: pd.DataFrame, maximum_lakh: float) -> pd.DataFrame:
+    """Strict upper bound; unpriced contracts cannot pass an active filter."""
+    if maximum_lakh == 0:
+        return frame
+    limit = float(Decimal(str(maximum_lakh)) * 100000)
+    values = pd.to_numeric(frame["Contract size (₹)"], errors="coerce")
+    return frame.loc[values.notna() & (values < limit)].reset_index(drop=True)
 
 
 @st.fragment(run_every="3s")
@@ -197,6 +221,17 @@ def _otm_table(available, expiry, *, cid, token, cash_quotes):
     frame = otm_home_dataframe(
         available, cash_quotes, selected, straddles=straddles, expiry=expiry,
     )
+    maximum = st.session_state.get("fno_home_contract_max_lakh", 7.0)
+    universe_count = len(frame)
+    unpriced = int(frame["Contract size (₹)"].isna().sum())
+    frame = filter_home_contracts(frame, maximum)
+    if maximum:
+        st.caption(
+            f"{len(frame)}/{universe_count} stocks below ₹{maximum:g} lakh"
+            f" · {unpriced} awaiting valid CMP or lot size"
+        )
+    if frame.empty:
+        st.info("No eligible contracts yet. Wait for quotes or change the contract-size limit.")
     total, priced = len(frame), int(frame["5%+ OTM CE (%)"].notna().sum())
     straddle_count = int(frame["ATM Straddle Total (₹)"].notna().sum())
     attempted = int(state.get("processed", 0)) if state else 0
@@ -225,6 +260,19 @@ def _otm_table(available, expiry, *, cid, token, cash_quotes):
                 "CMP (₹)", format="₹%.2f", width="medium",
                 help="Cash quote where available; otherwise a dated NSE "
                      "F&O underlying close, NOT a live CMP.",
+            ),
+            "Lot size": st.column_config.NumberColumn(
+                "Lot size", format="%d", width="small",
+                help="Official NSE permitted lot for the selected expiry month.",
+            ),
+            "Contract size (₹)": st.column_config.NumberColumn(
+                "Contract size (₹)", format="₹%.2f", width="medium",
+                help="Displayed CMP × selected-expiry lot size. Not company market cap or margin.",
+            ),
+            "Straddle (%)": st.column_config.NumberColumn(
+                "Straddle (%)", format="%.2f%%", width="small",
+                help="ATM CE + PE premium per share divided by displayed CMP × 100. "
+                     "Cash and option quotes can have different timestamps.",
             ),
             "5%+ OTM CE (%)": st.column_config.NumberColumn(
                 "CE ≥ +5% (%)", format="%.2f%%", width="medium",
@@ -336,6 +384,15 @@ def render_otm_home():
                 on_change=home_ce_mode_changed,
             )
         with check_col:
+            with st.popover("⚙ Contract size", use_container_width=True):
+                st.number_input(
+                    "Maximum contract size (₹ lakh)",
+                    min_value=0.0, value=7.0, step=0.5,
+                    key="fno_home_contract_max_lakh",
+                    help="Only contracts strictly below this amount appear on Home. "
+                         "Enter 0 to show all stocks, including unpriced ones.",
+                )
+                st.caption("CMP × lot size · not company market cap · 0 = all stocks")
             st.caption("Read-only · no trading orders")
 
     available = [item for item in universe if expiry in item.entry.lots]

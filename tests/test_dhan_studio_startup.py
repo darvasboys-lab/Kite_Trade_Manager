@@ -21,10 +21,14 @@ def example():
     ]
 
 
-def app_with_catalogue():
+def app_with_catalogue(home_limit=0.0):
     from streamlit.testing.v1 import AppTest
     app = AppTest.from_file(str(APP), default_timeout=35)
     app.session_state["fno_universe_data"] = (example(), "Verified unit fixture")
+    # Existing tests inspect option rows even before cash quotes arrive.
+    # Pass None to exercise the actual default contract-size filter.
+    if home_limit is not None:
+        app.session_state["fno_home_contract_max_lakh"] = home_limit
     # No exchange or Dhan HTTP in offline CI tests.
     app.session_state["fno_ce5_remote_attempt_key"] = datetime.now(IST).date().isoformat()
     app.session_state["fno_ce5_remote_snapshot"] = EodDownloadResult(
@@ -148,7 +152,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
         self.assertEqual(app.tabs[1].label, "⌕ Market Screener")
         self.assertEqual(
             app.dataframe[0].value.columns.tolist(),
-            ["Stock", "CMP (₹)", "5%+ OTM CE (%)", "ATM Straddle Total (₹)"],
+            ["Stock", "CMP (₹)", "Lot size", "Contract size (₹)", "5%+ OTM CE (%)", "ATM Straddle Total (₹)", "Straddle (%)"],
         )
         self.assertEqual(app.radio(key="fno_price_provider").value, "Auto (Dhan → Yahoo)")
         self.assertEqual(app.selectbox(key="fno_value_preset").value, "Below ₹7 lakh")
@@ -320,7 +324,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
             scan.assert_not_called()
             self.assertEqual(
                 app.dataframe[0].value.columns.tolist(),
-                ["Stock", "CMP (₹)", "5%+ OTM CE (%)", "ATM Straddle Total (₹)"],
+                ["Stock", "CMP (₹)", "Lot size", "Contract size (₹)", "5%+ OTM CE (%)", "ATM Straddle Total (₹)", "Straddle (%)"],
             )
 
     def test_only_one_home_option_worker_from_profile_verified_token(self):
