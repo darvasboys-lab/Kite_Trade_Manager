@@ -27,6 +27,7 @@ import pandas as pd
 
 from .screener import as_yahoo_symbol
 from .technical_indicators import ticker_ohlc
+from .fyers_readonly import FyersDataError, fetch_r1_intraday_bars
 
 IST = ZoneInfo("Asia/Kolkata")
 R1_BATCH_SIZE = 6
@@ -206,6 +207,7 @@ def scan_r1_today(
     today: date | None = None,
     pause: float = R1_BATCH_PAUSE_SEC,
     batch_size: int = R1_BATCH_SIZE,
+    fyers_access=None,
 ) -> tuple[int, int]:
     """Cancellable paced scan; skips missing R1 instead of fabricating breaks."""
     if not 1 <= batch_size <= 6:
@@ -226,17 +228,52 @@ def scan_r1_today(
         if cancel.is_set():
             break
         group = qualified[start:start + batch_size]
-        try:
-            found, unknown, warnings = yahoo_r1_batch(
-                group, r1_by_symbol, today=day,
-            )
-        except Exception as exc:
-            found, unknown = {}, len(group)
-            warnings = (f"Yahoo 15m batch unavailable ({type(exc).__name__})",)
+        if fyers_access is not None:
+            found, unknown, warnings = {}, 0, []
+            for symbol in group:
+                if cancel.is_set():
+                    break
+                try:
+                    bars = fetch_r1_intraday_bars(
+                        fyers_access, symbol, day=day,
+                    )
+                    event, _ = session_r1_cross(
+                        bars, r1_by_symbol[symbol], day,
+                    )
+                    if event is not None:
+                        found[symbol] = R1TodayCross(
+                            symbol, event.day, event.r1, event.first_bar_time,
+                            event.latest_close, event.latest_bar_time,
+                            event.currently_above, event.pct_vs_r1,
+                        )
+                except (FyersDataError, ValueError, KeyError) as exc:
+                    unknown += 1
+                    if len(warnings) < 3:
+                        warnings.append(f"{symbol}: {str(exc)[:75]}")
+                    if ("limit" in str(exc).lower()
+                            or "expired" in str(exc).lower()
+                            or "unauthorized" in str(exc).lower()):
+                        cancel.set()
+                        break
+                except Exception:
+                    unknown += 1
+                    if len(warnings) < 3:
+                        warnings.append(f"{symbol}: FYERS intraday unavailable")
+            warnings = tuple(warnings)
+        else:
+            try:
+                found, unknown, warnings = yahoo_r1_batch(
+                    group, r1_by_symbol, today=day,
+                )
+            except Exception as exc:
+                found, unknown = {}, len(group)
+                warnings = (f"Yahoo 15m batch unavailable ({type(exc).__name__})",)
         completed += len(group)
         queue.put(R1ScanUpdate(found, completed, total, unknown, warnings))
         if start + batch_size < len(qualified):
-            delay = R1_FAILED_BATCH_BACKOFF_SEC if unknown == len(group) else pause
+            delay = (0 if fyers_access is not None else
+                     R1_FAILED_BATCH_BACKOFF_SEC if unknown == len(group)
+                     else pause)
             if cancel.wait(delay):
                 break
     return completed, total
