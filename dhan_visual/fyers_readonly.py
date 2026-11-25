@@ -24,6 +24,7 @@ import requests
 
 from .auto_auth import AutoAuthError, _keyring
 from .screener import Quote
+from .api_monitor import record
 
 INDIA = timezone(timedelta(hours=5, minutes=30))
 REDIRECT_URI = "https://trade.fyers.in/api-login/redirect-uri/index.html"
@@ -272,6 +273,7 @@ def _get(access: FyersAccess, route: str, params: dict, *, get=None) -> dict:
     if route not in ("/data/quotes", "/data/options-chain-v3", "/data/history"):
         raise FyersDataError("Unsupported read-only FYERS route.")
     _rate_gate()
+    record("FYERS")
     try:
         requester = get or requests.get
         response = requester(
@@ -283,6 +285,7 @@ def _get(access: FyersAccess, route: str, params: dict, *, get=None) -> dict:
         if response.status_code in (401, 403):
             raise FyersDataError("FYERS session unauthorized; please reconnect in Settings.")
         if response.status_code == 429:
+            record("FYERS", "rate_limit")
             raise FyersDataError("FYERS data rate limit (429). Stop and retry later.")
         if response.status_code != 200:
             raise FyersDataError(f"FYERS market data HTTP {response.status_code}.")
@@ -292,6 +295,7 @@ def _get(access: FyersAccess, route: str, params: dict, *, get=None) -> dict:
             if code in (-8, -15, -16, -17):
                 raise FyersDataError("FYERS session expired; reconnect in Settings.")
             raise FyersDataError("FYERS market data unavailable for requested instruments.")
+        record("FYERS", "success")
         return payload
     except requests.RequestException as exc:
         raise FyersDataError("FYERS market-data service is unreachable.") from exc
