@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import streamlit as st
 
-ACTIVE_KEY = "ccs_active_broker"
+ACTIVE_KEY = "ccs_active_broker"  # authoritative state, never a widget key
+SELECTION_KEY = "ccs_broker_requested"  # radio widget value
 PENDING_KEY = "ccs_pending_broker"
 OPTIONS = ("Dhan", "FYERS", "Public only")
 DHAN_JOB_KEYS = (
@@ -80,20 +81,20 @@ def _apply_source_selection(target: str) -> None:
 
 def _switch_callback() -> None:
     """Runs before script widgets are re-created, so keys can be updated."""
-    target = active_broker()
-    old = st.session_state.get("ccs_broker_committed", "Dhan")
+    target = st.session_state.get(SELECTION_KEY, active_broker())
+    old = active_broker()
     if old not in OPTIONS:
         old = "Dhan"
     if target == old:
+        st.session_state.pop(PENDING_KEY, None)
         return
     _request_cancel(old)
     if _busy_jobs(old):
         # Hold the old mode but block its NEW requests. Only after its queued
         # work finishes will the new broker be activated.
         st.session_state[PENDING_KEY] = target
-        st.session_state[ACTIVE_KEY] = old
         return
-    st.session_state["ccs_broker_committed"] = target
+    st.session_state[ACTIVE_KEY] = target
     st.session_state.pop(PENDING_KEY, None)
     _apply_source_selection(target)
 
@@ -113,7 +114,6 @@ def _pending_status():
         )
         return
     st.session_state[ACTIVE_KEY] = target
-    st.session_state["ccs_broker_committed"] = target
     st.session_state.pop(PENDING_KEY, None)
     _apply_source_selection(target)
     st.rerun(scope="app")
@@ -121,14 +121,14 @@ def _pending_status():
 
 def render_single_broker_selector() -> None:
     st.session_state.setdefault(ACTIVE_KEY, "Dhan")
-    st.session_state.setdefault("ccs_broker_committed", active_broker())
-    # Complete a deferred switch BEFORE the radio widget is instantiated.
-    # Streamlit forbids changing a widget's session-state key afterward.
+    st.session_state.setdefault(SELECTION_KEY, active_broker())
+    # A pending switch updates ACTIVE_KEY, which is *not* widget-owned.
+    # It can safely complete in a fragment rerun after previous jobs finish.
     _pending_status()
     st.radio(
         "Active broker connection · only one at a time",
         OPTIONS,
-        key=ACTIVE_KEY, horizontal=True, on_change=_switch_callback,
+        key=SELECTION_KEY, horizontal=True, on_change=_switch_callback,
         help="Saved Dhan and FYERS credentials are preserved when you switch. "
              "The inactive broker sends no requests or token renewals. "
              "Existing broker-issued sessions are not remotely revoked.",
