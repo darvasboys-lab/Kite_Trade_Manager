@@ -1,4 +1,4 @@
-"""Presentation-only light-theme regression checks for the local Streamlit UI."""
+"""Presentation-only terminal-theme regression checks for the local Streamlit UI."""
 import tomllib
 import unittest
 from pathlib import Path
@@ -8,35 +8,32 @@ APP = ROOT / "dhan_visual" / "app.py"
 CONFIG = ROOT / ".streamlit" / "config.toml"
 
 
-class PayoffStudioLightThemeTests(unittest.TestCase):
-    def test_project_streamlit_theme_is_light(self):
+class PayoffStudioTerminalThemeTests(unittest.TestCase):
+    def test_project_streamlit_theme_is_charcoal(self):
         cfg = tomllib.loads(CONFIG.read_text(encoding="utf-8"))
         theme = cfg["theme"]
-        self.assertEqual(theme["base"], "light")
-        self.assertEqual(theme["backgroundColor"].upper(), "#FDF9FA")
-        self.assertEqual(theme["secondaryBackgroundColor"].upper(), "#FFFFFF")
-        self.assertEqual(theme["textColor"].upper(), "#17253B")
-        self.assertEqual(theme["primaryColor"].upper(), "#BD425A")
+        self.assertEqual(theme["base"], "dark")
+        self.assertEqual(theme["backgroundColor"].upper(), "#10151C")
+        self.assertEqual(theme["secondaryBackgroundColor"].upper(), "#171E27")
+        self.assertEqual(theme["textColor"].upper(), "#E7EDF4")
+        self.assertEqual(theme["primaryColor"].upper(), "#48C9A1")
 
-    def test_chart_and_visuals_are_coherently_light(self):
+    def test_chart_and_visuals_support_both_palettes(self):
         source = APP.read_text(encoding="utf-8")
-        # Light remains the default; dark is a reversible opt-in theme.
-        self.assertIn('st.session_state["ccs_dark_mode"] = False', source)
+        # Charcoal is the approved default; light is reversible.
+        self.assertIn('st.session_state["ccs_dark_mode"] = True', source)
         self.assertIn('template="plotly_dark" if st.session_state.get("ccs_dark_mode") else "plotly_white"', source)
         self.assertIn('paper_bgcolor="#171f2a" if st.session_state.get("ccs_dark_mode") else "#ffffff"', source)
         self.assertIn('plot_bgcolor="#171f2a" if st.session_state.get("ccs_dark_mode") else "#ffffff"', source)
         self.assertIn('key="ccs_theme_button"', source)
         self.assertIn('st.session_state["ccs_dark_mode"] = not st.session_state["ccs_dark_mode"]', source)
-        self.assertIn("--page: #fdf9fa", source)
-        self.assertIn("--rose: #bf4259", source)
-        self.assertIn("background:#fff0f3", source)
-        self.assertIn("color:#a9314a !important", source)
-        self.assertIn("border-top: 3px solid #db6a7c", source)
-        self.assertIn("--surface: #ffffff", source)
+        theme = (ROOT / "dhan_visual" / "terminal_theme.py").read_text(encoding="utf-8")
+        for expected in ("#10151c", "#171e27", "#48c9a1", "#eef2f6", "#ffffff", "#08795b",
+                         "stTabs [data-baseweb", "@media(max-width:760px)", "input:checked"):
+            self.assertIn(expected, theme)
+        self.assertIn('apply_terminal_theme(st.session_state["ccs_dark_mode"])', source)
         self.assertIn("rgba(33,155,113,.11)", source)
         self.assertIn("rgba(216,73,87,.10)", source)
-        self.assertIn("stTabs [data-baseweb", source)
-        self.assertIn("@media (max-width: 700px)", source)
 
     def test_no_strategy_changes_and_all_quote_sources_retained(self):
         source = APP.read_text(encoding="utf-8")
