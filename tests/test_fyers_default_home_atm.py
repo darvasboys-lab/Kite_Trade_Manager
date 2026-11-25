@@ -32,6 +32,54 @@ def fyers_straddle(expiry="DEC-26"):
 
 
 class PreferredFYERSHomeTests(unittest.TestCase):
+    def test_futures_quote_only_accepts_exact_requested_contracts(self):
+        from dhan_visual.fyers_readonly import fetch_futures_quotes
+        payload = {"d": [
+            {"s": "ok", "n": "NSE:TCS26DECFUT", "v": {"lp": 1005}},
+            {"s": "ok", "n": "NSE:TCS-EQ", "v": {"lp": 1}},
+            {"s": "ok", "n": "NSE:SBIN26NOVFUT", "v": {"lp": 2}},
+            {"s": "ok", "n": "NSE:SBIN26DECFUT", "v": {"lp": 0}},
+        ]}
+        with patch("dhan_visual.fyers_readonly._get", return_value=payload) as get:
+            quotes = fetch_futures_quotes(valid_access(), ["TCS", "SBIN"], "DEC-26")
+        self.assertEqual(set(quotes), {"TCS"})
+        self.assertEqual(quotes["TCS"].price, Decimal("1005"))
+        self.assertEqual(get.call_args.args[1], "/data/quotes")
+        self.assertEqual(get.call_args.args[2]["symbols"], "NSE:TCS26DECFUT,NSE:SBIN26DECFUT")
+
+    def test_home_futures_are_manual_and_expiry_scoped(self):
+        app = app_with_catalogue()
+        app.session_state["fno_home_expiry"] = "DEC-26"
+        app.session_state["fno_expiry"] = "DEC-26"
+        app.session_state["_fyers_access"] = valid_access()
+        app.session_state["ccs_active_broker"] = "FYERS"
+        app.session_state["fno_ce5_mode"] = "FYERS"
+        app.session_state["fno_home_ce_source"] = "FYERS"
+        app.session_state["fno_price_provider"] = "FYERS"
+        pool = FakePool()
+        with patch("dhan_visual.fyers_ui._fyers_pool", return_value=pool), \
+             patch("dhan_visual.fyers_ui.read_app_from_vault", return_value=None), \
+             patch("dhan_visual.fyers_ui.read_access_from_vault", return_value=None), \
+             patch("dhan_visual.otm_home.fetch_futures_quotes", return_value={
+                 "TCS": Quote(Decimal("1005"), "offline", "FYERS futures LTP"),
+             }) as fetch:
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            fetch.assert_not_called()
+            self.assertTrue(app.dataframe[0].value["Futures Price (₹)"].isna().all())
+            app.button(key="fno_home_refresh_futures").click().run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            fetch.assert_called_once()
+            home = app.dataframe[0].value
+            self.assertEqual(home.loc[home.Stock == "TCS", "Futures Price (₹)"].iloc[0], 1005)
+            app.run()
+            fetch.assert_called_once()
+            app.selectbox(key="fno_home_expiry").set_value("NOV-26").run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            fetch.assert_called_once()
+            self.assertTrue(app.dataframe[0].value["Futures Price (₹)"].isna().all())
+
+
     def test_contract_size_and_straddle_percent(self):
         from dataclasses import replace
         atm = replace(fyers_straddle(), call_ltp=Decimal("40"), put_ltp=Decimal("35"))
