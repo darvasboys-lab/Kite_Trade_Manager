@@ -147,6 +147,48 @@ def record_verification(
     return status
 
 
+def refresh_verified_token(
+    cid: str, token_validity: str, *, path: Path = STATUS_FILE,
+) -> VerifiedIntegration:
+    """Renew access token metadata only; never repeat the option-chain test."""
+    previous = verified_account(cid, path)
+    if previous is None:
+        raise ValueError("Dhan integration has not yet been verified")
+    expires = parse_dhan_token_expiry(token_validity)
+    if expires is None or expires <= datetime.now(timezone.utc) + timedelta(minutes=5):
+        raise ValueError("Dhan did not provide a usable token expiry")
+    obj = {
+        "version": STATUS_VERSION, "client_id": previous.client_id,
+        "verified_at": previous.verified_at, "symbol": previous.symbol,
+        "expiry": previous.expiry, "data_plan": "Active",
+        "token_expires_at": expires.isoformat(timespec="seconds"),
+    }
+    if path.is_symlink():
+        raise OSError("Refusing integration status symlink")
+    temp = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", prefix=".verified-",
+            suffix=".tmp", dir=path.parent, delete=False,
+        ) as fp:
+            temp = fp.name
+            json.dump(obj, fp, separators=(",", ":"))
+            fp.write("\n")
+        os.replace(temp, path)
+    finally:
+        if temp:
+            try:
+                if os.path.exists(temp):
+                    os.unlink(temp)
+            except OSError:
+                pass
+    return VerifiedIntegration(
+        previous.client_id, previous.verified_at, previous.symbol,
+        previous.expiry, "Active", obj["token_expires_at"]
+    )
+
+
 def token_still_current(status: VerifiedIntegration, *,
                         now: datetime | None = None) -> bool:
     """Reported Dhan token validity is not a forever-connection claim."""
