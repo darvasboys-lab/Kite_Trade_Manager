@@ -244,13 +244,14 @@ def _display(frame, *, market=False):
 
 
 def render_selective_home():
-    from .workspace_ui import prepare_filters, save_scan_controls, remember_pref
+    from .workspace_ui import prepare_filters, save_scan_controls, remember_pref, render_historical_shortlist
     from .stock_strategy_ui import ACTIVE, launch_strategy, render_stock_strategy
     if st.session_state.get(ACTIVE):
         render_stock_strategy()
         return
     st.markdown("### OTM Covered Call")
     st.caption("Select filters first. Nothing is fetched from FYERS or Yahoo until you apply a scan.")
+    render_historical_shortlist()
     access = connected_fyers()
     if not access:
         st.info("Connect and select FYERS in Settings to use the data-saving scan.")
