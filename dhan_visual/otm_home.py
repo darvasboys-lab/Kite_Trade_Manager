@@ -16,6 +16,7 @@ import streamlit as st
 from .ce_eod_remote import IST
 from .fyers_ui import connected_fyers, fyers_cash_prices, fyers_chain_calls, _scope
 from .broker_control import active_broker, broker_allowed
+from .fyers_readonly import fetch_futures_quotes, FyersDataError
 from .ce_eod_store import load_local_eod, save_verified_report, eod_cash_quotes
 from .nse_eod_ce import NseEodError, NseEodSnapshot, parse_nse_fo_eod
 from .dhan_integration_state import (
@@ -174,6 +175,47 @@ def filter_home_contracts(frame: pd.DataFrame, maximum_lakh: float) -> pd.DataFr
     return frame.loc[values.notna() & (values < limit)].reset_index(drop=True)
 
 
+def _manual_futures_column(frame: pd.DataFrame, expiry: str) -> pd.DataFrame:
+    """Only the explicit refresh button can request futures; reruns read cache."""
+    access = connected_fyers() if broker_allowed("FYERS") else None
+    key = _scope(access, [], expiry) if access else None
+    symbols = frame["Stock"].tolist()
+    snapshot = st.session_state.get("fno_home_futures_snapshot") or {}
+    if snapshot.get("key") != key or key is None:
+        snapshot = {}
+    if st.button(
+        "↻ Refresh futures prices", key="fno_home_refresh_futures",
+        disabled=not access or not symbols,
+        help="Fetch FYERS futures LTP once for the displayed stocks and selected month. "
+             "No automatic futures refresh.",
+    ) and access and symbols:
+        try:
+            with st.spinner("Fetching selected-month futures prices…"):
+                quotes = fetch_futures_quotes(access, symbols, expiry)
+            snapshot = {"key": key, "quotes": quotes,
+                        "at": datetime.now(IST).strftime("%d %b %H:%M:%S")}
+            st.session_state["fno_home_futures_snapshot"] = snapshot
+        except FyersDataError as exc:
+            st.warning(str(exc))
+        except Exception:
+            st.warning("Unexpected FYERS futures-data error. Retry manually.")
+    quotes = snapshot.get("quotes") or {}
+    frame = frame.copy()
+    frame.insert(2, "Futures Price (₹)", [
+        float(quotes[s].price) if s in quotes else None for s in symbols
+    ])
+    if snapshot:
+        st.caption(
+            f"Futures {expiry} · {sum(s in quotes for s in symbols)}/{len(symbols)} "
+            f"prices · last requested {snapshot['at']} IST · manual snapshot; may be stale"
+        )
+    elif not access:
+        st.caption("Futures prices: connect FYERS in Settings to refresh.")
+    else:
+        st.caption("Futures prices: click Refresh futures prices to load once.")
+    return frame
+
+
 @st.fragment(run_every="3s")
 def _otm_table(available, expiry, *, cid, token, cash_quotes):
     key = _scan_key(available, expiry)
@@ -225,6 +267,7 @@ def _otm_table(available, expiry, *, cid, token, cash_quotes):
     universe_count = len(frame)
     unpriced = int(frame["Contract size (₹)"].isna().sum())
     frame = filter_home_contracts(frame, maximum)
+    frame = _manual_futures_column(frame, expiry)
     if maximum:
         st.caption(
             f"{len(frame)}/{universe_count} stocks below ₹{maximum:g} lakh"
@@ -260,6 +303,11 @@ def _otm_table(available, expiry, *, cid, token, cash_quotes):
                 "CMP (₹)", format="₹%.2f", width="medium",
                 help="Cash quote where available; otherwise a dated NSE "
                      "F&O underlying close, NOT a live CMP.",
+            ),
+            "Futures Price (₹)": st.column_config.NumberColumn(
+                "Futures Price (₹)", format="₹%.2f", width="medium",
+                help="FYERS monthly futures LTP for the selected expiry, "
+                     "updated only by Refresh futures prices.",
             ),
             "Lot size": st.column_config.NumberColumn(
                 "Lot size", format="%d", width="small",
