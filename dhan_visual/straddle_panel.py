@@ -18,7 +18,7 @@ import streamlit as st
 from .auto_auth import is_configured
 from .local_client_settings import read_client_id, save_client_id, valid_client_id
 from .option_panel import _local_creds
-from .straddle_scan import rank_straddles, scan_all_straddles
+from .straddle_scan import otm_call_5_from_atm, rank_straddles, scan_all_straddles
 from .load_priority import strongest_first
 from .table_layout import autofit_column_config, autofit_enabled, dataframe_key
 from .tradingview_links import clickable_stock_frame, TRADINGVIEW_SYMBOL_DISPLAY
@@ -31,10 +31,30 @@ def _straddle_pool():
 
 
 def available_otm_calls(available, expiry: str) -> dict:
-    """Read valid +5% CE snapshots without new option-chain calls."""
+    """Reuse verified +5% CE from full scan OR the one-stock Dhan test.
+
+    No additional Dhan request. The one-stock result is scoped to the
+    current Dhan client ID and selected expiry to avoid cross-account reuse.
+    """
     history = st.session_state.get("fno_straddle_snapshots") or {}
     snap = history.get(_scan_key(available, expiry)) or {}
-    return snap.get("otm_calls") or {}
+    cid, _ = _local_creds()
+    results = dict(snap.get("otm_calls") or {})
+    if snap.get("client_id") and snap["client_id"] != cid:
+        results.clear()
+
+    single = st.session_state.get("fno_atm_result") or {}
+    if (cid and single.get("cid") == cid
+            and single.get("month") == expiry
+            and single.get("symbol") in {
+                item.entry.symbol for item in available
+            }):
+        quote = single.get("quote")
+        if quote is not None:
+            fresh = otm_call_5_from_atm(quote)
+            if fresh is not None:
+                results[single["symbol"]] = fresh
+    return results
 
 
 def _scan_key(available, expiry: str) -> str:
@@ -220,6 +240,7 @@ def render_straddle_panel(available, expiry, *, priority_levels=None,
                     priority_levels, priority_quotes,
                 )
                 snap["started"] = True
+                snap["client_id"] = cid
                 snap["status"] = "Starting full-universe scan"
                 snap["fatal"] = ""
                 done = set(snap["rows"])
