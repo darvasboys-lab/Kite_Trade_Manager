@@ -273,6 +273,64 @@ class PayoffStudioStartupTests(unittest.TestCase):
             self.assertEqual(load.call_args.args[3], 1333)
             self.assertEqual(app.session_state["fno_atm_result"]["quote"].ce.ltp, Decimal("12"))
 
+    def test_dhan_profile_button_requires_explicit_click(self):
+        """Only a user click may call GET /v2/profile."""
+        app = app_with_catalogue()
+        with patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()), \
+             patch("dhan_visual.option_panel.check_dhan_data_plan") as profile:
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertIsNotNone(app.button(key="fno_dhan_profile_check"))
+            profile.assert_not_called()
+            app.button(key="fno_dhan_profile_check").click().run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            profile.assert_not_called()
+
+    def test_single_dhan_chain_verifies_both_straddle_and_otm_ce(self):
+        """One click populates main Live CE without a second broker request."""
+        from dhan_visual.atm_options import AtmOptionQuote, OptionLeg
+        app = app_with_catalogue()
+        app.session_state["fno_expiry"] = "DEC-26"
+        app.session_state["fno_ce5_mode"] = "Live"
+        app.session_state["dhan_local_cid"] = "1234567890"
+        app.session_state["dhan_local_access_token"] = "SYNTHETIC_NO_LIVE_CONNECTION"
+        expected = AtmOptionQuote(
+            "TCS", "2026-12-29", Decimal("100"),
+            Decimal("100"), 225,
+            OptionLeg(Decimal("4"), Decimal("3.5"), Decimal("4.5")),
+            OptionLeg(Decimal("3"), Decimal("2.5"), Decimal("3.5")),
+            "25 Nov 2026 09:30 IST",
+            Decimal("105"),
+            OptionLeg(Decimal("2"), Decimal("1.5"), Decimal("2.5")),
+        )
+        pool = FakePool()
+        with patch("dhan_visual.screener_ui._market_pool", return_value=pool), \
+             patch("dhan_visual.option_panel.read_client_id", return_value="1234567890"), \
+             patch("dhan_visual.option_panel.load_atm_options", return_value=expected) as chain, \
+             patch("dhan_visual.straddle_panel.scan_all_straddles") as bulk:
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertTrue(app.dataframe[0].value["5%+ CE premium (%)"].isna().all())
+            app.selectbox(key="fno_atm_symbol").set_value("TCS").run()
+            app.button(key="fno_atm_load").click().run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            chain.assert_called_once()
+            self.assertEqual(chain.call_args.args[0:2], ("TCS", "DEC-26"))
+            self.assertEqual(
+                app.session_state["fno_atm_result"]["cid"], "1234567890"
+            )
+            frame = app.dataframe[0].value
+            self.assertEqual(
+                frame.loc[frame["Symbol"] == "TCS",
+                          "5%+ CE premium (%)"].iloc[0],
+                2.0,
+            )
+            self.assertIn(
+                "Dhan LTP", frame.loc[frame["Symbol"] == "TCS",
+                                     "CE source"].iloc[0]
+            )
+            bulk.assert_not_called()
+
     def test_full_straddle_panel_never_calls_dhan_on_page_load(self):
         app = app_with_catalogue()
         pool = FakePool()
