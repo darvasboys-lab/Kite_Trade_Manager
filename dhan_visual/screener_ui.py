@@ -603,6 +603,83 @@ def _poll_market_data():
         st.caption(f"Yahoo · {snap.get('processed', 0)}/{yahoo_busy['total']} scanned")
 
 
+@st.cache_resource
+def _funds_pool():
+    return ThreadPoolExecutor(max_workers=1, thread_name_prefix="dhan-funds-readonly")
+
+
+@st.fragment(run_every="5s")
+def _poll_dhan_funds():
+    """Only the main Streamlit thread reads the worker result or updates UI."""
+    job = st.session_state.get("fno_dhan_funds_job")
+    if not job:
+        return
+    if not job["future"].done():
+        st.caption("Dhan balance · updating…")
+        return
+    try:
+        data = job["future"].result()
+        snapshot = {"key": job["key"], "data": data, "error": ""}
+    except DhanFundsError as exc:
+        snapshot = {"key": job["key"], "data": None, "error": str(exc)}
+    except Exception:
+        snapshot = {
+            "key": job["key"], "data": None,
+            "error": "Dhan balance worker failed",
+        }
+    st.session_state["fno_dhan_funds_snapshot"] = snapshot
+    st.session_state.pop("fno_dhan_funds_job", None)
+    st.rerun(scope="app")
+
+
+def _dhan_funds_panel(cid, token):
+    """Top strip; a read-only GET every five minutes, never on every rerun."""
+    status = verified_account(cid) if valid_client_id(cid) else None
+    if status is None:
+        return  # no funds requested or displayed for an unverified account
+    if len(token) < 16:
+        st.metric("Dhan available balance", "—", help="Token renewal needed")
+        return
+    key = sha256((cid + ":" + token).encode()).hexdigest()
+    job = st.session_state.get("fno_dhan_funds_job")
+    prior = st.session_state.get("fno_dhan_funds_snapshot") or {}
+    same = prior.get("key") == key
+    previous = st.session_state.get("fno_dhan_funds_attempt") or {}
+    now = time.monotonic()
+    blocked = (
+        same and "429" in str(prior.get("error") or "")
+    )
+    window = 1800 if blocked else 300
+    due = (
+        previous.get("key") != key
+        or now - previous.get("when", -1e12) >= window
+    )
+    if (due and
+            not (job and not job["future"].done())):
+        st.session_state["fno_dhan_funds_attempt"] = {
+            "key": key, "when": now,
+        }
+        st.session_state["fno_dhan_funds_job"] = {
+            "key": key,
+            "future": _funds_pool().submit(read_dhan_balance, cid, token),
+        }
+    if same and prior.get("data") is not None:
+        entry = prior["data"]
+        st.metric(
+            "Dhan available balance",
+            f"₹{float(entry.available):,.2f}",
+            help="Dhan available trading balance, from GET /v2/fundlimit. "
+                 "Not an available options margin guarantee.",
+        )
+        st.caption(f"Funds snapshot · {entry.checked_at} UTC")
+    else:
+        st.metric("Dhan available balance", "—")
+        if same and prior.get("error"):
+            st.caption("Funds: " + prior["error"])
+    if st.session_state.get("fno_dhan_funds_job"):
+        _poll_dhan_funds()
+
+
 def _price_panel(universe, expiry, available, provider, manual, credentials=None):
     """Dhan-first by default for verified accounts; Yahoo per missing stock.
 
@@ -1101,6 +1178,7 @@ def render_screener():
             st.session_state.get("fno_ce5_mode") == "Live"
         ),
     )
+    _dhan_funds_panel(*dhan_credentials)
     provider, all_prices = _price_panel(
         universe, expiry, available, provider, manual,
         credentials=dhan_credentials,
