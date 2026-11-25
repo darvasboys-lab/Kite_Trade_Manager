@@ -29,6 +29,35 @@ class FreeNseEodModeTests(unittest.TestCase):
             snap.quotes["DEC-26"]["TCS"].premium_pct, Decimal("2")
         )
 
+    def test_true_atm_straddle_uses_exact_same_expiry_strike_and_underlying(self):
+        from dhan_visual.dhan_market import DhanUnderlying
+        from dhan_visual.screener import Underlying
+        from dhan_visual.eod_straddle_ui import eod_straddle_rows
+        report = daily_report() + (
+            b"2026-11-23,STO,TCS,2026-12-29,100,CE,4,100,3\\r\\n"
+            b"2026-11-23,STO,TCS,2026-12-29,100,PE,3,100,0\\r\\n"
+        )
+        snap = parse_nse_fo_eod(report)
+        pair = snap.straddles["DEC-26"]["TCS"]
+        self.assertEqual(pair.strike, Decimal("100"))
+        self.assertEqual(pair.premium_pct, Decimal("7"))
+        self.assertEqual(pair.call_volume, 3)
+        self.assertEqual(pair.put_volume, 0)
+        catalogue = [
+            DhanUnderlying(Underlying("TCS", "TCS", {"DEC-26": 225}), 100),
+        ]
+        rows = eod_straddle_rows(catalogue, "DEC-26", snap)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["Gross premium × lot (₹)"], 1575.0)
+        self.assertEqual(rows[0]["Liquidity"], "No trades in a leg")
+
+    def test_incomplete_atm_pair_never_uses_neighboring_strike(self):
+        report = daily_report() + (
+            b"2026-11-23,STO,TCS,2026-12-29,100,PE,3,100,5\\r\\n"
+        )
+        snap = parse_nse_fo_eod(report)
+        self.assertFalse(snap.straddles.get("DEC-26", {}))
+
     def test_import_persists_across_app_sessions_and_does_not_downgrade(self):
         with TemporaryDirectory() as temp:
             file = Path(temp) / "cache" / "nse_fo_eod_last.bin"
