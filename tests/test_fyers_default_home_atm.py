@@ -5,7 +5,8 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from dhan_visual.fyers_readonly import FyersAccess, FyersCall, FyersStraddle
-from dhan_visual.otm_home import otm_home_dataframe
+from dhan_visual.otm_home import otm_home_dataframe, filter_home_contracts
+from dhan_visual.screener import Quote
 from test_dhan_studio_startup import app_with_catalogue, example, FakePool
 
 
@@ -31,6 +32,45 @@ def fyers_straddle(expiry="DEC-26"):
 
 
 class PreferredFYERSHomeTests(unittest.TestCase):
+    def test_contract_size_and_straddle_percent(self):
+        from dataclasses import replace
+        atm = replace(fyers_straddle(), call_ltp=Decimal("40"), put_ltp=Decimal("35"))
+        data = otm_home_dataframe(
+            example(), {
+                "TCS": Quote(Decimal("1000"), "offline", "FYERS"),
+                "SBIN": Quote(Decimal("1000"), "offline", "FYERS"),
+            }, {}, straddles={"TCS": atm}, expiry="DEC-26",
+        )
+        tcs = data.loc[data.Stock == "TCS"].iloc[0]
+        self.assertEqual(tcs["Lot size"], 225)
+        self.assertEqual(tcs["Contract size (₹)"], 225000)
+        self.assertEqual(tcs["ATM Straddle Total (₹)"], 75)
+        self.assertEqual(tcs["Straddle (%)"], 7.5)
+        self.assertEqual(filter_home_contracts(data, 7).Stock.tolist(), ["TCS"])
+        self.assertEqual(filter_home_contracts(data, 8).Stock.tolist(), ["TCS", "SBIN"])
+        self.assertTrue(filter_home_contracts(data, 2.25).empty)
+        self.assertEqual(len(filter_home_contracts(data, 0)), 2)
+
+    def test_missing_or_invalid_cmp_is_not_an_eligible_contract(self):
+        for value in (None, Decimal("0"), Decimal("-1"), Decimal("NaN")):
+            quotes = {} if value is None else {"TCS": Quote(value, "offline", "FYERS")}
+            data = otm_home_dataframe(
+                example(), quotes, {}, straddles={"TCS": fyers_straddle()}, expiry="DEC-26",
+            )
+            self.assertTrue(data["Contract size (₹)"].isna().all())
+            self.assertTrue(data["Straddle (%)"].isna().all())
+            self.assertTrue(filter_home_contracts(data, 7).empty)
+            self.assertEqual(len(filter_home_contracts(data, 0)), 2)
+
+    def test_home_filter_defaults_to_seven_lakh(self):
+        app = app_with_catalogue(home_limit=None)
+        app.run()
+        self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+        self.assertEqual(app.number_input(key="fno_home_contract_max_lakh").value, 7.0)
+        app.number_input(key="fno_home_contract_max_lakh").set_value(8.0).run()
+        self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+        self.assertEqual(app.number_input(key="fno_home_contract_max_lakh").value, 8.0)
+
     def test_ce_plus_pe_is_a_rupee_per_share_total_and_uses_same_expiry(self):
         data = otm_home_dataframe(
             example(), {}, {"TCS": fyers_call()},
@@ -38,7 +78,7 @@ class PreferredFYERSHomeTests(unittest.TestCase):
         )
         self.assertEqual(
             data.columns.tolist(),
-            ["Stock", "CMP (₹)", "5%+ OTM CE (%)", "ATM Straddle Total (₹)"],
+            ["Stock", "CMP (₹)", "Lot size", "Contract size (₹)", "5%+ OTM CE (%)", "ATM Straddle Total (₹)", "Straddle (%)"],
         )
         self.assertEqual(
             data.loc[data.Stock == "TCS", "ATM Straddle Total (₹)"].iloc[0],
