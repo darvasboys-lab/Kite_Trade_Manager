@@ -1839,6 +1839,10 @@ def render_screener():
             available, expiry,
             st.session_state.get("fno_eod_selected_snapshot"),
         )
+        # Preserve the existing Dhan straddle panel and its manual controls.
+        # In EOD mode it cannot auto-fetch paid broker option chains.
+        render_straddle_panel(available, expiry,
+                              priority_levels=technicals, priority_quotes=prices)
     elif ce_mode == "FYERS":
         render_fyers_straddles(available, expiry)
     else:
