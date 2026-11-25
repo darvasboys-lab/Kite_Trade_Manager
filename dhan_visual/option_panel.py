@@ -198,6 +198,12 @@ def render_atm_panel(available, filtered_rows, expiry):
                                 selected, expiry, item.entry.lots[expiry],
                                 item.equity_security_id, cid, access_token,
                             )
+                            # Reject a provider/library mismatch before
+                            # saving or displaying any broker-owned price.
+                            if result.symbol != selected:
+                                raise OptionDataError(
+                                    "Dhan option-chain symbol does not match the selected stock"
+                                )
                             st.session_state["fno_atm_result"] = {
                                 "symbol": selected, "month": expiry,
                                 "cid": cid, "quote": result,
