@@ -33,7 +33,7 @@ def nse_regular_session(now: datetime | None = None) -> bool:
 def choose_cash_source(choice: str, *, verified: bool, token_available: bool) -> str:
     if choice == AUTO_SOURCE:
         return "Dhan" if verified and token_available else "Yahoo Finance"
-    if choice in ("Dhan", "Yahoo Finance"):
+    if choice in ("FYERS", "Dhan", "Yahoo Finance"):
         return choice
     raise ValueError("Unsupported quote source")
 

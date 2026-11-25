@@ -53,6 +53,10 @@ from dhan_visual.tradingview_links import (
     clickable_stock_frame, TRADINGVIEW_SYMBOL_DISPLAY,
 )
 from dhan_visual.r1_today_panel import render_r1_today_panel
+from dhan_visual.fyers_ui import (
+    connected_fyers, fyers_cash_prices, fyers_chain_calls,
+    render_fyers_settings, render_fyers_straddles,
+)
 
 
 @st.cache_resource
@@ -920,6 +924,12 @@ def _price_panel(universe, expiry, available, provider, manual, credentials=None
     no authorized Dhan token is available. Each row retains its own source.
     """
     all_symbols = {row.entry.symbol for row in universe}
+    if provider == "FYERS":
+        cash = fyers_cash_prices(sorted(all_symbols), force=manual)
+        if not connected_fyers():
+            st.info("FYERS is not connected yet. Open Settings to authorize a "
+                    "non-trading app; NSE EOD remains available.")
+        return "FYERS · read-only", cash
     cid, token = credentials if credentials is not None else _dhan_credentials(
         need_market=True,
     )
@@ -1216,12 +1226,16 @@ def _free_ce5_panel(expiry, dhan_count=0, available=None):
     """Explicit EOD/Live choice: never silently substitute one for another."""
     from dhan_visual.otm_home import page_two_ce_mode_changed
     mode = st.radio(
-        "CE ≥+5% data", ["EOD", "Live"], horizontal=True,
+        "CE ≥+5% data", ["EOD", "FYERS", "Live"], horizontal=True,
         key="fno_ce5_mode", index=0,
         on_change=page_two_ce_mode_changed,
-        help="EOD: official NSE F&O daily close (free). Live: opt-in Dhan "
-             "option-chain LTP. No Yahoo options are fabricated.",
+        help="EOD: official NSE F&O daily close (free). FYERS: "
+             "non-trading app option-chain LTP. Live: Dhan paid-plan LTP.",
     )
+    if mode == "FYERS":
+        st.caption("FYERS · read-only genuine option chain; use Settings for "
+                   "official daily login. No Dhan paid data plan is required.")
+        return {}, ""
     if mode == "Live":
         # Dhan account/profile validation and actual options pricing are two
         # separate milestones. A token-matched ACTIVE Data API profile is
@@ -1461,6 +1475,11 @@ def _ce5_choice(symbol, dhan_calls, eod_calls, eod_date, mode="EOD",
             "Dhan Live · scanning option chains…"
             if scan_pending else "Live unavailable · no positive CE quote / scan pending"
         )
+    if mode == "FYERS":
+        if symbol in eod_calls:
+            quote = eod_calls[symbol]
+            return quote, "FYERS LTP · read-only option chain"
+        return None, "FYERS · option scan pending / no eligible CE"
     if mode != "EOD":
         raise ValueError("Unknown CE mode")
     if symbol in eod_calls:
@@ -1490,6 +1509,14 @@ def render_screener():
     # widget. Never modify a widget-owned session key after it exists.
     if st.session_state.pop("fno_activate_auto_quote_on_next_run", False):
         st.session_state["fno_price_provider"] = AUTO_SOURCE
+    if st.session_state.pop("fno_fyers_select_on_next_run", False):
+        st.session_state["fno_price_provider"] = "FYERS"
+        st.session_state["fno_ce5_mode"] = "FYERS"
+        st.session_state["fno_home_ce_source"] = "FYERS"
+    if st.session_state.pop("fno_fyers_disconnect_next_run", False):
+        st.session_state["fno_price_provider"] = AUTO_SOURCE
+        st.session_state["fno_ce5_mode"] = "EOD"
+        st.session_state["fno_home_ce_source"] = "EOD"
 
     # Compact one-row toolbar: visible expiry + three tucked-away controls.
     # All prior Streamlit widget keys are preserved for saved user selections.
@@ -1542,10 +1569,10 @@ def render_screener():
     with source_col:
         with st.popover("◉ Source", use_container_width=True):
             provider = st.radio(
-                "Quote source", [AUTO_SOURCE, "Dhan", "Yahoo Finance"],
+                "Quote source", [AUTO_SOURCE, "FYERS", "Dhan", "Yahoo Finance"],
                 index=0, key="fno_price_provider", horizontal=False,
-                help="Default: verified Dhan LTP, with Yahoo only for missing "
-                     "stocks. Yahoo alone until Dhan setup succeeds.",
+                help="FYERS uses a separate free read-only account. Auto: "
+                     "Dhan LTP if entitled, otherwise Yahoo/NSE EOD.",
             )
             manual = st.button("↻ Refresh prices", key="fno_manual_price_refresh")
             if st.button("↻ Refresh stock list", key="fno_refresh_universe"):
@@ -1592,6 +1619,7 @@ def render_screener():
         expiry, dhan_count=len(dhan_ce5), available=available,
     )
     ce_mode = st.session_state.get("fno_ce5_mode", "EOD")
+    fyers_calls = fyers_chain_calls(available, expiry, page="screener") if ce_mode == "FYERS" else {}
     eod_fallback = 0
     if ce_mode == "EOD":
         local_snapshot = st.session_state.get("fno_eod_selected_snapshot")
@@ -1647,14 +1675,20 @@ def render_screener():
     # Technical download is separate from cash quotes and covers the full F&O
     # universe, not just the ₹7 lakh/selected-symbol table subset.
     technical_symbols = [item.entry.symbol for item in universe]
-    technicals = technical_values_for_table(technical_symbols, priority_quotes=prices)
+    technicals = technical_values_for_table(
+        technical_symbols, priority_quotes=prices,
+        fyers_access=connected_fyers() if provider == "FYERS" else None,
+    )
     visible_stage = technical_visible_stage(technical_symbols)
     technical_state = st.session_state.get("fno_technicals") or {}
     r1_ready = (
         visible_stage == 4
         and technical_state.get("status") == "complete"
     )
-    selected_ce = eod_calls if ce_mode == "EOD" else dhan_ce5
+    selected_ce = (
+        fyers_calls if ce_mode == "FYERS"
+        else eod_calls if ce_mode == "EOD" else dhan_ce5
+    )
     # The lightweight first Home page and the full screener show the
     # same source+expiry CE data. Do NOT fetch a second option-chain.
     st.session_state["fno_shared_ce"] = {
@@ -1666,6 +1700,7 @@ def render_screener():
         available, expiry, technicals, compact=compact,
         technically_ready=r1_ready, priority_quotes=prices,
         ce_calls=selected_ce,
+        fyers_access=connected_fyers() if provider == "FYERS" else None,
     )
     st.markdown(f"**{len(rows):,} displayed stocks** · {filled:,} cash prices/references available")
     if not rows:
@@ -1706,10 +1741,14 @@ def render_screener():
         )
         # Try Dhan chain first; only then a user-uploaded NSE daily file.
         # Each ratio uses its OWN source's same-time underlying, never Yahoo CMP.
-        scan_pending = bool(st.session_state.get("fno_straddle_job"))
+        scan_pending = bool(
+            st.session_state.get("fno_fyers_chain_job")
+            if ce_mode == "FYERS" else st.session_state.get("fno_straddle_job")
+        )
         ce5_selected = [
             _ce5_choice(
-                symbol, dhan_ce5, eod_calls, eod_date, ce_mode,
+                symbol, dhan_ce5, selected_ce if ce_mode == "FYERS" else eod_calls,
+                eod_date, ce_mode,
                 scan_pending=scan_pending,
             )
             for symbol in frame["Symbol"]
@@ -1721,10 +1760,9 @@ def render_screener():
         frame["CE source"] = [source for _, source in ce5_selected]
         config["5%+ CE premium (%)"] = st.column_config.NumberColumn(
             "CE ≥+5% (%)", format="%.2f%%", width="medium",
-            help="First listed call strike >= source underlying ×1.05. "
-                 "EOD (default): NSE official daily close for matching spot date; "
-                 "0-volume values are explicitly flagged as untraded reference. "
-                 "Live: opt-in Dhan option-chain LTP only; never mix modes.",
+            help="First listed call strike >= same-snapshot underlying ×1.05. "
+                 "FYERS = non-trading option-chain LTP, EOD = official NSE close, "
+                 "Live = paid Dhan data; never mix providers.",
         )
         config["CE source"] = st.column_config.TextColumn(
             "CE data", help="Dhan request timestamp, NSE EOD report date, or Unavailable.",
@@ -1783,8 +1821,8 @@ def render_screener():
     st.caption(
         f"{provider} · {filled}/{len(available)} prices · "
         "☑ colored EMA = above EMA · ✅ above R1 · no tick = at/below · — waiting/unavailable · "
-        "Yahoo indicators reveal EMA200 → EMA50 → EMA20 → EMA10 → R1 · "
-        f"CE ≥5% mode: {ce_mode} (EOD official close / Live Dhan LTP; never mixed)"
+        "Indicators reveal EMA200 → EMA50 → EMA20 → EMA10 → R1 · "
+        f"CE ≥5% mode: {ce_mode} (FYERS / EOD / Dhan kept separate)"
     )
     with st.expander("Source details and timestamps", expanded=False):
         st.caption(f"Instrument list: {(st.session_state.get('fno_universe_data') or (None, 'Unknown'))[1]}")
@@ -1802,10 +1840,15 @@ def render_screener():
             available, expiry,
             st.session_state.get("fno_eod_selected_snapshot"),
         )
-    # The existing Dhan-only scanner remains available for a future paid
-    # entitlement, but free EOD straddles above never trigger broker requests.
-    render_straddle_panel(available, expiry,
-                          priority_levels=technicals, priority_quotes=prices)
+        # Preserve the existing Dhan straddle panel and its manual controls.
+        # In EOD mode it cannot auto-fetch paid broker option chains.
+        render_straddle_panel(available, expiry,
+                              priority_levels=technicals, priority_quotes=prices)
+    elif ce_mode == "FYERS":
+        render_fyers_straddles(available, expiry)
+    else:
+        render_straddle_panel(available, expiry,
+                              priority_levels=technicals, priority_quotes=prices)
     if rows:
         # Export fully computed cached levels without waiting for visual
         # stage animation; no extra Yahoo requests are made.
@@ -1815,7 +1858,8 @@ def render_screener():
         )
         export_selected = [
             _ce5_choice(
-                sym, dhan_ce5, eod_calls, eod_date, ce_mode,
+                sym, dhan_ce5, selected_ce if ce_mode == "FYERS" else eod_calls,
+                eod_date, ce_mode,
                 scan_pending=bool(st.session_state.get("fno_straddle_job")),
             )
             for sym in exported["Symbol"]
@@ -1838,6 +1882,11 @@ def render_screener():
             if source.startswith(("NSE EOD", "TejHQ EOD")) else None
             for quote, source in export_selected
         ]
+        exported["FYERS underlying for CE % (₹)"] = [
+            float(quote.underlying_ltp) if ce_mode == "FYERS"
+            and quote is not None else None
+            for quote, _ in export_selected
+        ]
         exported["CE source"] = [source for _, source in export_selected]
         exported["Indicators as of"] = [
             technicals[sym].asof if sym in technicals else ""
@@ -1857,6 +1906,8 @@ def render_dhan_settings():
     The stock list and quotes are already prepared by those tabs, even while
     Settings is the visible tab. No order/trade methods.
     """
+    render_fyers_settings()
+    st.divider()
     st.markdown("### Settings · Dhan connection")
     st.caption(
         "Enter credentials on this PC. Connection and funds are verified "

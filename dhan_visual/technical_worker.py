@@ -18,6 +18,7 @@ import time
 
 from .technical_indicators import TechnicalLevels, download_history_batch
 from .load_priority import strongest_first
+from .fyers_readonly import FyersDataError, fetch_daily_levels
 
 CACHE_PATH = Path(__file__).resolve().parent.parent / ".dhan_cache" / "yahoo_technical.json"
 CACHE_VERSION = 1
@@ -129,11 +130,11 @@ def load_all_technicals(symbols: list[str], queue: SimpleQueue,
                         batch_size: int = BATCH_SIZE,
                         pause: float = BATCH_DELAY_SECONDS,
                         cache_path: Path = CACHE_PATH,
-                        priority_quotes=None) -> tuple[int, int]:
-    """Gradually fetch 2-year history for every F&O stock with no user clicks.
+                        priority_quotes=None, fyers_access=None) -> tuple[int, int]:
+    """Gradually fetch actual completed daily candles from chosen provider.
 
-    Reuses at most 9-hour-old public cache, groups ≤10 Yahoo symbols, sleeps
-    between requests, and backs off on empty/rate-limited responses.
+    FYERS uses one 360-day daily request/stock with shared pacing; Yahoo
+    remains available unchanged for its own selected data mode.
     """
     day = today or _today_ist()
     if not 1 <= batch_size <= 10:
@@ -152,10 +153,29 @@ def load_all_technicals(symbols: list[str], queue: SimpleQueue,
         if cancel.is_set():
             break
         group = remaining[start:start + batch_size]
-        try:
-            output, errors = download_history_batch(group, current_month=day)
-        except Exception as exc:
-            output, errors = {}, [f"Yahoo history unavailable ({type(exc).__name__})"]
+        if fyers_access is not None:
+            output, errors = {}, []
+            for symbol in group:
+                if cancel.is_set():
+                    break
+                try:
+                    output[symbol] = fetch_daily_levels(
+                        fyers_access, symbol, day=day,
+                    )
+                except FyersDataError as exc:
+                    errors.append(f"{symbol}: {exc}")
+                    if ("limit" in str(exc).lower()
+                            or "expired" in str(exc).lower()
+                            or "unauthorized" in str(exc).lower()):
+                        cancel.set()
+                        break
+                except Exception:
+                    errors.append(f"{symbol}: FYERS candles unavailable")
+        else:
+            try:
+                output, errors = download_history_batch(group, current_month=day)
+            except Exception as exc:
+                output, errors = {}, [f"Yahoo history unavailable ({type(exc).__name__})"]
         for symbol, value in output.items():
             if symbol in group:
                 cache[symbol] = value
