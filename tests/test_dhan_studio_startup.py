@@ -718,13 +718,13 @@ class PayoffStudioStartupTests(unittest.TestCase):
             "1234567890", "2026-11-25T09:00:00+00:00",
             "TCS", "2026-12-29", "Active", "2099-12-31T00:00:00+00:00",
         )
-        with patch("dhan_visual.screener_ui.verified_account", return_value=saved), \\
-             patch("dhan_visual.straddle_panel.verified_account", return_value=saved), \\
-             patch("dhan_visual.option_panel.verified_account", return_value=saved), \\
-             patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()), \\
-             patch("dhan_visual.straddle_panel._straddle_pool", return_value=pool), \\
-             patch("dhan_visual.straddle_panel.nse_regular_session", return_value=False), \\
-             patch("dhan_visual.screener_ui.load_manual_token", return_value=""), \\
+        with patch("dhan_visual.screener_ui.verified_account", return_value=saved), \
+             patch("dhan_visual.straddle_panel.verified_account", return_value=saved), \
+             patch("dhan_visual.option_panel.verified_account", return_value=saved), \
+             patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()), \
+             patch("dhan_visual.straddle_panel._straddle_pool", return_value=pool), \
+             patch("dhan_visual.straddle_panel.nse_regular_session", return_value=False), \
+             patch("dhan_visual.screener_ui.load_manual_token", return_value=""), \
              patch("dhan_visual.option_panel.load_manual_token", return_value=""):
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
@@ -745,8 +745,8 @@ class PayoffStudioStartupTests(unittest.TestCase):
         app.session_state["fno_ce5_mode"] = "Live"
         app.session_state["dhan_local_cid"] = "1234567890"
         app.session_state["dhan_local_access_token"] = "FAKE_TOKEN_FOR_OFFLINE_TESTING"
-        with patch("dhan_visual.screener_ui.verified_account", return_value=None), \\
-             patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()), \\
+        with patch("dhan_visual.screener_ui.verified_account", return_value=None), \
+             patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()), \
              patch("dhan_visual.straddle_panel.scan_all_straddles") as scan:
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
