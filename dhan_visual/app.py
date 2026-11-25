@@ -310,6 +310,10 @@ with search:
     from dhan_visual.screener_ui import render_screener
     render_screener()
 
+with settings:
+    from dhan_visual.screener_ui import render_dhan_settings
+    render_dhan_settings()
+
 with manage:
     st.info(
         "DEMO ONLY: Example positions and prices are simulated. "
@@ -492,6 +496,3 @@ with manage:
         st.warning("The partially uncovered short-call exposure can have substantial downside and upside risk. The conditional profit cap only applies if all required shares actually fill. Profit target is an advisory; no closing order is ever sent.")
         st.caption("Before any future Dhan connection, reconcile original first-batch fills, options transaction credit, expiry/lot size, holdings and today's tradebook, mark-data freshness, account funds and service isolation from ResultBot.")
 
-with settings:
-    from dhan_visual.screener_ui import render_dhan_settings
-    render_dhan_settings()
