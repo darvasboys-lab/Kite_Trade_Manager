@@ -266,8 +266,11 @@ def render_otm_home():
         verified=bool(saved and token and token_still_current(saved)),
         token_available=bool(token),
     )
-    if selected_source == "Dhan" and token:
-        _start_dhan_prices(universe, cid, token)
+    if selected_source == "Dhan":
+        if valid_client_id(cid) and token:
+            _start_dhan_prices(universe, cid, token)
+        # A user explicitly selected Dhan: never quietly switch to Yahoo.
+        # The full Page 2 will display broker-credential diagnostics.
     else:
         _start_yahoo_prices(universe, expiry)
 
