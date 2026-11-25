@@ -32,6 +32,7 @@ from dhan_visual.nse_eod_ce import MAX_UPLOAD_BYTES, NseEodError, parse_nse_fo_e
 from dhan_visual.ce_eod_local import NSE_FO_NAME, recent_nse_fo_reports
 from dhan_visual.ce_eod_remote import EodDownloadResult, IST, fetch_published_nse_eod
 from dhan_visual.ce_eod_store import load_local_eod, save_verified_report, eod_cash_quotes
+from dhan_visual.eod_straddle_ui import render_eod_straddles
 from dhan_visual.ce_tejhq import TejEodCall, scan_tej_eod
 from dhan_visual.dhan_funds import read_dhan_balance, DhanFundsError
 from dhan_visual.quote_routing import (
@@ -1777,7 +1778,13 @@ def render_screener():
             "Quote-request time is not exchange last-trade time. Yahoo bar closes "
             "may be stale or delayed. Contract value is not option margin."
         )
-    # The straddle panel scans the ENTIRE expiry universe, not the ₹7L-filtered table.
+    if ce_mode == "EOD":
+        render_eod_straddles(
+            available, expiry,
+            st.session_state.get("fno_eod_selected_snapshot"),
+        )
+    # The existing Dhan-only scanner remains available for a future paid
+    # entitlement, but free EOD straddles above never trigger broker requests.
     render_straddle_panel(available, expiry,
                           priority_levels=technicals, priority_quotes=prices)
     if rows:
