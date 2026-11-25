@@ -32,6 +32,11 @@ from dhan_visual.nse_eod_ce import MAX_UPLOAD_BYTES, NseEodError, parse_nse_fo_e
 from dhan_visual.ce_eod_local import NSE_FO_NAME, recent_nse_fo_reports
 from dhan_visual.ce_eod_remote import EodDownloadResult, IST, fetch_published_nse_eod
 from dhan_visual.ce_tejhq import TejEodCall, scan_tej_eod
+from dhan_visual.dhan_funds import read_dhan_balance, DhanFundsError
+from dhan_visual.quote_routing import (
+    AUTO_SOURCE, choose_cash_source, merge_dhan_yahoo,
+    missing_underlyings, should_fetch_again,
+)
 from dhan_visual.dhan_readonly_check import check_dhan_data_plan, DhanProfileError
 from dhan_visual.dhan_integration_state import (
     verified_account, token_still_current, load_manual_token,
@@ -302,6 +307,19 @@ def _dhan_credentials(*, need_market=False):
     cached_manual = load_manual_token(current_id) if valid_client_id(current_id) else ""
     available_token = existing_manual or cached_manual
     auto_available = bool(valid_client_id(current_id) and is_configured(current_id))
+    cached_auto = read_cached_token(current_id) if auto_available else None
+    # A freshly generated Dhan TOTP token may be valid even when the
+    # original setup-time manual token has expired.
+    session_auto = st.session_state.get("dhan_auto_access")
+    auto_current = bool(
+        (isinstance(cached_auto, AutoAccess) and cached_auto.usable())
+        or (isinstance(session_auto, AutoAccess) and session_auto.usable())
+    )
+    needs_token = bool(
+        verified is not None and not (
+            token_still_current(verified) or auto_current
+        )
+    )
     # Avoid showing the complete onboarding form once the broker has passed
     # both the plan/profile check AND one real option-chain test.
     if verified is not None:
@@ -324,43 +342,40 @@ def _dhan_credentials(*, need_market=False):
             f"on {verified.verified_at[:10]}. "
             "The setup is remembered; no full reintegration is needed."
         )
-        if not token_still_current(verified):
+        if needs_token:
             st.warning(
-                "Dhan access token needs renewal. The integration is already "
-                "complete: only update the temporary token below. "
-                "Dhan tokens expire after 24 hours."
+                "Dhan token expired. The setup remains verified; renew the "
+                "token or use your saved secure TOTP settings."
             )
         elif not (available_token or auto_available):
             st.info(
                 "Dhan is integrated, but there is no usable token in this "
                 "browser session. Update only the access token below."
             )
-        else:
-            st.caption(
-                "Dhan setup remembered. Live data still depends on the "
-                "current token and Data API entitlement."
-            )
+        # Verified setup is durable. The token and market data are not.
     else:
-        st.info(
-            "Connect Dhan once: enter credentials locally, check the Data API "
-            "plan, then verify one stock's ATM straddle and 5%+ CE. "
-            "After success, a large green tick replaces this setup prompt."
-        )
+        if not st.session_state.get("fno_first_dhan_hint_seen"):
+            st.toast(
+                "Dhan setup is available below. Verify it once to enable "
+                "automatic Live CE and secure credential reuse.", icon="🔐"
+            )
+            st.session_state["fno_first_dhan_hint_seen"] = True
 
     setup_open = verified is None or (
-        not (available_token or auto_available) or
-        not token_still_current(verified)
+        not (available_token or auto_available) or needs_token
     )
     with st.expander(
         "Dhan setup · one-time (read-only)" if verified is None
         else "Dhan access · update token / manage connection",
         expanded=setup_open,
     ):
-        st.caption(
-            "Enter credentials only on this PC, never in chat. "
-            "A Client ID is remembered locally. Access tokens are not saved "
-            "to project files or GitHub."
-        )
+        if not st.session_state.get("fno_vault_hint_seen"):
+            st.toast(
+                "Use your own PC for Dhan credentials. Tokens and TOTP "
+                "secrets can be saved in Windows Credential Manager only.",
+                icon="🔒",
+            )
+            st.session_state["fno_vault_hint_seen"] = True
         cid = st.text_input(
             "Dhan Client ID", value=default_id,
             key="dhan_local_cid",
@@ -382,9 +397,9 @@ def _dhan_credentials(*, need_market=False):
                  "This is a password field; no access token is sent to ChatGPT.",
         ).strip()
         remember = st.checkbox(
-            "Remember the current token in Windows Credential Manager "
-            "(only until its expiry)",
-            value=False, key="dhan_remember_manual_token",
+            "Securely remember this verified token on this Windows PC "
+            "(until expiry)",
+            value=True, key="dhan_remember_manual_token",
             help="Optional. Saves ONLY after both one-time checks succeed, "
                  "or after a verified token-only renewal. "
                  "A manual token cannot work after its 24-hour expiry.",
@@ -423,15 +438,14 @@ def _dhan_credentials(*, need_market=False):
     current_id = current_id.strip()
     automatic = _auto_login_panel(
         current_id,
-        "" if verified is not None and not token_still_current(verified)
-        else manual,
+        "" if needs_token else manual,
         allow_login=need_market,
     )
     secure = load_manual_token(current_id) if valid_client_id(current_id) else ""
     # A previously verified (but now expired) manual token cannot trigger
     # automatic quote calls. The explicit token-only renewal button above
     # remains available, and an independently current auto token can work.
-    if verified is not None and not token_still_current(verified):
+    if needs_token:
         return current_id, (automatic or secure)
     return current_id, (manual or automatic or secure)
 
@@ -444,7 +458,7 @@ def _universe_key(universe):
 
 
 def _start_dhan_prices(universe, cid, token, force=False):
-    """Start all-stock market-data prefetch on first valid login, without click."""
+    """Bounded Dhan LTP snapshots: at most one per five minutes by default."""
     identity = sha256((cid + ":" + token + ":" + _universe_key(universe)).encode()).hexdigest()
     existing = st.session_state.get("fno_dhan_job")
     if existing and not existing["future"].done():
@@ -452,9 +466,16 @@ def _start_dhan_prices(universe, cid, token, force=False):
             return identity
         # Keep old worker out of the new credentials' display path; it will
         # finish naturally without exposing results to the new login.
-    if not force and st.session_state.get("fno_dhan_attempt_key") == identity:
-        return identity
+    previous = st.session_state.get("fno_dhan_snapshot") or {}
+    if st.session_state.get("fno_dhan_attempt_key") == identity:
+        if not should_fetch_again(
+            st.session_state.get("fno_dhan_last_attempt_at"),
+            now=time.monotonic(), errors=previous.get("errors") or (),
+            manual=force,
+        ):
+            return identity
     st.session_state["fno_dhan_attempt_key"] = identity
+    st.session_state["fno_dhan_last_attempt_at"] = time.monotonic()
     st.session_state["fno_dhan_job"] = {
         "key": identity,
         "future": _market_pool().submit(load_dhan_all, list(universe), cid, token),
