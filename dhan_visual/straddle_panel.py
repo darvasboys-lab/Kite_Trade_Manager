@@ -249,7 +249,13 @@ def render_straddle_panel(available, expiry, *, priority_levels=None,
         if auto_start:
             st.session_state["fno_straddle_auto_started_key"] = auto_key
             st.caption("Live CE · starting a single paced Dhan scan…")
-        if start or auto_start:
+        # A visible CE control at the top can request the SAME existing
+        # rate-limited scanner. Drain exactly one user request; do not start
+        # another job if the scanner is already running.
+        requested = st.session_state.get("fno_ce5_scan_requested") == expiry
+        if requested:
+            st.session_state.pop("fno_ce5_scan_requested", None)
+        if start or auto_start or (requested and not busy):
             if not valid_client_id(cid):
                 st.error("Enter your valid Dhan Client ID locally.")
             elif len(token) < 16 and not automatic:

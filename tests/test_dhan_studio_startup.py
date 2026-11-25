@@ -704,6 +704,61 @@ class PayoffStudioStartupTests(unittest.TestCase):
             )
             scan.assert_not_called()
 
+    def test_live_ce_fetch_button_uses_existing_paced_straddle_scan(self):
+        """No paid chain requests until verified; top button uses one scanner."""
+        app = app_with_catalogue()
+        app.session_state["fno_expiry"] = "DEC-26"
+        app.session_state["fno_ce5_mode"] = "Live"
+        app.session_state["dhan_local_cid"] = "1234567890"
+        app.session_state["dhan_local_access_token"] = "FAKE_TOKEN_FOR_OFFLINE_TESTING"
+        pool = FakePool()
+        from datetime import timezone
+        from dhan_visual.dhan_integration_state import VerifiedIntegration
+        saved = VerifiedIntegration(
+            "1234567890", "2026-11-25T09:00:00+00:00",
+            "TCS", "2026-12-29", "Active", "2099-12-31T00:00:00+00:00",
+        )
+        with patch("dhan_visual.screener_ui.verified_account", return_value=saved), \
+             patch("dhan_visual.straddle_panel.verified_account", return_value=saved), \
+             patch("dhan_visual.option_panel.verified_account", return_value=saved), \
+             patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()), \
+             patch("dhan_visual.straddle_panel._straddle_pool", return_value=pool), \
+             patch("dhan_visual.straddle_panel.nse_regular_session", return_value=False), \
+             patch("dhan_visual.screener_ui.load_manual_token", return_value=""), \
+             patch("dhan_visual.option_panel.load_manual_token", return_value=""):
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertIsNotNone(app.button(key="fno_ce5_fetch_live"))
+            self.assertEqual(len(pool.calls), 0)
+            app.button(key="fno_ce5_fetch_live").click().run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(len(pool.calls), 1)
+            self.assertEqual(pool.calls[0][0][0].__name__, "scan_all_straddles")
+            self.assertEqual(len(pool.calls[0][0][1]), len(example()))
+            self.assertEqual(pool.calls[0][0][2], "DEC-26")
+            self.assertIsNone(app.session_state.get("fno_ce5_scan_requested"))
+            app.run()
+            self.assertEqual(len(pool.calls), 1)  # never duplicates in-flight
+
+    def test_unverified_live_ce_explains_missing_option_data_without_fetch(self):
+        app = app_with_catalogue()
+        app.session_state["fno_ce5_mode"] = "Live"
+        app.session_state["dhan_local_cid"] = "1234567890"
+        app.session_state["dhan_local_access_token"] = "FAKE_TOKEN_FOR_OFFLINE_TESTING"
+        with patch("dhan_visual.screener_ui.verified_account", return_value=None), \
+             patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()), \
+             patch("dhan_visual.straddle_panel.scan_all_straddles") as scan:
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertFalse(any(
+                b.key == "fno_ce5_fetch_live" for b in app.button
+            ))
+            self.assertTrue(any(
+                "cash quotes alone are insufficient" in str(node.value).lower()
+                for node in app.warning
+            ))
+            scan.assert_not_called()
+
     def test_dec_ce_populates_from_locally_downloaded_nse_report(self):
         """Read only a local public UDiFF ZIP, no broker or NSE scraping."""
         from tempfile import TemporaryDirectory
