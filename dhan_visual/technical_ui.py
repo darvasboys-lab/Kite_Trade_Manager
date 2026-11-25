@@ -52,7 +52,8 @@ def _tech_pool():
 
 def _tech_key(symbols: list[str]) -> str:
     day = _today_ist()
-    raw = f"{day.year:04d}-{day.month:02d}|" + "|".join(sorted(set(symbols)))
+    provider = "FYERS" if st.session_state.get("fno_price_provider") == "FYERS" else "Yahoo"
+    raw = f"{day.year:04d}-{day.month:02d}|{provider}|" + "|".join(sorted(set(symbols)))
     return sha256(raw.encode()).hexdigest()
 
 
@@ -73,7 +74,7 @@ def _get_snapshot(symbols: list[str]) -> dict:
 
 
 @st.fragment(run_every="3s")
-def _tech_heartbeat(symbols, priority_quotes=None):
+def _tech_heartbeat(symbols, priority_quotes=None, fyers_access=None):
     """Poll worker using Streamlit main thread; never call Streamlit in worker."""
     snap = _get_snapshot(symbols)
     key = snap["key"]
@@ -106,11 +107,11 @@ def _tech_heartbeat(symbols, priority_quotes=None):
 
     yahoo_job = st.session_state.get("fno_yahoo_job")
     yahoo_snapshot = st.session_state.get("fno_yahoo_snapshot")
-    if (not job
-            and not yahoo_job
-            and yahoo_snapshot
+    source_ready = bool(fyers_access) or (not yahoo_job and bool(yahoo_snapshot))
+    if (not job and source_ready
             and st.session_state.get("fno_technical_attempt") != key):
-        # Never overlap the Yahoo 15-minute quote loader with the history scan.
+        # FYERS history is independent of Yahoo; Yahoo requests still wait
+        # for its 15-minute cash quote loader to finish.
         st.session_state["fno_technical_attempt"] = key
         queue = SimpleQueue()
         stop = Event()
@@ -118,14 +119,14 @@ def _tech_heartbeat(symbols, priority_quotes=None):
             "key": key, "queue": queue, "stop": stop,
             "future": _tech_pool().submit(
                 load_all_technicals, list(symbols), queue, stop,
-                priority_quotes=priority_quotes,
+                priority_quotes=priority_quotes, fyers_access=fyers_access,
             ),
         }
         st.session_state["fno_technical_job"] = job
         snap["status"] = "loading"
     if job and job.get("key") == key:
         st.caption(
-            f"Yahoo indicators · EMA 200 first · "
+            f"{'FYERS' if fyers_access else 'Yahoo'} indicators · EMA 200 first · "
             f"{snap['processed']}/{snap['total']} checked"
         )
     elif snap.get("status") == "revealing":
@@ -133,10 +134,11 @@ def _tech_heartbeat(symbols, priority_quotes=None):
         st.caption(f"Indicator stages · {current} ready · revealing next in order")
 
 
-def technical_values_for_table(symbols: list[str], priority_quotes=None) -> dict[str, TechnicalLevels]:
+def technical_values_for_table(symbols: list[str], priority_quotes=None,
+                               fyers_access=None) -> dict[str, TechnicalLevels]:
     """Return available technical levels without blocking app rendering."""
     snap = _get_snapshot(symbols)
-    _tech_heartbeat(symbols, priority_quotes)
+    _tech_heartbeat(symbols, priority_quotes, fyers_access)
     return snap["values"]
 
 
