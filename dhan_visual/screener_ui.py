@@ -32,6 +32,11 @@ from dhan_visual.nse_eod_ce import MAX_UPLOAD_BYTES, NseEodError, parse_nse_fo_e
 from dhan_visual.ce_eod_local import NSE_FO_NAME, recent_nse_fo_reports
 from dhan_visual.ce_eod_remote import EodDownloadResult, IST, fetch_published_nse_eod
 from dhan_visual.ce_tejhq import TejEodCall, scan_tej_eod
+from dhan_visual.dhan_readonly_check import check_dhan_data_plan, DhanProfileError
+from dhan_visual.dhan_integration_state import (
+    verified_account, token_still_current, load_manual_token,
+    refresh_verified_token, save_manual_token,
+)
 from dhan_visual.technical_ui import technical_values_for_table, technical_visible_stage, attach_technical_columns
 from dhan_visual.technical_worker import read_cached_technicals
 from dhan_visual.table_layout import (
@@ -211,7 +216,7 @@ def _auto_login_heartbeat(cid):
             _start_auto_login(cid)
 
 
-def _auto_login_panel(cid, manual_token):
+def _auto_login_panel(cid, manual_token, *, allow_login=True):
     """Optional local TOTP setup, independent of ResultBot's secrets."""
     if not valid_client_id(cid):
         return ""
@@ -221,7 +226,8 @@ def _auto_login_panel(cid, manual_token):
             "Provide your Dhan 6-digit PIN and TOTP setup secret ONCE. "
             "Windows Credential Manager protects these locally. "
             "Dhan returns a 24-hour token; while this dashboard is running "
-            "it can renew automatically without pasting a daily token."
+            "it can renew automatically when Dhan or Live CE data is in use, "
+            "without pasting a daily token."
         )
         st.warning(
             "This Dhan account may also be used by ResultBot. "
@@ -250,6 +256,10 @@ def _auto_login_panel(cid, manual_token):
 
     if manual_token or not enabled:
         return ""
+    if not allow_login:
+        # Opening a Yahoo/EOD dashboard must not issue broker tokens.
+        old = read_cached_token(cid)
+        return old.token if old else ""
     stored = st.session_state.get("dhan_auto_access")
     if not isinstance(stored, AutoAccess) or not stored.usable():
         stored = read_cached_token(cid)
@@ -271,36 +281,160 @@ def _auto_login_panel(cid, manual_token):
     return ""
 
 
-def _dhan_credentials():
+def _dhan_credentials(*, need_market=False):
+    """One-time broker onboarding, then a compact status with token renewal.
+
+    Green check represents *completed verified setup*, not a claim that a
+    time-limited Dhan token is valid forever. Only explicit button clicks
+    authenticate or store a manual token. No calls to order endpoints.
+    """
     saved = read_client_id()
     default_id = os.environ.get("DHAN_CLIENT_ID", "") or saved
-    configured = bool(default_id and (os.environ.get("DHAN_ACCESS_TOKEN") or is_configured(default_id)))
-    with st.expander("Dhan market-data login · read-only", expanded=not configured):
+    current_id = str(
+        st.session_state.get("dhan_local_cid") or default_id or ""
+    ).strip()
+    verified = verified_account(current_id)
+    existing_manual = str(
+        st.session_state.get("dhan_local_access_token")
+        or os.environ.get("DHAN_ACCESS_TOKEN")
+        or ""
+    ).strip()
+    cached_manual = load_manual_token(current_id) if valid_client_id(current_id) else ""
+    available_token = existing_manual or cached_manual
+    auto_available = bool(valid_client_id(current_id) and is_configured(current_id))
+    # Avoid showing the complete onboarding form once the broker has passed
+    # both the plan/profile check AND one real option-chain test.
+    if verified is not None:
+        st.markdown(
+            '<div style="display:flex;align-items:center;gap:14px;'
+            'border:1px solid #87cdaa;border-radius:12px;'
+            'background:#e9f8f0;padding:14px 18px;margin:10px 0">'
+            '<span role="img" aria-label="Connection verified" '
+            'style="font-size:48px;line-height:1;color:#117b51;'
+            'font-weight:800">✓</span>'
+            '<div><strong style="color:#116644;font-size:20px">'
+            'Dhan integration completed</strong>'
+            '<div style="font-size:12px;color:#256f50">'
+            'Verified one-stock option-chain test · '
+            'Setup saved on this PC · Read-only</div></div></div>',
+            unsafe_allow_html=True,
+        )
         st.caption(
-            "Client ID is remembered locally. Choose manual token entry or "
-            "enable secure TOTP auto-login below. Never paste credentials in chat."
+            f"Verified {verified.symbol} · expiry {verified.expiry} · "
+            f"on {verified.verified_at[:10]}. "
+            "The setup is remembered; no full reintegration is needed."
+        )
+        if not token_still_current(verified):
+            st.warning(
+                "Dhan access token needs renewal. The integration is already "
+                "complete: only update the temporary token below. "
+                "Dhan tokens expire after 24 hours."
+            )
+        elif not (available_token or auto_available):
+            st.info(
+                "Dhan is integrated, but there is no usable token in this "
+                "browser session. Update only the access token below."
+            )
+        else:
+            st.caption(
+                "Dhan setup remembered. Live data still depends on the "
+                "current token and Data API entitlement."
+            )
+    else:
+        st.info(
+            "Connect Dhan once: enter credentials locally, check the Data API "
+            "plan, then verify one stock's ATM straddle and 5%+ CE. "
+            "After success, a large green tick replaces this setup prompt."
+        )
+
+    setup_open = verified is None or (
+        not (available_token or auto_available) or
+        not token_still_current(verified)
+    )
+    with st.expander(
+        "Dhan setup · one-time (read-only)" if verified is None
+        else "Dhan access · update token / manage connection",
+        expanded=setup_open,
+    ):
+        st.caption(
+            "Enter credentials only on this PC, never in chat. "
+            "A Client ID is remembered locally. Access tokens are not saved "
+            "to project files or GitHub."
         )
         cid = st.text_input(
             "Dhan Client ID", value=default_id,
             key="dhan_local_cid",
-            help="Saved locally to the gitignored .dhan_cache/client_settings.json",
+            help="Numeric Client ID. Saved locally in .dhan_cache after entry.",
         )
         current_id = cid.strip()
         if valid_client_id(current_id):
             if saved != current_id and not save_client_id(current_id):
                 st.warning("Could not save Client ID locally")
-            else:
-                st.caption("Client ID remembered on this PC.")
         elif current_id:
             st.warning("Enter a numeric Dhan Client ID")
+
         manual = st.text_input(
-            "Dhan access token · manual option",
+            "Dhan access token",
             value=os.environ.get("DHAN_ACCESS_TOKEN", ""),
-            type="password", key="dhan_local_access_token",
-            help="Optional if TOTP auto-login is enabled.",
+            type="password",
+            key="dhan_local_access_token",
+            help="Get a current token from Dhan Web. "
+                 "This is a password field; no access token is sent to ChatGPT.",
+        ).strip()
+        remember = st.checkbox(
+            "Remember the current token in Windows Credential Manager "
+            "(only until its expiry)",
+            value=False, key="dhan_remember_manual_token",
+            help="Optional. Saves ONLY after both one-time checks succeed, "
+                 "or after a verified token-only renewal. "
+                 "A manual token cannot work after its 24-hour expiry.",
         )
-    automatic = _auto_login_panel(current_id, manual.strip())
-    return current_id, (manual.strip() or automatic)
+        if verified is not None:
+            if st.button(
+                "Verify renewed token · skip full setup",
+                key="dhan_renew_token_only",
+                help="Read-only Dhan Profile check; never rescans options.",
+            ):
+                renewal_token = manual or os.environ.get("DHAN_ACCESS_TOKEN", "").strip()
+                if not valid_client_id(current_id) or not renewal_token:
+                    st.error("Enter your Client ID and a newly issued token.")
+                else:
+                    try:
+                        profile = check_dhan_data_plan(current_id, renewal_token)
+                        if not profile.data_ready:
+                            st.error("Dhan Data API subscription is not active.")
+                        else:
+                            refresh_verified_token(current_id, profile.token_validity)
+                            if remember:
+                                save_manual_token(
+                                    current_id, renewal_token, profile.token_validity
+                                )
+                            st.success("Token checked. Existing integration retained.")
+                            st.rerun()
+                    except (DhanProfileError, ValueError, OSError, AutoAuthError) as exc:
+                        st.error(str(exc))
+            st.caption(
+                "Renewal checks the token and Data API plan only. "
+                "No second integration or option-chain test is required."
+            )
+
+    # Keep the existing opt-in TOTP manager. It may issue a new broker token,
+    # so its existing interference warning remains and user consent is required.
+    current_id = current_id.strip()
+    automatic = _auto_login_panel(
+        current_id,
+        "" if verified is not None and not token_still_current(verified)
+        else manual,
+        allow_login=need_market,
+    )
+    secure = load_manual_token(current_id) if valid_client_id(current_id) else ""
+    # A previously verified (but now expired) manual token cannot trigger
+    # automatic quote calls. The explicit token-only renewal button above
+    # remains available, and an independently current auto token can work.
+    if verified is not None and not token_still_current(verified):
+        return current_id, (automatic or secure)
+    return current_id, (manual or automatic or secure)
+
 
 
 def _universe_key(universe):
@@ -448,11 +582,13 @@ def _poll_market_data():
         st.caption(f"Yahoo · {snap.get('processed', 0)}/{yahoo_busy['total']} scanned")
 
 
-def _price_panel(universe, expiry, available, provider, manual):
+def _price_panel(universe, expiry, available, provider, manual, credentials=None):
     """Quote-source controls live in the compact top-right toolbar."""
     all_symbols = {row.entry.symbol for row in universe}
     if provider == "Dhan":
-        cid, token = _dhan_credentials()
+        cid, token = credentials if credentials is not None else _dhan_credentials(
+            need_market=True,
+        )
         if cid and len(token) >= 16:
             identity = _start_dhan_prices(universe, cid, token, force=manual)
             snapshot = st.session_state.get("fno_dhan_snapshot") or {}
@@ -905,7 +1041,18 @@ def render_screener():
         )
 
     available = [row for row in universe if expiry in row.entry.lots]
-    provider, all_prices = _price_panel(universe, expiry, available, provider, manual)
+    # Render onboarding once for all quote modes, not only when cash quotes
+    # happen to be switched from Yahoo to Dhan.
+    dhan_credentials = _dhan_credentials(
+        need_market=(
+            provider == "Dhan" or
+            st.session_state.get("fno_ce5_mode") == "Live"
+        ),
+    )
+    provider, all_prices = _price_panel(
+        universe, expiry, available, provider, manual,
+        credentials=dhan_credentials,
+    )
     prices = {
         sym: quote for sym, quote in all_prices.items()
         if sym in {row.entry.symbol for row in available}
@@ -958,6 +1105,9 @@ def render_screener():
         and technical_state.get("status") == "complete"
     )
     dhan_ce5 = available_otm_calls(available, expiry)
+    if st.session_state.pop("fno_activate_live_on_next_run", False):
+        # Safe to update before the CE radio widget exists in this run.
+        st.session_state["fno_ce5_mode"] = "Live"
     eod_calls, eod_date = _free_ce5_panel(
         expiry, dhan_count=len(dhan_ce5), available=available,
     )

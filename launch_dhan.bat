@@ -34,6 +34,14 @@ if errorlevel 1 (
     if errorlevel 1 goto failed
 )
 
+rem Install Windows Credential Manager support once, only if missing.
+"%APP_PY%" -c "import keyring" >nul 2>nul
+if errorlevel 1 (
+    echo [DHAN] Installing optional secure credential-vault support...
+    "%APP_PY%" -m pip install "keyring>=25,<27"
+    if errorlevel 1 echo [DHAN] WARNING: Vault unavailable; use session-only Dhan token.
+)
+
 echo [DHAN] Open http://127.0.0.1:8502 in your browser.
 echo [DHAN] Press Ctrl+C here to stop the screener.
 "%APP_PY%" -m streamlit run "dhan_visual\app.py" --server.address 127.0.0.1 --server.port 8502 --browser.gatherUsageStats false

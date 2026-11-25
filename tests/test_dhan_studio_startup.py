@@ -331,6 +331,135 @@ class PayoffStudioStartupTests(unittest.TestCase):
             )
             bulk.assert_not_called()
 
+    def test_successful_dhan_integration_shows_big_green_tick_then_skips_setup(self):
+        """Profile + one stock proves onboarding once, persisting no secrets."""
+        from datetime import timedelta
+        from tempfile import TemporaryDirectory
+        from dhan_visual.atm_options import AtmOptionQuote, OptionLeg
+        from dhan_visual.dhan_readonly_check import DhanProfileStatus
+        from dhan_visual.dhan_integration_state import (
+            IST, record_verification, verified_account,
+        )
+        client = "1234567890"
+        token = "TEST_TOKEN_NOT_FOR_PRODUCTION"
+        expiry_text = (datetime.now(IST) + timedelta(hours=15)).strftime(
+            "%d/%m/%Y %H:%M"
+        )
+        active_profile = DhanProfileStatus(
+            "Active", "2026-12-31 20:00:00.0", expiry_text,
+            True, "2026-11-25T09:40:00+00:00",
+        )
+        chain = AtmOptionQuote(
+            "TCS", "2026-12-29", Decimal("100"), Decimal("100"), 225,
+            OptionLeg(Decimal("4"), Decimal("3"), Decimal("5")),
+            OptionLeg(Decimal("3"), Decimal("2"), Decimal("4")),
+            "Offline Mock Only", Decimal("105"),
+            OptionLeg(Decimal("2"), Decimal("1.5"), Decimal("2.5")),
+        )
+        with TemporaryDirectory() as directory:
+            state_path = Path(directory) / "verified.json"
+            app = app_with_catalogue()
+            app.session_state["fno_expiry"] = "DEC-26"
+            app.session_state["fno_ce5_mode"] = "Live"
+            app.session_state["dhan_local_cid"] = client
+            app.session_state["dhan_local_access_token"] = token
+            with patch("dhan_visual.screener_ui.verified_account",
+                       side_effect=lambda cid: verified_account(cid, state_path)), \
+                 patch("dhan_visual.option_panel.verified_account",
+                       side_effect=lambda cid: verified_account(cid, state_path)), \
+                 patch("dhan_visual.option_panel.record_verification",
+                       side_effect=lambda cid, sym, exp, validity: record_verification(
+                           cid, sym, exp, validity, path=state_path
+                       )) as record, \
+                 patch("dhan_visual.screener_ui.load_manual_token", return_value=""), \
+                 patch("dhan_visual.option_panel.load_manual_token", return_value=""), \
+                 patch("dhan_visual.option_panel.check_dhan_data_plan",
+                       return_value=active_profile) as profile, \
+                 patch("dhan_visual.option_panel.load_atm_options",
+                       return_value=chain) as load, \
+                 patch("dhan_visual.option_panel.save_manual_token") as vault, \
+                 patch("dhan_visual.screener_ui._market_pool",
+                       return_value=FakePool()), \
+                 patch("dhan_visual.straddle_panel.scan_all_straddles") as bulk:
+                app.run()
+                self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+                profile.assert_not_called()
+                load.assert_not_called()
+                app.selectbox(key="fno_atm_symbol").set_value("TCS").run()
+                app.button(key="fno_dhan_profile_check").click().run()
+                self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+                profile.assert_called_once()
+                load.assert_not_called()
+                app.button(key="fno_atm_load").click().run()
+                self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+                load.assert_called_once()
+                record.assert_called_once()
+                vault.assert_not_called()  # no vault without opt-in
+                self.assertTrue(state_path.exists())
+                self.assertIsNotNone(verified_account(client, state_path))
+                self.assertNotIn(token, state_path.read_text(encoding="utf8"))
+                self.assertTrue(any(
+                    "Dhan integration completed" in str(node.value)
+                    for node in app.markdown
+                ))
+                # No second profile check or one-stock onboarding on reruns.
+                app.run()
+                self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+                profile.assert_called_once()
+                load.assert_called_once()
+                bulk.assert_not_called()
+                self.assertIsNotNone(app.button(key="fno_dhan_optional_recheck"))
+
+                # A fresh browser session sees the saved integration badge.
+                second = app_with_catalogue()
+                second.session_state["dhan_local_cid"] = client
+                second.run()
+                self.assertFalse(second.exception, [
+                    str(x.message) for x in second.exception
+                ])
+                self.assertTrue(any(
+                    "Dhan integration completed" in str(node.value)
+                    for node in second.markdown
+                ))
+                profile.assert_called_once()
+                load.assert_called_once()
+
+    def test_option_chain_without_active_profile_does_not_complete_setup(self):
+        """A valid-looking CE fixture alone cannot mint a success badge."""
+        from dhan_visual.atm_options import AtmOptionQuote, OptionLeg
+        from dhan_visual.dhan_readonly_check import DhanProfileStatus
+        from tempfile import TemporaryDirectory
+        from dhan_visual.dhan_integration_state import verified_account
+        app = app_with_catalogue()
+        app.session_state["dhan_local_cid"] = "1234567890"
+        app.session_state["dhan_local_access_token"] = "FAKE_TEST_TOKEN_LONG"
+        chain = AtmOptionQuote(
+            "TCS", "2026-11-26", Decimal("100"), Decimal("100"), 225,
+            OptionLeg(Decimal("3"), None, None),
+            OptionLeg(Decimal("3"), None, None), "mock",
+            Decimal("105"), OptionLeg(Decimal("2"), None, None),
+        )
+        with TemporaryDirectory() as directory:
+            state = Path(directory) / "verified.json"
+            with patch("dhan_visual.screener_ui.verified_account",
+                       side_effect=lambda cid: verified_account(cid, state)), \
+                 patch("dhan_visual.option_panel.verified_account",
+                       side_effect=lambda cid: verified_account(cid, state)), \
+                 patch("dhan_visual.option_panel.record_verification") as record, \
+                 patch("dhan_visual.option_panel.load_atm_options", return_value=chain), \
+                 patch("dhan_visual.option_panel.check_dhan_data_plan") as profile, \
+                 patch("dhan_visual.screener_ui._market_pool",
+                       return_value=FakePool()):
+                app.run()
+                app.button(key="fno_atm_load").click().run()
+                self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+                profile.assert_not_called()
+                record.assert_not_called()
+                self.assertFalse(any(
+                    "Dhan integration completed" in str(node.value)
+                    for node in app.markdown
+                ))
+
     def test_full_straddle_panel_never_calls_dhan_on_page_load(self):
         app = app_with_catalogue()
         pool = FakePool()

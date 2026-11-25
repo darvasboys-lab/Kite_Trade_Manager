@@ -7,12 +7,17 @@ the cash-price source. No order APIs and no alteration to the trading bots.
 from __future__ import annotations
 
 import os
+from hashlib import sha256
 
 import streamlit as st
 
 from .atm_options import OptionDataError, load_atm_options
 from .straddle_scan import otm_call_5_from_atm, straddle_from_atm
 from .dhan_readonly_check import DhanProfileError, check_dhan_data_plan
+from .dhan_integration_state import (
+    verified_account, load_manual_token, record_verification,
+    parse_dhan_token_expiry, save_manual_token,
+)
 from .auto_auth import AutoAccess, AutoAuthError, is_configured, load_or_generate, read_cached_token
 from .local_client_settings import read_client_id, save_client_id, valid_client_id
 
@@ -46,12 +51,37 @@ def _local_creds():
         old = read_cached_token(cid)
         if old:
             token = old.token
+    if not token and cid:
+        token = load_manual_token(cid)
     return cid, token
 
 
 def render_atm_panel(available, filtered_rows, expiry):
     """Explicit one-stock Dhan read-only chain verification before full scan."""
-    with st.expander("Dhan connection test · ATM straddle + 5% CE", expanded=False):
+    cid_for_status, _ = _local_creds()
+    existing_connection = verified_account(cid_for_status)
+    with st.expander(
+        "Dhan connection test · ATM straddle + 5% CE"
+        if existing_connection is None
+        else "Dhan connection · optional one-stock recheck",
+        expanded=False,
+    ):
+        if existing_connection is not None:
+            st.success(
+                "✓ Integration already completed successfully. "
+                "The Data API and one-stock Straddle/5% CE were checked. "
+                "You do not have to run integration again."
+            )
+            if st.button(
+                "Show optional verification controls",
+                key="fno_dhan_optional_recheck",
+            ):
+                st.session_state["fno_dhan_show_recheck"] = (
+                    not st.session_state.get("fno_dhan_show_recheck", False)
+                )
+            if not st.session_state.get("fno_dhan_show_recheck", False):
+                return
+
         st.caption(
             "First verify ONE stock's exact selected-month expiry, ATM CE/PE "
             "and 5%+ OTM CE in a single Dhan option-chain response. "
@@ -102,11 +132,11 @@ def render_atm_panel(available, filtered_rows, expiry):
             else:
                 with st.spinner("Checking read-only Dhan account profile…"):
                     try:
-                        profile = check_dhan_data_plan(
-                            cid, token or override_token.strip(),
-                        )
+                        used_token = token or override_token.strip()
+                        profile = check_dhan_data_plan(cid, used_token)
                         st.session_state["fno_dhan_profile_status"] = {
                             "cid": cid, "status": profile,
+                            "token_fingerprint": sha256(used_token.encode()).hexdigest(),
                         }
                     except DhanProfileError as exc:
                         st.error(str(exc))
@@ -168,12 +198,89 @@ def render_atm_panel(available, filtered_rows, expiry):
                                 selected, expiry, item.entry.lots[expiry],
                                 item.equity_security_id, cid, access_token,
                             )
+                            # Reject a provider/library mismatch before
+                            # saving or displaying any broker-owned price.
+                            if result.symbol != selected:
+                                raise OptionDataError(
+                                    "Dhan option-chain symbol does not match the selected stock"
+                                )
                             st.session_state["fno_atm_result"] = {
                                 "symbol": selected, "month": expiry,
                                 "cid": cid, "quote": result,
                             }
-                            # Refresh the upstream CE table using this SAME
-                            # option-chain snapshot; no second Dhan request.
+                            # Mark onboarding complete ONLY after the profile
+                            # verified an ACTIVE Data API and this same token
+                            # retrieved BOTH ATM straddle and +5% OTM CE.
+                            # This is never done on page load or a mock quote.
+                            profile_entry = (
+                                st.session_state.get("fno_dhan_profile_status") or {}
+                            )
+                            verified_profile = profile_entry.get("status")
+                            profile_matches_token = (
+                                profile_entry.get("cid") == cid
+                                and profile_entry.get("token_fingerprint") ==
+                                sha256(access_token.encode()).hexdigest()
+                                and verified_profile is not None
+                                and verified_profile.data_ready
+                            )
+                            try:
+                                straddle_from_atm(result)
+                                otm = otm_call_5_from_atm(result)
+                            except OptionDataError:
+                                otm = None
+                            if profile_matches_token and otm is not None:
+                                expiry_time = parse_dhan_token_expiry(
+                                    verified_profile.token_validity
+                                )
+                                if expiry_time is None:
+                                    st.warning(
+                                        "Option data works, but Dhan token expiry "
+                                        "could not be verified. Complete the "
+                                        "profile check with a token showing validity."
+                                    )
+                                else:
+                                    try:
+                                        record_verification(
+                                            cid, selected, result.expiry,
+                                            verified_profile.token_validity,
+                                        )
+                                        if st.session_state.get(
+                                            "dhan_remember_manual_token", False
+                                        ) and not isinstance(
+                                            st.session_state.get("dhan_auto_access"),
+                                            AutoAccess,
+                                        ):
+                                            try:
+                                                save_manual_token(
+                                                    cid, access_token,
+                                                    verified_profile.token_validity,
+                                                )
+                                            except AutoAuthError as exc:
+                                                st.warning(
+                                                    "Integration complete but current "
+                                                    f"token was not saved: {exc}"
+                                                )
+                                        st.session_state["fno_dhan_show_recheck"] = False
+                                        st.session_state["fno_dhan_integration_complete"] = True
+                                        st.session_state["fno_activate_live_on_next_run"] = True
+                                    except (ValueError, OSError) as exc:
+                                        st.warning(
+                                            "Live quote verified but connection status "
+                                            f"could not be saved: {type(exc).__name__}"
+                                        )
+                            elif verified_profile is None:
+                                st.info(
+                                    "The option chain loaded. To finish one-time "
+                                    "integration, click step 1 (Check Data API plan) "
+                                    "and then step 2 with the same token."
+                                )
+                            elif not profile_matches_token:
+                                st.warning(
+                                    "Profile and options must be verified with "
+                                    "the same current token to complete setup."
+                                )
+                            # Refresh the upstream CE table and green status
+                            # using this SAME option-chain snapshot.
                             st.rerun()
                         except OptionDataError as exc:
                             st.error(str(exc))
