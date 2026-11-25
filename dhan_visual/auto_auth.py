@@ -182,13 +182,68 @@ def _parse_expiry(raw) -> datetime:
     return parsed
 
 
-def _parse_token_response(payload, cid: str) -> AutoAccess:
-    if not isinstance(payload, dict) or str(payload.get("dhanClientId", "")) != cid:
-        raise AutoAuthError("Dhan token was not verified for the configured Client ID")
-    raw_token = payload.get("accessToken")
+def _token_error_category(payload: dict) -> str:
+    """Static, non-sensitive diagnosis for HTTP-200 broker error envelopes.
+
+    Never echo a returned errorMessage: upstream services may reflect query
+    parameters including a PIN or TOTP and we must not expose those values.
+    """
+    code = payload.get("errorCode") or payload.get("error_code") or ""
+    message = payload.get("errorMessage") or payload.get("message") or ""
+    value = (str(code) + " " + str(message)).lower()[:512]
+    if "totp" in value or "otp" in value or "authenticator" in value:
+        return "Dhan rejected the TOTP code; check saved permanent seed and PC clock"
+    if "pin" in value or "password" in value:
+        return "Dhan rejected the PIN; confirm the saved six-digit Dhan PIN"
+    if "client" in value or "account" in value or "ucc" in value:
+        return "Dhan rejected the Client ID or account login credentials"
+    if "rate" in value or "too many" in value or "limit" in value:
+        return "Dhan authentication is rate limited; avoid repeated retries"
+    if "expired" in value or "disabled" in value or "not enabled" in value:
+        return "Dhan rejected authentication; verify that TOTP is enabled in Dhan Web"
+    return "Dhan returned an unsuccessful token-generation response (HTTP 200)"
+
+
+def _parse_token_response(payload, cid: str, *,
+                          allow_missing_client_id: bool = False) -> AutoAccess:
+    """Strictly check an issued token, separating missing ID from mismatch.
+
+    Only the caller that immediately verifies GET /v2/profile may permit a
+    missing Client ID in an otherwise valid-looking token response. The
+    profile must match the configured account before the token is cached.
+    """
+    if not isinstance(payload, dict):
+        raise AutoAuthError(
+            "Dhan token-generation response was not a JSON object"
+        )
+    # Official Dhan docs specify a flat response. Allow a future 'data'
+    # envelope only when its token is actually present and still verified
+    # by the independent Profile API before it can be stored/used.
+    candidate = payload
+    inner = payload.get("data")
+    if (isinstance(inner, dict) and
+            isinstance(inner.get("accessToken"), str)):
+        candidate = inner
+    expected = str(cid)
+    for item in (payload, candidate):
+        returned_id = item.get("dhanClientId")
+        if returned_id is not None and str(returned_id).strip() != expected:
+            raise AutoAuthError(
+                "Dhan returned a different Client ID than the one saved "
+                "in Settings. No token was accepted."
+            )
+    raw_token = candidate.get("accessToken")
     if not isinstance(raw_token, str) or not 30 <= len(raw_token) <= 8192:
-        raise AutoAuthError("Dhan did not issue a valid-looking access token")
-    expiry = _parse_expiry(payload.get("expiryTime"))
+        # An HTTP-200 error body should not masquerade as an ID mismatch.
+        raise AutoAuthError(_token_error_category(candidate))
+    if (candidate.get("dhanClientId") is None
+            and payload.get("dhanClientId") is None
+            and not allow_missing_client_id):
+        raise AutoAuthError(
+            "Dhan token response omitted Client ID; independent profile "
+            "verification is required"
+        )
+    expiry = _parse_expiry(candidate.get("expiryTime"))
     return AutoAccess(raw_token, expiry, "Dhan TOTP")
 
 
@@ -206,8 +261,10 @@ def _verify_profile(session, token: str, cid: str) -> None:
         payload = response.json()
         if not isinstance(payload, dict) or str(payload.get("dhanClientId", "")) != cid:
             raise AutoAuthError("Dhan profile account does not match saved Client ID")
-        if str(payload.get("dataPlan", "")).lower() in ("deactive", "inactive"):
-            raise AutoAuthError("Dhan profile says the Data API subscription is not active")
+        # Token authentication and Data API entitlement are different.
+        # Keep the valid account-bound token so funds can be read even if
+        # F&O Data API is inactive; the read-only UI checks dataPlan before
+        # ever starting an option-chain scan.
     except AutoAuthError:
         raise
     except Exception as exc:
@@ -242,7 +299,10 @@ def request_new_access(cid: str, pin: str, secret: str, session=None) -> AutoAcc
     except Exception as exc:
         # No raw request URL, response body, PIN or OTP is included.
         raise AutoAuthError("Dhan TOTP authentication could not complete securely") from exc
-    result = _parse_token_response(obj, cid)
+    # A genuine token that omits dhanClientId (or uses a data envelope)
+    # is accepted ONLY after a separate GET /profile confirms same client.
+    # An explicit mismatched ID always fails closed before that request.
+    result = _parse_token_response(obj, cid, allow_missing_client_id=True)
     _verify_profile(session, result.token, cid)
     return result
 
