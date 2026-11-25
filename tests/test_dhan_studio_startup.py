@@ -49,15 +49,21 @@ class PayoffStudioStartupTests(unittest.TestCase):
         with patch("dhan_visual.screener_ui._market_pool", return_value=pool):
             app = app_with_catalogue().run()
         self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-        self.assertGreaterEqual(len(app.tabs), 2)
+        self.assertGreaterEqual(len(app.tabs), 4)
+        self.assertEqual(app.tabs[0].label, "◎ OTM CE Home")
+        self.assertEqual(app.tabs[1].label, "⌕ Market Screener")
+        self.assertEqual(
+            app.dataframe[0].value.columns.tolist(),
+            ["Stock", "CMP (₹)", "5%+ OTM CE (%)"],
+        )
         self.assertEqual(app.radio(key="fno_price_provider").value, "Auto (Dhan → Yahoo)")
         self.assertEqual(app.selectbox(key="fno_value_preset").value, "Below ₹7 lakh")
         self.assertGreaterEqual(len(app.dataframe), 1)
-        self.assertNotIn("Company", app.dataframe[0].value.columns)
-        self.assertIn("Symbol", app.dataframe[0].value.columns)
-        self.assertIn("TradingView chart", app.dataframe[0].value.columns)
+        self.assertNotIn("Company", app.dataframe[1].value.columns)
+        self.assertIn("Symbol", app.dataframe[1].value.columns)
+        self.assertIn("TradingView chart", app.dataframe[1].value.columns)
         from urllib.parse import parse_qs, urlsplit
-        df = app.dataframe[0].value
+        df = app.dataframe[1].value
         for _, item in df.iterrows():
             url = item["TradingView chart"]
             self.assertEqual(urlsplit(url).netloc, "www.tradingview.com")
@@ -68,7 +74,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
         self.assertIsNotNone(app.button(key="ccs_autofit_all_button"))
         for col in ("EMA 200", "EMA 50", "EMA 20", "EMA 10", "Monthly R1",
                     "5%+ CE premium (%)"):
-            self.assertIn(col, app.dataframe[0].value.columns)
+            self.assertIn(col, app.dataframe[1].value.columns)
         # Former full-width filter, search and quote source controls remain
         # reachable by exactly the same widget keys inside small popovers.
         self.assertEqual(app.radio(key="fno_value_sort").value, "Low → high")
@@ -76,12 +82,213 @@ class PayoffStudioStartupTests(unittest.TestCase):
         self.assertIsNotNone(app.button(key="fno_manual_price_refresh"))
         self.assertIsNotNone(app.button(key="fno_refresh_universe"))
 
+    def test_home_and_page_two_share_same_otm_ce_without_extra_calls(self):
+        """No two option-chain requests and no synthetic CE percentages."""
+        from dhan_visual.straddle_scan import OtmCall5Quote
+        from dhan_visual.straddle_panel import _scan_key
+        app = app_with_catalogue()
+        app.session_state["dhan_local_cid"] = "1234567890"
+        app.session_state["dhan_local_access_token"] = "TOKEN_OFFLINE_FOR_TESTS_ONLY"
+        app.session_state["fno_ce5_mode"] = "Live"
+        app.session_state["fno_home_expiry"] = "DEC-26"
+        app.session_state["fno_expiry"] = "DEC-26"
+        app.session_state["fno_price_provider"] = "Yahoo Finance"
+        app.session_state["fno_yahoo_snapshot"] = {
+            "key": "fixture",
+            "quotes": {
+                "TCS": Quote(Decimal("100"), "mock", "Yahoo Finance"),
+                "SBIN": Quote(Decimal("95"), "mock", "Yahoo Finance"),
+            },
+        }
+        call = OtmCall5Quote(
+            "TCS", "2026-12-29", Decimal("105"),
+            Decimal("100"), Decimal("2"), Decimal("2"),
+            "offline fixture",
+        )
+        key = _scan_key(example(), "DEC-26")
+        app.session_state["fno_straddle_snapshots"] = {
+            key: {
+                "key": key, "month": "DEC-26", "client_id": "1234567890",
+                "total": 2, "rows": {}, "otm_calls": {"TCS": call},
+                "errors": {}, "status": "Complete", "processed": 2,
+                "started": True, "fatal": "",
+            }
+        }
+        with patch("dhan_visual.screener_ui._market_pool",
+                   return_value=FakePool()), \
+             patch("dhan_visual.straddle_panel.scan_all_straddles") as scan:
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            home = app.dataframe[0].value
+            main = app.dataframe[1].value
+            self.assertEqual(
+                home.loc[home["Stock"] == "TCS", "5%+ OTM CE (%)"].iloc[0],
+                2.0,
+            )
+            self.assertTrue(
+                home.loc[home["Stock"] == "SBIN", "5%+ OTM CE (%)"].isna().all()
+            )
+            self.assertEqual(
+                main.loc[main["Symbol"] == "TCS", "5%+ CE premium (%)"].iloc[0],
+                2.0,
+            )
+            scan.assert_not_called()
+            self.assertEqual(
+                app.dataframe[0].value.columns.tolist(),
+                ["Stock", "CMP (₹)", "5%+ OTM CE (%)"],
+            )
+
+    def test_only_one_home_option_worker_from_profile_verified_token(self):
+        """After explicit Dhan Connect, Home requests one paced worker."""
+        from datetime import timedelta
+        from dhan_visual.dhan_readonly_check import DhanProfileStatus
+        from dhan_visual.straddle_panel import _scan_key
+        app = app_with_catalogue()
+        cid, token = "1234567890", "PROFILE_ONLY_TEST_TOKEN_12345"
+        app.session_state["dhan_local_cid"] = cid
+        app.session_state["dhan_local_access_token"] = token
+        app.session_state["fno_ce5_mode"] = "Live"
+        app.session_state["fno_home_expiry"] = "DEC-26"
+        app.session_state["fno_expiry"] = "DEC-26"
+        app.session_state["fno_dhan_profile_status"] = {
+            "cid": cid,
+            "token_fingerprint": hashlib.sha256(token.encode()).hexdigest(),
+            "status": DhanProfileStatus(
+                "Active", "2026-12-31",
+                (datetime.now(IST) + timedelta(hours=12)).strftime("%d/%m/%Y %H:%M"),
+                True, datetime.now(IST).isoformat(),
+            ),
+        }
+        pool = FakePool()
+        with patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()), \
+             patch("dhan_visual.screener_ui._funds_pool", return_value=FakePool()), \
+             patch("dhan_visual.straddle_panel._straddle_pool",
+                   return_value=pool), \
+             patch("dhan_visual.straddle_panel.verified_account", return_value=None), \
+             patch("dhan_visual.screener_ui.verified_account", return_value=None), \
+             patch("dhan_visual.option_panel.verified_account", return_value=None), \
+             patch("dhan_visual.straddle_panel.nse_regular_session",
+                   return_value=True):
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(len(pool.calls), 1)
+            self.assertEqual(pool.calls[0][0][0].__name__, "scan_all_straddles")
+            app.run()
+            self.assertEqual(len(pool.calls), 1)
+            job = app.session_state["fno_straddle_job"]
+            self.assertFalse(job["future"].done())
+            self.assertEqual(job["cid"], cid)
+            self.assertEqual(job["key"], _scan_key(example(), "DEC-26"))
+
+    def test_inactive_data_plan_blocks_home_and_page_two_option_workers(self):
+        """No option-chain requests after a current Dhan plan rejection."""
+        from datetime import timedelta
+        from dhan_visual.dhan_readonly_check import DhanProfileStatus
+        from dhan_visual.dhan_integration_state import VerifiedIntegration
+        cid, token = "1234567890", "INACTIVE_PLAN_TOKEN_FOR_TEST"
+        expiry = (datetime.now(IST) + timedelta(hours=10)).strftime("%d/%m/%Y %H:%M")
+        saved = VerifiedIntegration(
+            cid, datetime.now(IST).isoformat(), "TCS",
+            "2026-12-29", "Active",
+            (datetime.now(IST) + timedelta(hours=10)).isoformat(),
+        )
+        app = app_with_catalogue()
+        app.session_state["dhan_local_cid"] = cid
+        app.session_state["dhan_local_access_token"] = token
+        app.session_state["fno_home_expiry"] = "DEC-26"
+        app.session_state["fno_expiry"] = "DEC-26"
+        app.session_state["fno_ce5_mode"] = "Live"
+        app.session_state["fno_dhan_profile_status"] = {
+            "cid": cid,
+            "token_fingerprint": hashlib.sha256(token.encode()).hexdigest(),
+            "status": DhanProfileStatus(
+                "Deactive", "2026-11-26", expiry,
+                True, datetime.now(IST).isoformat(),
+            ),
+        }
+        pool = FakePool()
+        with patch("dhan_visual.screener_ui._market_pool",
+                   return_value=FakePool()), \
+             patch("dhan_visual.screener_ui._funds_pool",
+                   return_value=FakePool()), \
+             patch("dhan_visual.otm_home.verified_account",
+                   return_value=saved), \
+             patch("dhan_visual.straddle_panel.verified_account",
+                   return_value=saved), \
+             patch("dhan_visual.screener_ui.verified_account",
+                   return_value=saved), \
+             patch("dhan_visual.straddle_panel.nse_regular_session",
+                   return_value=True), \
+             patch("dhan_visual.straddle_panel._straddle_pool",
+                   return_value=pool):
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(len(pool.calls), 0)
+            self.assertTrue(any(
+                "data api plan is inactive" in str(node.value).lower()
+                for node in app.warning
+            ))
+            app.button(key="fno_straddle_start").click().run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            # Explicit Page 2 Start is rejected just like automatic Home.
+            self.assertEqual(len(pool.calls), 0)
+
+    def test_home_ratio_is_dhan_owned_even_if_displayed_cash_cmp_differs(self):
+        from dhan_visual.otm_home import otm_home_dataframe
+        from dhan_visual.straddle_scan import OtmCall5Quote
+        call = OtmCall5Quote(
+            "TCS", "2026-12-29", Decimal("105"),
+            Decimal("100"), Decimal("2"), Decimal("2"), "offline",
+        )
+        frame = otm_home_dataframe(
+            example(),
+            {"TCS": Quote(Decimal("103"), "offline", "Yahoo Finance")},
+            {"TCS": call},
+        )
+        self.assertEqual(
+            frame.loc[frame["Stock"] == "TCS", "CMP (₹)"].iloc[0],
+            103.0,
+        )
+        self.assertEqual(
+            frame.loc[frame["Stock"] == "TCS", "5%+ OTM CE (%)"].iloc[0],
+            2.0,
+        )
+        self.assertTrue(
+            frame.loc[frame["Stock"] == "SBIN",
+                      "5%+ OTM CE (%)"].isna().all()
+        )
+
+    def test_home_and_screener_expiry_selectors_stay_in_sync(self):
+        app = app_with_catalogue()
+        with patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()):
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            app.selectbox(key="fno_home_expiry").set_value("DEC-26").run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(app.selectbox(key="fno_expiry").value, "DEC-26")
+            app.selectbox(key="fno_expiry").set_value("NOV-26").run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(app.selectbox(key="fno_home_expiry").value, "NOV-26")
+
+    def test_dhan_credentials_only_in_settings_not_repeated_on_page_two(self):
+        app = app_with_catalogue()
+        with patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()):
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertTrue(any(t.label == "⚙ Settings" for t in app.tabs))
+            self.assertIsNotNone(app.text_input(key="dhan_local_cid"))
+            self.assertIsNotNone(app.text_input(key="dhan_local_access_token"))
+            self.assertFalse(any(
+                t.key in ("fno_straddle_client_id", "fno_straddle_token")
+                for t in app.text_input
+            ))
+
     def test_clickable_stock_column_is_link_not_duplicate_company(self):
         app = app_with_catalogue()
         with patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()):
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-            frame = app.dataframe[0].value
+            frame = app.dataframe[1].value
             self.assertEqual(
                 frame.columns.tolist()[:2], ["TradingView chart", "Symbol"]
             )
@@ -107,7 +314,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
             self.assertIsNotNone(app.button(key="ccs_r1_today_refresh"))
             # The existing strategy-builder tab has its own independent table.
             self.assertGreaterEqual(len(app.dataframe), 1)
-            self.assertIn("TradingView chart", app.dataframe[0].value.columns)
+            self.assertIn("TradingView chart", app.dataframe[1].value.columns)
 
     def test_r1_today_auto_scan_all_fno_underlyings_not_current_filters(self):
         from dhan_visual.technical_indicators import TechnicalLevels
@@ -148,7 +355,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
         with patch("dhan_visual.screener_ui._market_pool", return_value=pool):
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-            before = app.dataframe[0].value.copy()
+            before = app.dataframe[1].value.copy()
             self.assertNotIn("Company", before.columns)
             app.button(key="ccs_autofit_all_button").click().run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
@@ -166,7 +373,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
                 dataframe_key("ccs_covered_call_stages", app.session_state),
                 "ccs_covered_call_stages_autofit_1",
             )
-            self.assertTrue(app.dataframe[0].value.equals(before))
+            self.assertTrue(app.dataframe[1].value.equals(before))
             app.button(key="ccs_autofit_all_button").click().run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
             self.assertEqual(app.session_state["ccs_autofit_revision"], 2)
@@ -209,16 +416,16 @@ class PayoffStudioStartupTests(unittest.TestCase):
         }
         app.run()
         self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-        frame = app.dataframe[0].value
+        frame = app.dataframe[1].value
         self.assertEqual(frame["Symbol"].tolist(), ["SBIN", "TCS"])
         self.assertEqual(frame["Contract value (₹L)"].tolist(), [4.5, 6.75])
         app.toggle(key="fno_compact_contract_value").set_value(False).run()
         self.assertEqual(
-            app.dataframe[0].value["Contract value (₹)"].tolist(),
+            app.dataframe[1].value["Contract value (₹)"].tolist(),
             [450000., 675000.]
         )
         app.selectbox(key="fno_value_preset").set_value("All stocks").run()
-        self.assertEqual(len(app.dataframe[0].value), 2)
+        self.assertEqual(len(app.dataframe[1].value), 2)
 
     def test_switching_to_yahoo_starts_full_universe_in_background(self):
         app = app_with_catalogue()
@@ -319,7 +526,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
                 b.key == "fno_dhan_profile_check" for b in app.button
             ))
             duplicate.assert_not_called()
-            options.assert_not_called()
+            self.assertEqual(options.call_count, 1)
             # A confirmed positive balance is displayed only after the
             # read-only endpoint itself returns a valid account-matched value.
             funds.future.set_result(FundsSnapshot(
@@ -338,7 +545,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
             app.run()
             self.assertEqual(len(funds.calls), 1)
             connect.assert_called_once()
-            options.assert_not_called()
+            self.assertEqual(options.call_count, 1)
 
     def test_profile_for_other_token_never_triggers_funds(self):
         from dhan_visual.dhan_readonly_check import DhanProfileStatus
@@ -401,7 +608,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
              patch("dhan_visual.straddle_panel.scan_all_straddles") as bulk:
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-            self.assertTrue(app.dataframe[0].value["5%+ CE premium (%)"].isna().all())
+            self.assertTrue(app.dataframe[1].value["5%+ CE premium (%)"].isna().all())
             app.selectbox(key="fno_atm_symbol").set_value("TCS").run()
             app.button(key="fno_atm_load").click().run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
@@ -410,7 +617,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
             self.assertEqual(
                 app.session_state["fno_atm_result"]["cid"], "1234567890"
             )
-            frame = app.dataframe[0].value
+            frame = app.dataframe[1].value
             self.assertEqual(
                 frame.loc[frame["Symbol"] == "TCS",
                           "5%+ CE premium (%)"].iloc[0],
@@ -472,6 +679,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
                  patch("dhan_visual.option_panel.load_atm_options",
                        return_value=chain) as load, \
                  patch("dhan_visual.option_panel.save_manual_token") as vault, \
+                 patch("dhan_visual.otm_home.prepare_otm_scan", return_value=""), \
                  patch("dhan_visual.screener_ui._market_pool",
                        return_value=FakePool()), \
                  patch("dhan_visual.straddle_panel.scan_all_straddles") as bulk:
@@ -582,6 +790,8 @@ class PayoffStudioStartupTests(unittest.TestCase):
                    return_value=verified), \
              patch("dhan_visual.straddle_panel.verified_account",
                    return_value=verified), \
+             patch("dhan_visual.otm_home.verified_account",
+                   return_value=verified), \
              patch("dhan_visual.screener_ui.load_manual_token", return_value=""), \
              patch("dhan_visual.option_panel.load_manual_token", return_value=""), \
              patch("dhan_visual.screener_ui._market_pool",
@@ -669,7 +879,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
         app.session_state["fno_price_provider"] = "Dhan"
         app.run()
         self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-        cols = app.dataframe[0].value.columns.tolist()
+        cols = app.dataframe[1].value.columns.tolist()
         self.assertNotIn("Quote time", cols)
         self.assertNotIn("Price source", cols)
 
@@ -707,7 +917,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
         }
         app.run()
         self.assertFalse(app.exception,[str(x.message) for x in app.exception])
-        frame=app.dataframe[0].value
+        frame=app.dataframe[1].value
         tcs=frame.loc[frame["Symbol"]=="TCS"].iloc[0]
         self.assertEqual(tcs["EMA 200"],"☑ ₹99.00")
         self.assertEqual(tcs["EMA 50"],"—")
@@ -717,18 +927,18 @@ class PayoffStudioStartupTests(unittest.TestCase):
         app.session_state["fno_technicals"]["stage"]=1
         app.run()
         self.assertEqual(
-            app.dataframe[0].value.loc[
-                app.dataframe[0].value["Symbol"]=="TCS", "EMA 50"
+            app.dataframe[1].value.loc[
+                app.dataframe[1].value["Symbol"]=="TCS", "EMA 50"
             ].iloc[0], "☑ ₹100.00"
         )
         self.assertEqual(
-            app.dataframe[0].value.loc[
-                app.dataframe[0].value["Symbol"]=="TCS", "EMA 20"
+            app.dataframe[1].value.loc[
+                app.dataframe[1].value["Symbol"]=="TCS", "EMA 20"
             ].iloc[0], "—"
         )
         app.session_state["fno_technicals"]["stage"]=4
         app.run()
-        frame=app.dataframe[0].value
+        frame=app.dataframe[1].value
         tcs=frame.loc[frame["Symbol"]=="TCS"].iloc[0]
         self.assertEqual(tcs["EMA 20"],"₹102.00")
         self.assertEqual(tcs["EMA 10"],"₹103.00")
@@ -785,7 +995,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
              patch("dhan_visual.straddle_panel.scan_all_straddles") as scan:
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-            screen = app.dataframe[0].value
+            screen = app.dataframe[1].value
             self.assertEqual(
                 screen.loc[screen["Symbol"] == "TCS", "5%+ CE premium (%)"].iloc[0],
                 2.0,
@@ -868,7 +1078,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
                  patch("dhan_visual.straddle_panel.scan_all_straddles") as scan:
                 app.run()
                 self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-                df = app.dataframe[0].value
+                df = app.dataframe[1].value
                 value = df.loc[df["Symbol"] == "TCS", "5%+ CE premium (%)"].iloc[0]
                 source = df.loc[df["Symbol"] == "TCS", "CE source"].iloc[0]
                 self.assertEqual(value, 2.0)
@@ -891,17 +1101,17 @@ class PayoffStudioStartupTests(unittest.TestCase):
                 app.run()
                 self.assertFalse(app.exception, [str(x.message) for x in app.exception])
                 self.assertEqual(app.radio(key="fno_ce5_mode").value, "EOD")
-                frame = app.dataframe[0].value
+                frame = app.dataframe[1].value
                 self.assertEqual(frame.loc[frame["Symbol"] == "TCS",
                                            "5%+ CE premium (%)"].iloc[0], 2.0)
                 app.radio(key="fno_ce5_mode").set_value("Live").run()
                 self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-                frame = app.dataframe[0].value
+                frame = app.dataframe[1].value
                 self.assertTrue(frame["5%+ CE premium (%)"].isna().all())
                 app.radio(key="fno_ce5_mode").set_value("EOD").run()
                 self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-                self.assertEqual(app.dataframe[0].value.loc[
-                    app.dataframe[0].value["Symbol"] == "TCS",
+                self.assertEqual(app.dataframe[1].value.loc[
+                    app.dataframe[1].value["Symbol"] == "TCS",
                     "5%+ CE premium (%)"
                 ].iloc[0], 2.0)
                 scan.assert_not_called()
@@ -941,13 +1151,13 @@ class PayoffStudioStartupTests(unittest.TestCase):
              patch("dhan_visual.screener_ui.scan_tej_eod") as paid:
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-            df = app.dataframe[0].value
+            df = app.dataframe[1].value
             tcs = df.loc[df["Symbol"] == "TCS"].iloc[0]
             self.assertEqual(tcs["5%+ CE premium (%)"], 2.0)
             self.assertEqual(tcs["CE source"], "TejHQ EOD 2026-11-23")
             app.radio(key="fno_ce5_mode").set_value("Live").run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-            self.assertTrue(app.dataframe[0].value["5%+ CE premium (%)"].isna().all())
+            self.assertTrue(app.dataframe[1].value["5%+ CE premium (%)"].isna().all())
             paid.assert_not_called()
 
     def test_compact_search_and_filters_retain_all_prior_actions(self):
@@ -957,13 +1167,13 @@ class PayoffStudioStartupTests(unittest.TestCase):
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
             app.text_input(key="fno_symbol_find").set_value("TCS").run()
-            self.assertEqual(app.dataframe[0].value["Symbol"].tolist(), ["TCS"])
+            self.assertEqual(app.dataframe[1].value["Symbol"].tolist(), ["TCS"])
             app.text_input(key="fno_symbol_find").set_value("").run()
             app.radio(key="fno_value_sort").set_value("High → low").run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
             self.assertEqual(app.radio(key="fno_value_sort").value, "High → low")
             app.selectbox(key="fno_value_preset").set_value("All stocks").run()
-            self.assertEqual(len(app.dataframe[0].value), 2)
+            self.assertEqual(len(app.dataframe[1].value), 2)
 
     def test_dark_mode_button_toggles_without_broker_calls(self):
         app = app_with_catalogue()

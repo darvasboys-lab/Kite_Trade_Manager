@@ -293,15 +293,32 @@ with theme_action:
         st.session_state["ccs_dark_mode"] = not st.session_state["ccs_dark_mode"]
         st.rerun()
 
-search, manage = st.tabs(["⌕ Search Stock", "▥ Manage Trade"])
+# Streamlit renders every tab's Python body on a page run: the full Market
+# Screener keeps filling its background queues while the first lightweight
+# OTM CE table is visible. Never start a duplicate Dhan option-chain worker.
+otm_home, search, manage, settings = st.tabs([
+    "◎ OTM CE Home", "⌕ Market Screener", "▥ Manage Trade", "⚙ Settings",
+])
+
+with otm_home:
+    from dhan_visual.otm_home import render_otm_home
+    render_otm_home()
 
 with search:
-    # F&O public list loads automatically in a nonblocking worker; no trading calls.
+    # Preserve the original complete Page 1, now Page 2.
+    # Full quote/technical jobs continue offscreen when Home is selected.
     from dhan_visual.screener_ui import render_screener
     render_screener()
 
+with settings:
+    from dhan_visual.screener_ui import render_dhan_settings
+    render_dhan_settings()
+
 with manage:
-    st.info("DEMO ONLY: Example positions and quotes are simulated. No Dhan account is connected; no order can be placed.")
+    st.info(
+        "DEMO ONLY: Example positions and prices are simulated. "
+        "Dhan market data, if connected, is read-only; no orders are placed."
+    )
     with st.expander("Edit strategy inputs",expanded=False):
         p1,p2,p3,p4=st.columns(4)
         avg=p1.number_input("First MANUAL batch average (₹)",min_value=0.05,value=1000.0,step=1.0)
@@ -478,3 +495,4 @@ with manage:
         st.markdown("**Conditional fully covered expiry breakeven:** " + (", ".join(f"₹{v:,.2f}" for v in be.planned_expiry) or "No positive breakeven below strike"))
         st.warning("The partially uncovered short-call exposure can have substantial downside and upside risk. The conditional profit cap only applies if all required shares actually fill. Profit target is an advisory; no closing order is ever sent.")
         st.caption("Before any future Dhan connection, reconcile original first-batch fills, options transaction credit, expiry/lot size, holdings and today's tradebook, mark-data freshness, account funds and service isolation from ResultBot.")
+
