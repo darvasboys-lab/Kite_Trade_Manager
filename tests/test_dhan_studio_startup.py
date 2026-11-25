@@ -385,6 +385,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
                 self.assertFalse(app.exception, [str(x.message) for x in app.exception])
                 profile.assert_not_called()
                 load.assert_not_called()
+                app.selectbox(key="fno_atm_symbol").set_value("TCS").run()
                 app.button(key="fno_dhan_profile_check").click().run()
                 self.assertFalse(app.exception, [str(x.message) for x in app.exception])
                 profile.assert_called_once()
