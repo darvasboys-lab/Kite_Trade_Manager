@@ -68,7 +68,11 @@ def prepare_filters(expiries):
             else:
                 for k,widget in FILTER_KEYS.items():
                     st.session_state[widget]=f[k]
-    if data["snapshot"]:
+
+
+def render_historical_shortlist():
+    data=load_workspace()
+    if data and data["snapshot"]:
         with st.expander("Restore last saved shortlist (historical)",expanded=False):
             snap=data["snapshot"]
             st.caption("Historical snapshot saved "+snap["saved_at"]+" · not refreshed or used as live scan input")
