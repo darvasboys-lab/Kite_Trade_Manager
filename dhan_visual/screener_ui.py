@@ -436,16 +436,19 @@ def _dhan_credentials(*, need_market=False):
     # Keep the existing opt-in TOTP manager. It may issue a new broker token,
     # so its existing interference warning remains and user consent is required.
     current_id = current_id.strip()
+    old_manual_expired = bool(
+        verified is not None and not token_still_current(verified)
+    )
     automatic = _auto_login_panel(
         current_id,
-        "" if needs_token else manual,
+        "" if old_manual_expired else manual,
         allow_login=need_market,
     )
     secure = load_manual_token(current_id) if valid_client_id(current_id) else ""
     # A previously verified (but now expired) manual token cannot trigger
     # automatic quote calls. The explicit token-only renewal button above
     # remains available, and an independently current auto token can work.
-    if needs_token:
+    if old_manual_expired:
         return current_id, (automatic or secure)
     return current_id, (manual or automatic or secure)
 
@@ -488,8 +491,10 @@ def _start_yahoo_prices(universe, expiry, force=False):
     """Queue all Yahoo stocks in 25-symbol background batches, automatically."""
     key = _universe_key(universe)
     current = st.session_state.get("fno_yahoo_job")
-    if current and not current["future"].done() and current["key"] == key:
-        return key
+    if current and not current["future"].done():
+        # Never launch overlapping Yahoo bulk scans while source/missing
+        # subsets change; the first in-flight result can still fill rows.
+        return current["key"]
     if not force and st.session_state.get("fno_yahoo_attempt_key") == key:
         return key
     st.session_state["fno_yahoo_attempt_key"] = key
