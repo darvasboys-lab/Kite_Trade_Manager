@@ -35,7 +35,7 @@ from .table_layout import dataframe_key, autofit_column_config, autofit_enabled
 from .screener_ui import (
     _auto_universe, _dhan_funds_panel, _start_dhan_prices,
     _start_yahoo_prices, _universe_key,
-    _confirmed_dhan_profile, _parse_ce5_upload,
+    _confirmed_dhan_profile, _parse_ce5_upload, _eod_start,
 )
 
 
@@ -175,6 +175,8 @@ def _otm_table(available, expiry, *, cid, token, cash_quotes):
             "Stock": st.column_config.TextColumn("Stock", width="medium"),
             "CMP (₹)": st.column_config.NumberColumn(
                 "CMP (₹)", format="₹%.2f", width="medium",
+                help="Cash quote where available; otherwise a dated NSE "
+                     "F&O underlying close, NOT a live CMP.",
             ),
             "5%+ OTM CE (%)": st.column_config.NumberColumn(
                 "CE ≥ +5% (%)", format="%.2f%%", width="medium",
@@ -389,8 +391,9 @@ def render_otm_home():
             if status and status not in ("Existing CE snapshot",):
                 st.caption(status)
     else:
-        # Owner-controlled free daily ZIP upload is available directly on
-        # Home, not hidden on Page 2. Works offline without any broker API.
+        # Check the official exchange report automatically. Only a bounded
+        # existing published report is requested; account APIs are untouched.
+        _eod_start()
         imported = st.session_state.get("fno_ce5_home_uploaded") or {}
         snap = imported.get("snapshot")
         local_snap, local_label = load_local_eod()
@@ -401,22 +404,65 @@ def render_otm_home():
             st.session_state["fno_ce5_home_uploaded"] = {
                 "snapshot": snap, "filename": local_label,
             }
+        remote = st.session_state.get("fno_ce5_remote_snapshot")
+        job = st.session_state.get("fno_ce5_remote_job")
+        downloading = bool(job and not job["future"].done())
         if isinstance(snap, NseEodSnapshot):
             count = len(snap.quotes.get(expiry, {}))
             st.success(
-                f"✓ NSE EOD {snap.report_date} loaded · "
+                f"✓ NSE EOD {snap.report_date} loaded automatically/from local cache · "
                 f"{count} eligible 5%+ CE reference premiums for {expiry}"
             )
+            st.caption(
+                "Historical NSE close, not live LTP · "
+                "a newer report is checked automatically when available."
+            )
+        elif downloading:
+            st.info(
+                "Checking the official NSE F&O daily report automatically. "
+                "No daily ZIP upload required when NSE permits download."
+            )
+        elif remote and remote.snapshot is None:
+            st.warning(
+                "Automatic NSE report download did not succeed: "
+                f"{remote.message} The data will be retried on the next "
+                "report session or when you choose Refresh. A manual file "
+                "remains an optional fallback."
+            )
+        else:
+            st.info(
+                "Free NSE EOD auto-fetch is enabled. Checking the latest "
+                "published daily report; no Dhan subscription required."
+            )
+        if remote and remote.snapshot is None and isinstance(snap, NseEodSnapshot):
+            st.caption(
+                f"Latest automatic check: {remote.message} "
+                "Showing the last successfully saved report instead."
+            )
+        if st.session_state.get("fno_ce5_auto_save_error"):
+            st.warning(st.session_state["fno_ce5_auto_save_error"])
+        if st.button(
+            "↻ Refresh NSE EOD now",
+            key="fno_home_eod_refresh",
+            disabled=downloading,
+            help="One bounded official NSE archive check, without Dhan "
+                 "market-data calls or creating a new trading order.",
+        ):
+            st.session_state.pop("fno_ce5_remote_attempt_key", None)
+            _eod_start()
+            st.rerun()
         with st.expander(
-            "Import free NSE F&O daily ZIP/CSV",
-            expanded=not isinstance(snap, NseEodSnapshot),
+            "Optional manual ZIP import (only if automatic access is blocked)",
+            expanded=False,
         ):
             st.markdown(
-                "Get **F&O-UDiFF Common Bhavcopy Final (ZIP)** from "
-                "[NSE Derivatives Reports]"
-                "(https://www.nseindia.com/all-reports-derivatives), "
-                "then upload that ZIP here. Choose the report published "
-                "after market close, not the cash-equity bhavcopy."
+                "No daily upload is normally needed: the app checks NSE "
+                "automatically and remembers the last valid report. If "
+                "NSE denies automated downloads (403/429), you can "
+                "optionally get **F&O-UDiFF Common Bhavcopy Final (ZIP)** "
+                "from [NSE Derivatives Reports]"
+                "(https://www.nseindia.com/all-reports-derivatives) "
+                "and import it once for that trading date."
             )
             uploaded = st.file_uploader(
                 "NSE F&O daily ZIP or CSV (free)",
