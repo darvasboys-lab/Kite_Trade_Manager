@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import pandas as pd
 import streamlit as st
 
@@ -23,15 +23,19 @@ from .table_layout import dataframe_key, autofit_column_config, autofit_enabled,
 BATCH = 20
 HISTORY_BATCH = 10
 STATE = "ccs_selective_scan"
+R1_ALL = "Include all stocks"
+R1_ABOVE = "Above R1 only"
+R1_COLUMN = "> R1"
 
 
 def _stamp():
     return datetime.now(IST).strftime("%d %b %H:%M:%S IST")
 
 
-def new_snapshot(key, expiry, maximum, minimum):
+def new_snapshot(key, expiry, maximum, minimum, r1_filter=R1_ALL):
     return dict(key=key, expiry=expiry, maximum=maximum, minimum=minimum,
                 cash={}, calls={}, straddles={}, attempted=set(), levels={},
+                r1_filter=r1_filter, levels_day="", history_attempted=set(),
                 crosses={}, r1_day="", cash_at="", options_at="", epoch=None,
                 error="", stopped=False)
 
@@ -43,12 +47,72 @@ def contract_candidates(available, snapshot):
     return frame.sort_values("Contract size (₹)", na_position="last")
 
 
-def qualified_rows(available, snapshot):
+def premium_rows(available, snapshot):
     frame = otm_home_dataframe(available, snapshot["cash"], snapshot["calls"],
                                straddles=snapshot["straddles"], expiry=snapshot["expiry"])
     frame = filter_home_contracts(frame, snapshot["maximum"])
     values = pd.to_numeric(frame["5%+ OTM CE (%)"], errors="coerce")
     return frame.loc[values.notna() & (values > snapshot["minimum"])].reset_index(drop=True)
+
+
+def _ensure_history_day(snapshot, today):
+    if snapshot.get("levels_day") != today.isoformat():
+        snapshot["levels"] = {}
+        snapshot["history_attempted"] = set()
+        snapshot["levels_day"] = today.isoformat()
+
+
+def r1_status(cmp, levels):
+    """Strictly above the current monthly pivot; missing evidence is unknown."""
+    try:
+        price = Decimal(str(cmp))
+        pivot = Decimal(str(getattr(levels, "monthly_r1", None)))
+        if price.is_finite() and pivot.is_finite() and price > 0 and pivot > 0:
+            return "✅ Yes" if price > pivot else "No"
+    except (InvalidOperation, ValueError, TypeError):
+        pass
+    return "—"
+
+
+def qualified_rows(available, snapshot):
+    frame = premium_rows(available, snapshot)
+    frame[R1_COLUMN] = [
+        r1_status(cmp, snapshot["levels"].get(symbol))
+        for symbol, cmp in zip(frame["Stock"], frame["CMP (₹)"])
+    ]
+    if snapshot.get("r1_filter", R1_ALL) == R1_ABOVE:
+        frame = frame.loc[frame[R1_COLUMN] == "✅ Yes"]
+    return frame.reset_index(drop=True)
+
+
+def pending_r1_symbols(available, snapshot):
+    attempted = snapshot.get("history_attempted", set())
+    return [s for s in premium_rows(available, snapshot)["Stock"]
+            if s not in snapshot["levels"] and s not in attempted]
+
+
+def load_shortlist_history(access, snapshot, symbols, *, today=None):
+    """One daily history per shortlisted name; shared with Market Screener."""
+    today = today or datetime.now(IST).date()
+    _ensure_history_day(snapshot, today)
+    if snapshot["stopped"]:
+        return 0
+    attempted = snapshot.setdefault("history_attempted", set())
+    count = 0
+    try:
+        for symbol in list(dict.fromkeys(symbols))[:HISTORY_BATCH]:
+            if symbol in snapshot["levels"] or symbol in attempted:
+                continue
+            attempted.add(symbol)
+            snapshot["levels"][symbol] = fetch_daily_levels(access, symbol, day=today)
+            count += 1
+    except FyersDataError as exc:
+        snapshot["error"] = str(exc)
+        snapshot["stopped"] = True
+    except Exception:
+        snapshot["error"] = "Daily history scan stopped."
+        snapshot["stopped"] = True
+    return count
 
 
 def next_option_batch(access, available, snapshot, *, limit=BATCH):
@@ -94,6 +158,7 @@ def _universe_rows(universe, expiry):
 def _display(frame, *, market=False):
     config = {
         "CMP (₹)": st.column_config.NumberColumn("CMP (₹)", format="₹%.2f"),
+        R1_COLUMN: st.column_config.TextColumn("> R1", help="CMP strictly above current monthly R1. Dash = not verified."),
         "Lot size": st.column_config.NumberColumn("Lot size", format="%d"),
         "Contract size (₹)": st.column_config.NumberColumn("Contract size (₹)", format="₹%.0f"),
         "5%+ OTM CE (%)": st.column_config.NumberColumn("CE ≥ +5% (%)", format="%.2f%%"),
@@ -102,10 +167,13 @@ def _display(frame, *, market=False):
         "Futures Price (₹)": st.column_config.NumberColumn("Futures Price (₹)", format="₹%.2f"),
         "Futures vs CMP (%)": st.column_config.NumberColumn("Futures vs CMP (%)", format="%+.2f%%"),
     }
-    if market:
-        frame = clickable_stock_frame(frame, source="Stock", target="TradingView chart")
-        config["Stock"] = None
-        config["TradingView chart"] = st.column_config.LinkColumn("Stock", display_text=TRADINGVIEW_SYMBOL_DISPLAY)
+    # Display-only link: retain raw NSE symbols in snapshots and CSV exports.
+    frame = clickable_stock_frame(frame, source="Stock", target="TradingView chart")
+    config["Stock"] = None
+    config["TradingView chart"] = st.column_config.LinkColumn(
+        "Stock", display_text=TRADINGVIEW_SYMBOL_DISPLAY,
+        help="Click the stock symbol to open its NSE cash chart in TradingView.",
+    )
     st.dataframe(frame, hide_index=True, use_container_width=True, height=520,
                  key=dataframe_key("selective_market" if market else "selective_home", st.session_state),
                  column_config=autofit_column_config(config, autofit_enabled(st.session_state)))
@@ -140,6 +208,11 @@ def render_selective_home():
                            index=(snapshot["minimum"]-2 if snapshot else 0),
                            format_func=lambda value: f"{value}%", horizontal=True,
                            key="selective_premium_choice")
+        r1_filter = st.radio("Monthly R1 filter", [R1_ALL, R1_ABOVE],
+                             index=int(bool(snapshot and snapshot.get("r1_filter") == R1_ABOVE)),
+                             horizontal=True, key="selective_r1_choice",
+                             help="Above R1 only excludes both below/equal R1 and unknown R1. "
+                                  "History is requested only after contract and CE filters.")
         apply = st.form_submit_button("Apply filters / Start scan", type="primary",
                                       use_container_width=True)
     if apply:
@@ -148,7 +221,8 @@ def render_selective_home():
         if not snapshot or snapshot["key"] != key:
             snapshot = new_snapshot(key, expiry, maximum, minimum)
             st.session_state[STATE] = snapshot
-        snapshot.update(maximum=maximum, minimum=minimum)
+        snapshot.update(maximum=maximum, minimum=minimum, r1_filter=r1_filter)
+        _ensure_history_day(snapshot, datetime.now(IST).date())
         if not snapshot["cash_at"] and not snapshot["stopped"]:
             try:
                 with st.spinner("Loading batched stock CMP…"):
@@ -163,8 +237,12 @@ def render_selective_home():
         if not snapshot["attempted"] and snapshot["cash_at"] and not snapshot["stopped"]:
             with st.spinner("Checking first eligible option contracts…"):
                 next_option_batch(access, available, snapshot)
+        if not snapshot["stopped"]:
+            with st.spinner("Checking monthly R1 for shortlisted stocks…"):
+                load_shortlist_history(access, snapshot, pending_r1_symbols(available, snapshot))
     if not snapshot:
         return
+    _ensure_history_day(snapshot, datetime.now(IST).date())
     available = _universe_rows(universe, snapshot["expiry"])
     candidates = contract_candidates(available, snapshot)
     pending = set(candidates["Stock"]) - snapshot["attempted"]
@@ -172,22 +250,36 @@ def render_selective_home():
     a.metric("Cash quotes", len(snapshot["cash"]))
     b.metric("Contract-qualified", len(candidates))
     c.metric("Option chains checked", len(set(candidates["Stock"]) & snapshot["attempted"]))
-    st.caption(f"Applied: below ₹{snapshot['maximum']} lakh · CE > {snapshot['minimum']}% · {snapshot['expiry']} · CMP snapshot {snapshot['cash_at'] or 'not loaded'}")
+    st.caption(f"Applied: below ₹{snapshot['maximum']} lakh · CE > {snapshot['minimum']}% · {snapshot['expiry']} · {snapshot.get('r1_filter', R1_ALL)} · CMP snapshot {snapshot['cash_at'] or 'not loaded'}")
     x, y, z = st.columns([2, 1.4, 1])
     if x.button(f"Scan next {min(BATCH, len(pending))} option chains",
                 key="selective_next_options", disabled=not pending or snapshot["stopped"] or not snapshot["cash_at"]):
         with st.spinner("Checking eligible option contracts…"):
             next_option_batch(access, available, snapshot)
+            load_shortlist_history(access, snapshot, pending_r1_symbols(available, snapshot))
         st.rerun()
     if y.button("New scan / refresh all", key="selective_reset"):
         st.session_state.pop(STATE, None)
         st.rerun()
     if z.button("Auto-fit", key="selective_autofit"):
         click_autofit(st.session_state)
+    r1_pending = pending_r1_symbols(available, snapshot)
+    if r1_pending and st.button(
+            f"Check R1 for next {min(HISTORY_BATCH, len(r1_pending))} shortlisted stocks",
+            key="selective_next_r1", disabled=snapshot["stopped"]):
+        with st.spinner("Loading shortlisted daily history…"):
+            load_shortlist_history(access, snapshot, r1_pending)
+        st.rerun()
     if snapshot["error"]:
         st.warning(snapshot["error"] + " · Stopped. No automatic retries. Start a new scan manually when appropriate.")
     frame = qualified_rows(available, snapshot)
     st.markdown(f"**{len(frame)} qualifying stocks** · {len(pending)} eligible option chains not yet checked")
+    unknown_r1 = sum(r1_status(cmp, snapshot["levels"].get(symbol)) == "—"
+                     for symbol, cmp in zip(premium_rows(available, snapshot)["Stock"],
+                                            premium_rows(available, snapshot)["CMP (₹)"]))
+    if unknown_r1:
+        st.caption(f"{unknown_r1} contract/CE matches have unverified R1; "
+                   "above-only mode excludes these until verified.")
     if pending:
         st.caption("Partial scan: more matches may exist in the unscanned stocks. Continue only if needed.")
     if snapshot["options_at"]:
@@ -204,6 +296,8 @@ def render_selective_market():
     if not snapshot or not data:
         st.info("Run the filtered scan on Home first. This page has made no market-data requests.")
         return
+    today = datetime.now(IST).date()
+    _ensure_history_day(snapshot, today)
     available = _universe_rows(data[0], snapshot["expiry"])
     frame = qualified_rows(available, snapshot)
     symbols = frame["Stock"].tolist()
@@ -214,26 +308,18 @@ def render_selective_market():
     selected = st.multiselect("Stocks for additional data (up to 10 per request)",
                               symbols, default=symbols[:HISTORY_BATCH], max_selections=HISTORY_BATCH,
                               key="selective_history_symbols")
-    today = datetime.now(IST).date()
-    if snapshot.get("levels_day") != today.isoformat():
-        snapshot["levels"] = {}
-        snapshot["levels_day"] = today.isoformat()
     if snapshot["r1_day"] != today.isoformat():
         snapshot["crosses"] = {}
         snapshot["r1_day"] = today.isoformat()
     a, b = st.columns(2)
-    if a.button("Load EMA / monthly R1", key="selective_history", disabled=not selected):
+    if a.button("Load EMA / monthly R1", key="selective_history",
+                disabled=not selected or snapshot["stopped"]):
         with st.spinner("Loading only selected daily histories…"):
-            try:
-                for symbol in selected:
-                    if symbol not in snapshot["levels"]:
-                        snapshot["levels"][symbol] = fetch_daily_levels(access, symbol, day=today)
-            except FyersDataError as exc:
-                st.warning(str(exc) + " · Stopped; no automatic retry.")
-            except Exception:
-                st.warning("Daily history scan stopped.")
+            load_shortlist_history(access, snapshot, selected, today=today)
+    if snapshot["error"]:
+        st.warning(snapshot["error"] + " · Stopped; no automatic retry.")
     ready = [s for s in selected if s in snapshot["levels"] and snapshot["levels"][s].monthly_r1 is not None]
-    if b.button("Check R1 crossed today", key="selective_r1", disabled=not ready):
+    if b.button("Check R1 crossed today", key="selective_r1", disabled=not ready or snapshot["stopped"]):
         with st.spinner("Checking selected stocks' intraday candles…"):
             try:
                 for symbol in ready:
@@ -244,6 +330,7 @@ def render_selective_market():
                 st.warning(str(exc) + " · Stopped; no automatic retry.")
             except Exception:
                 st.warning("Intraday scan stopped.")
+    frame = qualified_rows(available, snapshot)
     result = frame.rename(columns={"Stock": "Symbol", "CMP (₹)": "Last price (₹)"})
     result = attach_technical_columns(result, snapshot["levels"], stage=4)
     result = result.rename(columns={"Symbol": "Stock", "Last price (₹)": "CMP (₹)"})
