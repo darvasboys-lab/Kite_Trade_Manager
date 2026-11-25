@@ -35,7 +35,7 @@ from dhan_visual.ce_tejhq import TejEodCall, scan_tej_eod
 from dhan_visual.dhan_funds import read_dhan_balance, DhanFundsError
 from dhan_visual.quote_routing import (
     AUTO_SOURCE, choose_cash_source, merge_dhan_yahoo,
-    missing_underlyings, should_fetch_again,
+    missing_underlyings, should_fetch_again, nse_regular_session,
 )
 from dhan_visual.dhan_readonly_check import check_dhan_data_plan, DhanProfileError
 from dhan_visual.dhan_integration_state import (
@@ -484,7 +484,7 @@ def _start_dhan_prices(universe, cid, token, force=False):
         if not should_fetch_again(
             st.session_state.get("fno_dhan_last_attempt_at"),
             now=time.monotonic(), errors=previous.get("errors") or (),
-            manual=force,
+            manual=force, market_open=nse_regular_session(),
         ):
             return identity
     st.session_state["fno_dhan_attempt_key"] = identity
@@ -664,7 +664,7 @@ def _dhan_funds_panel(cid, token):
     blocked = (
         same and "429" in str(prior.get("error") or "")
     )
-    window = 1800 if blocked else 300
+    window = 3600 if blocked else (300 if nse_regular_session() else 1800)
     due = (
         previous.get("key") != key
         or now - previous.get("when", -1e12) >= window
