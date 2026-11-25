@@ -1700,6 +1700,7 @@ def render_screener():
         available, expiry, technicals, compact=compact,
         technically_ready=r1_ready, priority_quotes=prices,
         ce_calls=selected_ce,
+        fyers_access=connected_fyers() if provider == "FYERS" else None,
     )
     st.markdown(f"**{len(rows):,} displayed stocks** · {filled:,} cash prices/references available")
     if not rows:
