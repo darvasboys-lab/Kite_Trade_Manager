@@ -26,7 +26,7 @@ from dhan_visual.auto_auth import (
 )
 import time
 from dhan_visual.screener import choose_expiry, expiry_options, screen_rows
-from dhan_visual.option_panel import render_atm_panel
+from dhan_visual.option_panel import render_atm_panel, _local_creds
 from dhan_visual.straddle_panel import render_straddle_panel, available_otm_calls
 from dhan_visual.nse_eod_ce import MAX_UPLOAD_BYTES, NseEodError, parse_nse_fo_eod
 from dhan_visual.ce_eod_local import NSE_FO_NAME, recent_nse_fo_reports
@@ -496,6 +496,7 @@ def _dhan_credentials(*, need_market=False):
                                             "not be saved securely. Check token "
                                             "validity or Windows Credential Manager."
                                         )
+                                st.session_state["fno_activate_live_on_next_run"] = True
                                 st.rerun()
                             except DhanProfileError as exc:
                                 st.error(str(exc))
@@ -1277,10 +1278,12 @@ def render_screener():
         [1.05, 0.9, 1.2, 0.85, 1.05], gap="small",
     )
     with expiry_col:
+        from dhan_visual.otm_home import screen_expiry_changed
         expiry = st.selectbox(
             "F&O expiry month", expiries,
             index=expiries.index(choose_expiry(entries)),
             key="fno_expiry", label_visibility="collapsed",
+            on_change=screen_expiry_changed,
         )
     with search_col:
         with st.popover("⌕ Search", use_container_width=True):
@@ -1342,22 +1345,9 @@ def render_screener():
         )
 
     available = [row for row in universe if expiry in row.entry.lots]
-    # Render onboarding once for all quote modes, not only when cash quotes
-    # happen to be switched from Yahoo to Dhan.
-    dhan_credentials = _dhan_credentials(
-        need_market=(
-            provider == "Dhan"
-            or st.session_state.get("fno_ce5_mode") == "Live"
-            or (
-                provider == AUTO_SOURCE
-                and verified_account(
-                    str(st.session_state.get("dhan_local_cid")
-                        or read_client_id()).strip()
-                ) is not None
-            )
-        ),
-    )
-    _dhan_funds_panel(*dhan_credentials)
+    # No credential forms on Page 2. They live exclusively in Settings.
+    # Home and Page 2 use one saved token and one shared quote snapshot.
+    dhan_credentials = _local_creds()
     provider, all_prices = _price_panel(
         universe, expiry, available, provider, manual,
         credentials=dhan_credentials,
@@ -1427,6 +1417,12 @@ def render_screener():
     )
     ce_mode = st.session_state.get("fno_ce5_mode", "EOD")
     selected_ce = eod_calls if ce_mode == "EOD" else dhan_ce5
+    # The lightweight first Home page and the full screener show the
+    # same source+expiry CE data. Do NOT fetch a second option-chain.
+    st.session_state["fno_shared_ce"] = {
+        "month": expiry, "mode": ce_mode, "calls": selected_ce,
+        "asof": eod_date,
+    }
     # R1 table must use the SAME selected CE mode as the main screener.
     render_r1_today_panel(
         available, expiry, technicals, compact=compact,
@@ -1564,7 +1560,6 @@ def render_screener():
     # The straddle panel scans the ENTIRE expiry universe, not the ₹7L-filtered table.
     render_straddle_panel(available, expiry,
                           priority_levels=technicals, priority_quotes=prices)
-    render_atm_panel(available, rows, expiry)
     if rows:
         # Export fully computed cached levels without waiting for visual
         # stage animation; no extra Yahoo requests are made.
@@ -1607,3 +1602,38 @@ def render_screener():
             file_name=f"fno_stock_values_{expiry}_{provider.lower().replace(' ', '_')}.csv",
             mime="text/csv", key="fno_export",
         )
+
+
+def render_dhan_settings():
+    """All broker credentials and one-stock options onboarding in Settings.
+
+    No duplicate login controls on Home or the full Market Screener.
+    The stock list and quotes are already prepared by those tabs, even while
+    Settings is the visible tab. No order/trade methods.
+    """
+    st.markdown("### Settings · Dhan connection")
+    st.caption(
+        "Enter credentials on this PC. Connection and funds are verified "
+        "read-only; option-chain verification shares prices with Home."
+    )
+    cid = str(st.session_state.get("dhan_local_cid") or read_client_id()).strip()
+    need_market = bool(
+        st.session_state.get("fno_ce5_mode") == "Live"
+        or st.session_state.get("fno_price_provider") == "Dhan"
+        or (cid and verified_account(cid) is not None)
+    )
+    _dhan_credentials(need_market=need_market)
+    loaded = st.session_state.get("fno_universe_data")
+    if loaded and loaded[0]:
+        universe = loaded[0]
+        entries = [item.entry for item in universe]
+        expiries = expiry_options(entries)
+        expiry = st.session_state.get("fno_home_expiry") or st.session_state.get("fno_expiry")
+        if expiry not in expiries:
+            expiry = choose_expiry(entries)
+        available = [item for item in universe if expiry in item.entry.lots]
+        st.divider()
+        st.markdown("#### Options · one-stock verification")
+        render_atm_panel(available, [], expiry)
+    else:
+        st.caption("The F&O instrument list is being prepared in the background.")
