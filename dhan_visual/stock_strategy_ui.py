@@ -1,5 +1,7 @@
 """On-demand strategy workspace for one shortlisted NSE stock."""
 from datetime import datetime
+from dataclasses import asdict
+from .workspace_ui import load_workspace, save_change
 import math
 from decimal import Decimal
 import pandas as pd
@@ -26,6 +28,42 @@ def launch_strategy(symbol, entry, expiry, preset):
     st.session_state[ACTIVE] = dict(symbol=symbol, lots=dict(entry.lots),
                                     expiry=expiry, preset=preset)
     st.rerun()
+
+
+def render_independent_strategy():
+    from .screener_ui import _auto_universe
+    from .screener import expiry_options
+    if st.session_state.get(ACTIVE):
+        render_stock_strategy()
+        return
+    st.markdown("### Strategy Builder")
+    st.caption("Choose a stock without running the market scanner. No option requests until Open.")
+    universe = _auto_universe()
+    if not universe:
+        return
+    entries = {item.entry.symbol:item.entry for item in universe}
+    data=load_workspace()
+    if data and data["strategies"]:
+        saved=st.selectbox("Saved strategies",list(data["strategies"]),key="ccs_saved_strategy")
+        row=data["strategies"][saved]
+        if st.button("Reopen saved strategy",key="ccs_reopen_strategy"):
+            entry=entries.get(row["symbol"])
+            if entry is None or row["expiry"] not in entry.lots or any(
+                leg["kind"]!="Equity" and (leg["expiry"] not in entry.lots or leg["units"]%entry.lots[leg["expiry"]])
+                for leg in row["legs"]):
+                st.warning("Saved contracts no longer match current NSE lots. Export the saved strategy from backup instead.")
+            else:
+                st.session_state["ccs_strategy_restore"]=row
+                launch_strategy(row["symbol"],entry,row["expiry"],None)
+    symbol=st.selectbox("Search NSE stock",sorted(entries),key="ccs_independent_symbol")
+    entry=entries[symbol]
+    expiries=expiry_options([entry])
+    if not expiries:
+        st.info("No eligible option month.")
+        return
+    expiry=st.selectbox("Expiry",expiries,key="ccs_independent_expiry")
+    if st.button("Open strategy builder",key="ccs_independent_open",type="primary"):
+        launch_strategy(symbol,entry,expiry,None)
 
 
 def _money(value):
@@ -101,6 +139,12 @@ def render_stock_strategy():
         cache.clear()
         cache[scope] = dict(expiries=None,quotes=None,chains={},legs=[],errors={},preset_pending=ctx["preset"],revision=0)
     state = cache[scope]
+    restored = st.session_state.pop("ccs_strategy_restore",None)
+    if restored and restored["symbol"]==symbol:
+        state["legs"]=[Leg(**row) for row in restored["legs"]]
+        state["charges"]=restored["charges"]
+        state["preset_pending"]=None
+        state["revision"]+=1
     if st.button("Refresh selected stock data",key="ccs_strategy_refresh"):
         state.update(expiries=None,quotes=None,chains={},errors={})
     if not state["errors"].get("initial"):
@@ -156,6 +200,15 @@ def render_stock_strategy():
         st.caption(f"{expiry} · lot {lot} · up to 50 strikes each side, as returned by FYERS")
         if chain:
             st.dataframe(_chain_table(chain,spot),hide_index=True,use_container_width=True,height=450)
+            quick_strike=st.selectbox("Quick-add strike",sorted({s for s,k in chain}),key=f"ccs_quick_strike_{symbol}_{expiry}")
+            quick_lots=st.number_input("Quick-add lots",min_value=1,max_value=100,value=1,key="ccs_quick_lots")
+            controls=st.columns(4)
+            for col,(side,kind) in zip(controls,[("Buy","CE"),("Sell","CE"),("Buy","PE"),("Sell","PE")]):
+                quote=chain.get((quick_strike,kind),{}).get("ltp")
+                if col.button(side+" "+kind,key=f"ccs_quick_{side}_{kind}",disabled=quote is None or len(state["legs"])>=30):
+                    state["legs"].append(Leg(kind,side,expiry,float(quick_strike),int(quick_lots)*lot,float(quote)))
+                    state["revision"]+=1
+                    st.rerun()
         else:
             st.info("No verified option chain for this expiry.")
         st.markdown("#### Add a leg")
@@ -219,7 +272,26 @@ def render_stock_strategy():
     if not active:
         st.info("Add strategy legs to view the selected-expiry payoff.")
         return
-    summary = payoff_summary(active)
+    charges = st.number_input("Estimated total charges (₹) for selected-expiry scenario",min_value=0.,max_value=1e9,value=float(state.get("charges",0)),step=10.,key=f"ccs_charges_{symbol}_{state['revision']}")
+    state["charges"]=charges
+    summary = payoff_summary(active,charges)
+    premium = sum((1 if leg.side=="Sell" else -1)*leg.price*leg.units for leg in active if leg.kind in ("CE","PE"))
+    equity_cost = sum(leg.price*leg.units for leg in active if leg.kind=="Equity" and leg.side=="Buy")
+    m,n=st.columns(2)
+    m.metric("Net option premium",f"₹{premium:,.2f}")
+    n.metric("Premium / long-equity cost",f"{100*premium/equity_cost:.2f}%" if equity_cost else "—")
+    if spot and summary["breakevens"]:
+        st.caption("Breakeven distance from CMP: "+" / ".join(f"{(x/spot-1)*100:+.2f}%" for x in summary["breakevens"]))
+    st.caption("Premium ratio is not margin return; only shown when long equity is included.")
+    saved_name=st.text_input("Save strategy as",max_chars=60,key="ccs_strategy_save_name")
+    if st.button("Save strategy",key="ccs_save_strategy",disabled=not saved_name.strip()):
+        data=dict(symbol=symbol,expiry=expiry,legs=[asdict(leg) for leg in state["legs"]],charges=charges)
+        if save_change(lambda d:d["strategies"].update({saved_name.strip():data})):
+            st.success("Strategy saved locally.")
+    export=pd.DataFrame([dict(symbol=symbol,**asdict(leg)) for leg in state["legs"]])
+    export["Selected scenario expiry"]=expiry
+    export["Scenario charges"]=charges
+    st.download_button("Export strategy CSV",export.to_csv(index=False),f"{symbol}-strategy.csv",key="ccs_export_strategy")
     a,b,c = st.columns(3)
     a.metric("Maximum profit",_money(summary["max_profit"]))
     b.metric("Maximum loss",_money(summary["max_loss"]))
@@ -229,7 +301,7 @@ def render_stock_strategy():
     low = max(0,min([center*.75]+knots)*.95)
     high = max([center*1.25]+knots)*1.05
     xs = sorted({low+(high-low)*i/240 for i in range(241)}|{k for k in knots if low<=k<=high})
-    ys = [payoff(active,x) for x in xs]
+    ys = [payoff(active,x,charges) for x in xs]
     chart = go.Figure()
     for sign,color in [(1,"#48c9a1"),(-1,"#f08b91")]:
         chart.add_trace(go.Scatter(x=xs,y=[max(y,0) if sign==1 else min(y,0) for y in ys],
@@ -242,4 +314,4 @@ def render_stock_strategy():
                         template="plotly_dark" if st.session_state.get("ccs_dark_mode",True) else "plotly_white",
                         xaxis_title="Underlying price at expiry (₹)",yaxis_title="Hypothetical P&L (₹)",hovermode="x unified")
     st.plotly_chart(chart,use_container_width=True)
-    st.caption("Expiry intrinsic payoff only. Excludes fees, taxes, margin, early exits and time value. Unlimited loss is not bounded by the chart range.")
+    st.caption("Expiry intrinsic payoff only. Includes user-entered estimated charges; excludes unentered fees, taxes, margin, early exits and time value. Unlimited loss is not bounded by the chart range.")
