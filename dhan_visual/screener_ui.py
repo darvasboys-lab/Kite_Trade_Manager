@@ -226,21 +226,24 @@ def _auto_login_panel(cid, manual_token, *, allow_login=True):
     if not valid_client_id(cid):
         return ""
     enabled = is_configured(cid)
-    with st.expander("Automatic Dhan access token · TOTP setup", expanded=False):
-        st.caption(
-            "Provide your Dhan 6-digit PIN and TOTP setup secret ONCE. "
-            "Windows Credential Manager protects these locally. "
-            "Dhan returns a 24-hour token; while this dashboard is running "
-            "it can renew automatically when Dhan or Live CE data is in use, "
-            "without pasting a daily token."
-        )
-        st.warning(
-            "This Dhan account may also be used by ResultBot. "
-            "Creating a separate token can sometimes interrupt other sessions. "
-            "Enable only if you accept this risk. ResultBot itself will not be changed."
-        )
+    with st.expander(
+        "Remember Dhan login securely · PIN + TOTP (optional)",
+        expanded=not enabled and not bool(manual_token),
+    ):
+        if not enabled:
+            st.caption(
+                "To avoid entering a new access token each day, save your "
+                "Dhan PIN and permanent TOTP setup secret here ONCE. "
+                "Windows Credential Manager holds them locally. "
+                "A fresh access token still has 24-hour validity."
+            )
+        if not enabled:
+            st.warning(
+                "Issuing another Dhan token may disrupt other trading sessions. "
+                "Enable automatic renewal only if you accept this risk."
+            )
         if enabled:
-            st.success("Secure TOTP settings are saved in Windows Credential Manager.")
+            st.success("✓ Secure one-time login saved in Windows Credential Manager.")
             st.button("Delete local TOTP/PIN and disable auto-login",
                       key="dhan_auto_delete", on_click=_auto_disable, args=(cid,))
         else:
