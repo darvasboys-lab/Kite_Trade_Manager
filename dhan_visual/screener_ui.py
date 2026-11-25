@@ -1067,13 +1067,17 @@ def _free_ce5_panel(expiry, dhan_count=0, available=None):
     return calls, report_day
 
 
-def _ce5_choice(symbol, dhan_calls, eod_calls, eod_date, mode="EOD"):
+def _ce5_choice(symbol, dhan_calls, eod_calls, eod_date, mode="EOD",
+                scan_pending=False):
     """Return only the explicitly selected CE price type, never a silent mix."""
     if mode == "Live":
         if symbol in dhan_calls:
             quote = dhan_calls[symbol]
             return quote, f"Dhan LTP snapshot · {quote.captured_at}"
-        return None, "Live unavailable · Dhan scan required"
+        return None, (
+            "Dhan Live · scanning option chains…"
+            if scan_pending else "Live unavailable · no positive CE quote / scan pending"
+        )
     if mode != "EOD":
         raise ValueError("Unknown CE mode")
     if symbol in eod_calls:
@@ -1235,6 +1239,11 @@ def render_screener():
         and technical_state.get("status") == "complete"
     )
     dhan_ce5 = available_otm_calls(available, expiry)
+    # Across browser/app restarts a verified Dhan connection defaults to
+    # Live CE. A user-selected EOD preference still survives normal reruns.
+    if ("fno_ce5_mode" not in st.session_state
+            and verified_account(dhan_credentials[0]) is not None):
+        st.session_state["fno_ce5_mode"] = "Live"
     if st.session_state.pop("fno_activate_live_on_next_run", False):
         # Safe to update before the CE radio widget exists in this run.
         st.session_state["fno_ce5_mode"] = "Live"
@@ -1286,8 +1295,12 @@ def render_screener():
         )
         # Try Dhan chain first; only then a user-uploaded NSE daily file.
         # Each ratio uses its OWN source's same-time underlying, never Yahoo CMP.
+        scan_pending = bool(st.session_state.get("fno_straddle_job"))
         ce5_selected = [
-            _ce5_choice(symbol, dhan_ce5, eod_calls, eod_date, ce_mode)
+            _ce5_choice(
+                symbol, dhan_ce5, eod_calls, eod_date, ce_mode,
+                scan_pending=scan_pending,
+            )
             for symbol in frame["Symbol"]
         ]
         frame["5%+ CE premium (%)"] = [
@@ -1385,7 +1398,10 @@ def render_screener():
             technicals, stage=4,
         )
         export_selected = [
-            _ce5_choice(sym, dhan_ce5, eod_calls, eod_date, ce_mode)
+            _ce5_choice(
+                sym, dhan_ce5, eod_calls, eod_date, ce_mode,
+                scan_pending=bool(st.session_state.get("fno_straddle_job")),
+            )
             for sym in exported["Symbol"]
         ]
         exported["5%+ CE premium (%)"] = [
