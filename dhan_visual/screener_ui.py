@@ -321,8 +321,8 @@ def _auto_login_panel(cid, manual_token, *, allow_login=True):
                       key="dhan_auto_enable", on_click=_auto_enable, args=(cid,))
         if st.session_state.get("dhan_auto_message"):
             st.info(st.session_state["dhan_auto_message"])
-        if st.session_state.get("dhan_auto_error"):
-            st.error(st.session_state["dhan_auto_error"])
+        # The login error is shown once, alongside the Retry control
+        # below. Avoid repeating the same alarming error in two places.
 
     if not enabled:
         return ""
