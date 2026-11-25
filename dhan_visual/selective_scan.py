@@ -129,13 +129,19 @@ def render_selective_home():
     snapshot = _snapshot(access)
     default_expiry = snapshot["expiry"] if snapshot and snapshot["expiry"] in expiries else choose_expiry(entries)
     with st.form("selective_scan_filters"):
-        a, b, c = st.columns(3)
-        expiry = a.selectbox("Option month", expiries, index=expiries.index(default_expiry))
-        maximum = b.selectbox("Contract size below (₹ lakh)", list(range(5, 11)),
-                              index=(snapshot["maximum"]-5 if snapshot else 2))
-        minimum = c.selectbox("5%+ OTM CE premium above (%)", [2, 3, 4, 5, 6],
-                              index=(snapshot["minimum"]-2 if snapshot else 0))
-        apply = st.form_submit_button("Apply filters / Start scan")
+        expiry = st.radio("Option month", expiries,
+                          index=expiries.index(default_expiry), horizontal=True,
+                          key="selective_expiry_choice")
+        maximum = st.radio("Contract size below", list(range(4, 11)),
+                           index=(snapshot["maximum"]-4 if snapshot else 3),
+                           format_func=lambda value: f"₹{value}L", horizontal=True,
+                           key="selective_contract_choice")
+        minimum = st.radio("5%+ OTM CE premium above", [2, 3, 4, 5, 6, 7, 8],
+                           index=(snapshot["minimum"]-2 if snapshot else 0),
+                           format_func=lambda value: f"{value}%", horizontal=True,
+                           key="selective_premium_choice")
+        apply = st.form_submit_button("Apply filters / Start scan", type="primary",
+                                      use_container_width=True)
     if apply:
         key = _scope(access, [], expiry)
         available = _universe_rows(universe, expiry)
