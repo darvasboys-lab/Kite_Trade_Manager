@@ -34,8 +34,8 @@ class FreeNseEodModeTests(unittest.TestCase):
         from dhan_visual.screener import Underlying
         from dhan_visual.eod_straddle_ui import eod_straddle_rows
         report = daily_report() + (
-            b"2026-11-23,STO,TCS,2026-12-29,100,CE,4,100,3\\r\\n"
-            b"2026-11-23,STO,TCS,2026-12-29,100,PE,3,100,0\\r\\n"
+            b"2026-11-23,STO,TCS,2026-12-29,100,CE,4,100,3\r\n"
+            b"2026-11-23,STO,TCS,2026-12-29,100,PE,3,100,0\r\n"
         )
         snap = parse_nse_fo_eod(report)
         pair = snap.straddles["DEC-26"]["TCS"]
@@ -53,7 +53,7 @@ class FreeNseEodModeTests(unittest.TestCase):
 
     def test_incomplete_atm_pair_never_uses_neighboring_strike(self):
         report = daily_report() + (
-            b"2026-11-23,STO,TCS,2026-12-29,100,PE,3,100,5\\r\\n"
+            b"2026-11-23,STO,TCS,2026-12-29,100,PE,3,100,5\r\n"
         )
         snap = parse_nse_fo_eod(report)
         self.assertFalse(snap.straddles.get("DEC-26", {}))
