@@ -50,7 +50,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
             app = app_with_catalogue().run()
         self.assertFalse(app.exception, [str(x.message) for x in app.exception])
         self.assertGreaterEqual(len(app.tabs), 2)
-        self.assertEqual(app.radio(key="fno_price_provider").value, "Yahoo Finance")
+        self.assertEqual(app.radio(key="fno_price_provider").value, "Auto (Dhan → Yahoo)")
         self.assertEqual(app.selectbox(key="fno_value_preset").value, "Below ₹7 lakh")
         self.assertGreaterEqual(len(app.dataframe), 1)
         self.assertNotIn("Company", app.dataframe[0].value.columns)
@@ -363,6 +363,8 @@ class PayoffStudioStartupTests(unittest.TestCase):
             app.session_state["fno_ce5_mode"] = "Live"
             app.session_state["dhan_local_cid"] = client
             app.session_state["dhan_local_access_token"] = token
+            # Explicit opt-out: do not save a test key in the OS credential vault.
+            app.session_state["dhan_remember_manual_token"] = False
             with patch("dhan_visual.screener_ui.verified_account",
                        side_effect=lambda cid: verified_account(cid, state_path)), \
                  patch("dhan_visual.option_panel.verified_account",
@@ -459,6 +461,76 @@ class PayoffStudioStartupTests(unittest.TestCase):
                     "Dhan integration completed" in str(node.value)
                     for node in app.markdown
                 ))
+
+    def test_verified_dhan_defaults_to_cash_ltp_funds_and_one_auto_ce_scan(self):
+        """Zero extra broker calls per rerun, 5% CE uses paced option-chain job."""
+        from datetime import timedelta
+        from dhan_visual.dhan_integration_state import VerifiedIntegration, IST
+        import time
+        verified = VerifiedIntegration(
+            client_id="1234567890",
+            verified_at=datetime.now(IST).isoformat(),
+            symbol="TCS", expiry="2026-12-29", data_plan="Active",
+            token_expires_at=(datetime.now(IST) + timedelta(hours=12)).isoformat(),
+        )
+        app = app_with_catalogue()
+        app.session_state["dhan_local_cid"] = "1234567890"
+        app.session_state["dhan_local_access_token"] = "OFFLINE_TOKEN_LONG_NEVER_LIVE"
+        app.session_state["fno_ce5_mode"] = "Live"
+        dhan, funds, straddle, yahoo = (
+            FakePool(), FakePool(), FakePool(), FakePool()
+        )
+        with patch("dhan_visual.screener_ui.verified_account",
+                   return_value=verified), \
+             patch("dhan_visual.option_panel.verified_account",
+                   return_value=verified), \
+             patch("dhan_visual.straddle_panel.verified_account",
+                   return_value=verified), \
+             patch("dhan_visual.screener_ui.load_manual_token", return_value=""), \
+             patch("dhan_visual.option_panel.load_manual_token", return_value=""), \
+             patch("dhan_visual.screener_ui._market_pool",
+                   return_value=dhan), \
+             patch("dhan_visual.screener_ui._funds_pool",
+                   return_value=funds), \
+             patch("dhan_visual.straddle_panel._straddle_pool",
+                   return_value=straddle):
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(app.radio(key="fno_price_provider").value,
+                             "Auto (Dhan → Yahoo)")
+            self.assertEqual(len(funds.calls), 1)
+            self.assertEqual(funds.calls[0][0][0].__name__, "read_dhan_balance")
+            self.assertEqual(len(straddle.calls), 1)
+            self.assertEqual(straddle.calls[0][0][0].__name__, "scan_all_straddles")
+            self.assertEqual(len(dhan.calls), 1)
+            self.assertEqual(dhan.calls[0][0][0].__name__, "load_dhan_all")
+            self.assertIsNotNone(app.button(key="fno_straddle_stop"))
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(len(straddle.calls), 1)
+            self.assertEqual(len(dhan.calls), 1)
+            self.assertEqual(len(funds.calls), 1)
+
+    def test_auto_unverified_uses_yahoo_without_dhan_or_funds_or_option_scan(self):
+        """Unverified accounts never make automatic broker GET/POST requests."""
+        app = app_with_catalogue()
+        app.session_state["dhan_local_cid"] = "1234567890"
+        app.session_state["dhan_local_access_token"] = "FAKE_UNVERIFIED_TOKEN_LONG"
+        pool, funds, straddle = FakePool(), FakePool(), FakePool()
+        with patch("dhan_visual.screener_ui.verified_account", return_value=None), \
+             patch("dhan_visual.straddle_panel.verified_account",
+                   return_value=None), \
+             patch("dhan_visual.screener_ui._market_pool",
+                   return_value=pool), \
+             patch("dhan_visual.screener_ui._funds_pool",
+                   return_value=funds), \
+             patch("dhan_visual.straddle_panel._straddle_pool",
+                   return_value=straddle):
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(pool.calls[0][0][0].__name__, "load_yahoo_all")
+            self.assertEqual(len(funds.calls), 0)
+            self.assertEqual(len(straddle.calls), 0)
 
     def test_full_straddle_panel_never_calls_dhan_on_page_load(self):
         app = app_with_catalogue()
