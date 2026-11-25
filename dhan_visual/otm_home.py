@@ -182,9 +182,12 @@ def attach_futures_columns(frame: pd.DataFrame, quotes: dict) -> pd.DataFrame:
     for symbol, cash in zip(frame["Stock"], frame["CMP (₹)"]):
         try:
             future = Decimal(str(quotes[symbol].price)) if symbol in quotes else None
+        except (InvalidOperation, TypeError, ValueError):
+            future = None
+        try:
             spot = Decimal(str(cash))
         except (InvalidOperation, TypeError, ValueError):
-            future, spot = None, None
+            spot = None
         if future is None or not future.is_finite() or future <= 0:
             futures.append(None)
             basis.append(None)
