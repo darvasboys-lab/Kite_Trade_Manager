@@ -17,6 +17,7 @@ from .ce_eod_remote import IST
 from .dhan_integration_state import (
     verified_account, token_still_current,
 )
+from .auto_auth import is_configured
 from .dhan_readonly_check import check_dhan_data_plan, DhanProfileError
 from .local_client_settings import valid_client_id
 from .option_panel import _local_creds
@@ -227,9 +228,17 @@ def render_otm_home():
             "rechecked in this session"
         )
     elif token:
-        st.warning("Dhan token entered but not verified · connect in Settings")
+        st.warning("Dhan access token available, but current session's "
+                   "profile check is pending · Settings shows login status")
+    elif valid_client_id(cid) and is_configured(cid):
+        if st.session_state.get("dhan_auto_error"):
+            st.warning("Saved Dhan PIN/TOTP login needs attention · "
+                       "open Settings to see the broker response")
+        else:
+            st.info("Saved Dhan PIN/TOTP detected · generating or "
+                    "recovering today's token automatically")
     else:
-        st.warning("Dhan not connected · enter details in Settings")
+        st.warning("Dhan not connected · save PIN + permanent TOTP in Settings")
 
     if valid_client_id(cid) and len(token) >= 16:
         if st.button(
