@@ -18,9 +18,12 @@ import streamlit as st
 
 from .auto_auth import is_configured
 from .ce_eod_remote import IST
-from .dhan_integration_state import verified_account
+from .dhan_integration_state import (
+    verified_account, record_verification, parse_dhan_token_expiry,
+)
 from .local_client_settings import read_client_id, save_client_id, valid_client_id
 from .option_panel import _local_creds
+from .dhan_readonly_check import DhanProfileStatus
 from .straddle_scan import otm_call_5_from_atm, rank_straddles, scan_all_straddles
 from .load_priority import strongest_first
 from .quote_routing import nse_regular_session
@@ -96,6 +99,92 @@ def straddle_dataframe(rows, otm_calls=None) -> pd.DataFrame:
     ])
 
 
+def _active_profile_for(cid: str, token: str) -> DhanProfileStatus | None:
+    """Only the current, explicitly authenticated Dhan token may start CE."""
+    if not valid_client_id(cid) or len(token) < 16:
+        return None
+    entry = st.session_state.get("fno_dhan_profile_status") or {}
+    if (entry.get("cid") != cid or
+            entry.get("token_fingerprint") != sha256(token.encode()).hexdigest()):
+        return None
+    profile = entry.get("status")
+    if not isinstance(profile, DhanProfileStatus) or not profile.data_ready:
+        return None
+    expiry = parse_dhan_token_expiry(profile.token_validity)
+    if expiry is None or expiry <= datetime.now(IST).astimezone(expiry.tzinfo):
+        return None
+    return profile
+
+
+def prepare_otm_scan(available, expiry: str, *, explicit=False,
+                     priority_quotes=None, priority_levels=None) -> str:
+    """Start ONE shared read-only Dhan CE/straddle scan before heavy Page 2.
+
+    Validated profile OR previously verified options setup is sufficient.
+    Non-explicit scans run once per current trading session during market hours.
+    This function shares the worker, queue, cache and throttle with Page 2.
+    """
+    cid, token = _local_creds()
+    if not available:
+        return "No listed stock-option contracts for the selected expiry"
+    if not valid_client_id(cid) or len(token) < 16:
+        return "Dhan access token missing or expired · connect in Settings"
+    profile = _active_profile_for(cid, token)
+    previous = verified_account(cid)
+    if not (profile or previous):
+        return "Dhan profile unverified · click Connect to Dhan in Settings"
+    if not profile and previous and not __import__(
+        "dhan_visual.dhan_integration_state", fromlist=["token_still_current"]
+    ).token_still_current(previous):
+        return "Dhan access token expired · renew it in Settings"
+    key = _scan_key(available, expiry)
+    history = st.session_state.setdefault("fno_straddle_snapshots", {})
+    snap = history.get(key)
+    if snap is None or (snap.get("client_id") and snap["client_id"] != cid):
+        snap = {
+            "key": key, "month": expiry, "total": len(available),
+            "rows": {}, "otm_calls": {}, "errors": {}, "processed": 0,
+            "status": "", "fatal": "", "started": False, "client_id": cid,
+        }
+        history[key] = snap
+    active = st.session_state.get("fno_straddle_job")
+    if active and not active["future"].done():
+        return "Read-only Dhan CE scan already running"
+    if active and active["future"].done():
+        _drain_events(snap)
+    auto_key = f"{cid}:{key}:{datetime.now(IST).date().isoformat()}"
+    if not explicit:
+        if not nse_regular_session():
+            return "Market closed · use Fetch CE to request an indicative snapshot"
+        if (snap.get("started")
+                or st.session_state.get("fno_straddle_auto_started_key") == auto_key):
+            return snap.get("status") or "Existing CE snapshot"
+    # Do not restart a failed auth/rate-limited scan automatically.
+    if snap.get("fatal") and not explicit:
+        return snap["fatal"]
+    queue, cancel = SimpleQueue(), Event()
+    done = set(snap.get("otm_calls", {})) | set(snap.get("rows", {}))
+    candidates = strongest_first(
+        [item.entry.symbol for item in available],
+        priority_levels, priority_quotes,
+    )
+    snap.update(
+        started=True, client_id=cid, status="Starting paced Dhan OTM CE scan",
+        fatal="", total=len(available), processed=len(done),
+    )
+    st.session_state["fno_straddle_auto_started_key"] = auto_key
+    st.session_state["fno_straddle_job"] = {
+        "key": key, "queue": queue, "cancel": cancel,
+        "cid": cid, "token_fingerprint": sha256(token.encode()).hexdigest(),
+        "future": _straddle_pool().submit(
+            scan_all_straddles, list(available), expiry, cid, token,
+            queue, cancel, existing=done, auto_login=False,
+            priority_symbols=candidates,
+        ),
+    }
+    return snap["status"]
+
+
 def _drain_events(snap):
     job = st.session_state.get("fno_straddle_job")
     if job is None or job["key"] != snap["key"]:
@@ -114,6 +203,33 @@ def _drain_events(snap):
             if event.row is not None:
                 snap["rows"][event.symbol] = event.row
                 snap["errors"].pop(event.symbol, None)
+                # Profile verification plus the first real option-chain
+                # response can complete onboarding without a redundant
+                # second one-stock API call in Settings.
+                if (event.otm_call is not None
+                        and verified_account(job.get("cid", "")) is None):
+                    cid, token = _local_creds()
+                    if (job.get("cid") == cid and
+                            job.get("token_fingerprint") ==
+                            sha256(token.encode()).hexdigest()):
+                        profile = _active_profile_for(cid, token)
+                        if profile is not None:
+                            try:
+                                record_verification(
+                                    cid, event.symbol, event.row.expiry,
+                                    profile.token_validity,
+                                )
+                                st.session_state["fno_activate_live_on_next_run"] = True
+                                st.session_state["fno_activate_auto_quote_on_next_run"] = True
+                                st.toast(
+                                    "✓ Dhan options verified · OTM CE and "
+                                    "ATM straddle enabled", icon="✅",
+                                )
+                            except (ValueError, OSError):
+                                snap["status"] = (
+                                    "Options returned but could not save "
+                                    "verified setup on this PC"
+                                )
             elif event.error:
                 snap["errors"][event.symbol] = event.error
         if event.fatal:
