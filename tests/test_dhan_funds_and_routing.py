@@ -1,5 +1,5 @@
 """No-network tests for Dhan available funds and conservative quote routing."""
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import Mock
 import unittest
@@ -12,6 +12,7 @@ from dhan_visual.dhan_funds import (
 from dhan_visual.quote_routing import (
     AUTO_SOURCE, choose_cash_source, merge_dhan_yahoo,
     missing_underlyings, retry_window_seconds, should_fetch_again,
+    nse_regular_session, IST,
 )
 
 CID = "1234567890"
@@ -130,6 +131,26 @@ class QuoteRoutingTests(unittest.TestCase):
             [x.entry.symbol for x in missing_underlyings(universe, dhan)],
             ["SBIN"],
         )
+
+    def test_regular_nse_hours_gate_and_off_hours_cooldown(self):
+        self.assertTrue(nse_regular_session(
+            datetime(2026, 11, 25, 9, 15, tzinfo=IST)
+        ))
+        self.assertTrue(nse_regular_session(
+            datetime(2026, 11, 25, 15, 30, tzinfo=IST)
+        ))
+        self.assertFalse(nse_regular_session(
+            datetime(2026, 11, 25, 15, 31, tzinfo=IST)
+        ))
+        self.assertFalse(nse_regular_session(
+            datetime(2026, 11, 28, 10, 0, tzinfo=IST)
+        ))
+        self.assertFalse(should_fetch_again(
+            100, now=1000, market_open=False
+        ))
+        self.assertTrue(should_fetch_again(
+            100, now=3700, market_open=False
+        ))
 
     def test_dhan_quote_cooldown_and_rate_limit_stop_retries(self):
         self.assertFalse(should_fetch_again(100, now=300))
