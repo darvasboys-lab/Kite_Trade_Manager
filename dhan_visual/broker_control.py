@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import streamlit as st
 
+from .fyers_readonly import FyersAccess, read_access_from_vault, read_app_from_vault
+
 ACTIVE_KEY = "ccs_active_broker"  # authoritative state, never a widget key
 SELECTION_KEY = "ccs_broker_requested"  # radio widget value
 PENDING_KEY = "ccs_pending_broker"
@@ -120,14 +122,23 @@ def _pending_status():
 
 
 def render_single_broker_selector() -> None:
-    # Preserve FYERS as the active source when updating from an older app
-    # session that already selected FYERS before the selector existed.
+    # Prefer read-only FYERS for options when its app is already configured.
+    # This is a LOCAL vault inspection, never an API call or FYERS login.
+    # A broker the user explicitly selected during this browser session wins.
     if ACTIVE_KEY not in st.session_state:
         old_fyers = (
             st.session_state.get("fno_price_provider") == "FYERS"
             or st.session_state.get("fno_ce5_mode") == "FYERS"
         )
-        st.session_state[ACTIVE_KEY] = "FYERS" if old_fyers else "Dhan"
+        access = st.session_state.get("_fyers_access")
+        fyers_ready = bool(
+            isinstance(access, FyersAccess) and access.valid()
+        ) or bool(read_access_from_vault()) or bool(read_app_from_vault())
+        preferred = "FYERS" if old_fyers or fyers_ready else "Dhan"
+        st.session_state[ACTIVE_KEY] = preferred
+        if preferred == "FYERS":
+            # Set both Home and Screener option sources *before* widgets exist.
+            _apply_source_selection("FYERS")
     st.session_state.setdefault(SELECTION_KEY, active_broker())
     # A pending switch updates ACTIVE_KEY, which is *not* widget-owned.
     # It can safely complete in a fragment rerun after previous jobs finish.
@@ -145,8 +156,9 @@ def render_single_broker_selector() -> None:
         st.info("Broker change in progress. No new broker login will start.")
     elif current == "FYERS":
         st.caption(
-            "FYERS active for market data · Dhan login and balance polling "
-            "paused; Dhan credentials remain saved locally."
+            "FYERS preferred for all option-chain/ATM-straddle prices · "
+            "Dhan login, renewal and balance polling paused. "
+            "Reauthorize FYERS in Settings if its daily token expired."
         )
     elif current == "Dhan":
         st.caption(
