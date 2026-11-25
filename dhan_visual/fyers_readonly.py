@@ -582,3 +582,98 @@ def fetch_r1_intraday_bars(access: FyersAccess, ticker: str, *,
     return pd.DataFrame(
         values, columns=["Date", "Open", "High", "Low", "Close"],
     ).set_index("Date")
+
+
+def fetch_strategy_expiries(access, symbol, months, *, get=None):
+    """Resolve the selected stock's verified monthly expiry dates in one request."""
+    payload = _get(access, "/data/options-chain-v3", {
+        "symbol": nse_equity_symbol(symbol), "strikecount": 1,
+        "timestamp": "", "greeks": "0",
+    }, get=get)
+    inner = payload.get("data")
+    if not isinstance(inner, dict) or not isinstance(inner.get("expiryData"), list):
+        raise FyersDataError("FYERS did not return available expiry dates.")
+    result = {}
+    for month in months:
+        match = _select_expiry(inner["expiryData"], month)
+        if match and match[1] >= datetime.now(INDIA).date():
+            result[month] = (match[0], match[1].isoformat())
+    if not result:
+        raise FyersDataError("No verified unexpired monthly option contracts.")
+    return result
+
+
+def fetch_strategy_quotes(access, symbol, months, *, get=None):
+    """One paced quote request for equity and up to three exact monthly futures."""
+    equity = nse_equity_symbol(symbol)
+    names = {equity: "SPOT"}
+    for expiry in list(months)[:3]:
+        if not re.fullmatch(r"(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)-[0-9]{2}", expiry):
+            raise FyersDataError("Invalid strategy futures month.")
+        month, year = expiry.split("-")
+        names[f"NSE:{symbol}{year}{month}FUT"] = expiry
+    payload = _get(access, "/data/quotes", {"symbols": ",".join(names)}, get=get)
+    stamp = datetime.now(INDIA).isoformat(timespec="seconds")
+    result = {}
+    rows = payload.get("d")
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or row.get("s") != "ok":
+            continue
+        name = row.get("n")
+        if not isinstance(name, str) or name not in names:
+            continue
+        fields = row.get("v")
+        price = _positive(fields.get("lp")) if isinstance(fields, dict) else None
+        if price is not None:
+            result[names[name]] = Quote(price, stamp, "FYERS LTP")
+    return result
+
+
+def parse_strategy_chain(payload, symbol, expiry):
+    """Return every unambiguous quoted strike from the requested monthly chain."""
+    month, year = expiry.split("-")
+    prefix = nse_equity_symbol(symbol)[:-3] + year + month
+    inner = payload.get("data")
+    chain = inner.get("optionsChain") if isinstance(inner, dict) else None
+    if not isinstance(chain, list) or not chain or len(chain) > 500:
+        raise FyersDataError("FYERS option chain unavailable.")
+    rows, seen, duplicates = {}, set(), set()
+    for item in chain:
+        if not isinstance(item, dict):
+            continue
+        kind = item.get("option_type")
+        name = item.get("symbol")
+        strike = _positive(item.get("strike_price"))
+        if kind not in ("CE", "PE") or strike is None or not isinstance(name, str):
+            continue
+        if not name.startswith(prefix) or not name.endswith(kind):
+            continue
+        encoded = _positive(name[len(prefix):-2])
+        if encoded != strike:
+            continue
+        key = (strike, kind)
+        if key in seen:
+            duplicates.add(key)
+            continue
+        seen.add(key)
+        rows[key] = dict(symbol=name, strike=strike, kind=kind,
+                         ltp=_positive(item.get("ltp")),
+                         bid=_nonnegative(item.get("bid")),
+                         ask=_nonnegative(item.get("ask")),
+                         oi=_nonnegative(item.get("oi")),
+                         volume=_nonnegative(item.get("volume")))
+    for key in duplicates:
+        rows.pop(key, None)
+    if not rows:
+        raise FyersDataError("No verifiable monthly option strikes in FYERS response.")
+    return rows
+
+
+def fetch_strategy_chain(access, symbol, expiry, epoch, *, get=None):
+    if not isinstance(epoch, str) or not epoch.isdigit():
+        raise FyersDataError("Invalid strategy expiry timestamp.")
+    payload = _get(access, "/data/options-chain-v3", {
+        "symbol": nse_equity_symbol(symbol), "strikecount": MAX_CHAIN_STRIKES,
+        "timestamp": epoch, "greeks": "0",
+    }, get=get)
+    return parse_strategy_chain(payload, symbol, expiry)
