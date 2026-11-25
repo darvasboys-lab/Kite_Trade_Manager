@@ -604,35 +604,62 @@ def _poll_market_data():
 
 
 def _price_panel(universe, expiry, available, provider, manual, credentials=None):
-    """Quote-source controls live in the compact top-right toolbar."""
+    """Dhan-first by default for verified accounts; Yahoo per missing stock.
+
+    In Auto, no Dhan requests are sent until one-time integration succeeded.
+    The fallback runs only AFTER a bounded Dhan snapshot has completed or if
+    no authorized Dhan token is available. Each row retains its own source.
+    """
     all_symbols = {row.entry.symbol for row in universe}
-    if provider == "Dhan":
-        cid, token = credentials if credentials is not None else _dhan_credentials(
-            need_market=True,
-        )
-        if cid and len(token) >= 16:
+    cid, token = credentials if credentials is not None else _dhan_credentials(
+        need_market=True,
+    )
+    ready = bool(
+        valid_client_id(cid) and len(token) >= 16
+        and verified_account(cid) is not None
+    )
+    effective = choose_cash_source(
+        provider, verified=ready, token_available=len(token) >= 16,
+    )
+    if effective == "Dhan":
+        if valid_client_id(cid) and len(token) >= 16:
             identity = _start_dhan_prices(universe, cid, token, force=manual)
             snapshot = st.session_state.get("fno_dhan_snapshot") or {}
             if snapshot.get("key") != identity:
                 snapshot = {}
-            prices = {
+            dhan_prices = {
                 sym: value for sym, value in snapshot.get("quotes", {}).items()
                 if sym in all_symbols
             }
+            prices = dict(dhan_prices)
             if st.session_state.get("fno_dhan_job"):
-                st.caption(f"Dhan · loading {len(universe)} stocks")
+                st.caption(f"Dhan cash LTP · fetching {len(universe)} stocks…")
             elif snapshot.get("requested_at"):
-                st.caption(f"Dhan · {len(prices)} prices ready")
-            for error in (snapshot.get("errors", []) or [])[:3]:
+                st.caption(f"Dhan · {len(dhan_prices)} cash quotes · cached snapshot")
+            for error in (snapshot.get("errors") or [])[:2]:
                 st.warning(error)
         else:
-            prices = {}
-            st.info(
-                "The F&O list is automatic. To fetch **Dhan** prices automatically, "
-                "enter your Client ID and current access token once in the local "
-                "login panel. Your active subscription alone does not authenticate "
-                "this Streamlit app. You may select Yahoo without Dhan login."
-            )
+            dhan_prices, prices = {}, {}
+            st.warning("Dhan cash LTP unavailable · check your local token.")
+        if provider == AUTO_SOURCE and not st.session_state.get("fno_dhan_job"):
+            # Yahoo does not replace any actual Dhan LTP; use it only for
+            # missing stocks after the broker request is complete.
+            missing = missing_underlyings(universe, dhan_prices)
+            if missing:
+                key = _start_yahoo_prices(missing, expiry, force=manual)
+                fallback = st.session_state.get("fno_yahoo_snapshot") or {}
+                if fallback.get("key") == key:
+                    yahoo_prices = {
+                        sym: q for sym, q in fallback.get("quotes", {}).items()
+                        if sym in {row.entry.symbol for row in missing}
+                    }
+                    prices = merge_dhan_yahoo(dhan_prices, yahoo_prices)
+                else:
+                    yahoo_prices = {}
+                st.caption(
+                    f"Auto · Dhan {len(dhan_prices)} · "
+                    f"Yahoo fallback {len(yahoo_prices)} (missing only)"
+                )
     else:
         key = _start_yahoo_prices(universe, expiry, force=manual)
         snap = st.session_state.get("fno_yahoo_snapshot") or {}
@@ -643,14 +670,16 @@ def _price_panel(universe, expiry, available, provider, manual, credentials=None
             if sym in all_symbols
         }
         total = len(universe)
-        scanned = snap.get("processed", 0)
-        st.caption(f"Yahoo · {len(prices)}/{total} priced · {scanned}/{total} scanned")
+        st.caption(
+            f"Yahoo · {len(prices)}/{total} priced · "
+            f"{snap.get('processed', 0)}/{total} scanned"
+        )
         for error in (snap.get("errors") or [])[:2]:
             st.warning(error)
-
     if st.session_state.get("fno_dhan_job") or st.session_state.get("fno_yahoo_job"):
         _poll_market_data()
-    return provider, prices
+    return (provider if provider != AUTO_SOURCE else
+            f"Auto · {effective} first"), prices
 
 
 @st.cache_data(show_spinner=False, max_entries=3)
@@ -1042,15 +1071,17 @@ def render_screener():
     with source_col:
         with st.popover("◉ Source", use_container_width=True):
             provider = st.radio(
-                "Quote source", ["Dhan", "Yahoo Finance"], index=1,
-                key="fno_price_provider", horizontal=True,
-                help="Yahoo is default; Dhan needs a valid local data token.",
+                "Quote source", [AUTO_SOURCE, "Dhan", "Yahoo Finance"],
+                index=0, key="fno_price_provider", horizontal=False,
+                help="Default: verified Dhan LTP, with Yahoo only for missing "
+                     "stocks. Yahoo alone until Dhan setup succeeds.",
             )
             manual = st.button("↻ Refresh prices", key="fno_manual_price_refresh")
             if st.button("↻ Refresh stock list", key="fno_refresh_universe"):
                 _start_universe(force=True)
                 st.rerun()
-            st.caption("Yahoo bars may be delayed.")
+            # Source details are available in the tooltip; not repeated
+            # as permanent instructional text on every app rerun.
     with autofit_col:
         st.button(
             "↔ Auto-fit all", key="ccs_autofit_all_button",
@@ -1066,7 +1097,7 @@ def render_screener():
     # happen to be switched from Yahoo to Dhan.
     dhan_credentials = _dhan_credentials(
         need_market=(
-            provider == "Dhan" or
+            provider in ("Dhan", AUTO_SOURCE) or
             st.session_state.get("fno_ce5_mode") == "Live"
         ),
     )
