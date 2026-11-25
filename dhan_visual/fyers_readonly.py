@@ -470,11 +470,14 @@ def fetch_daily_levels(access: FyersAccess, ticker: str, *,
     import pandas as pd
     from .technical_indicators import calculate_levels
     day = day or datetime.now(INDIA).date()
-    first = day - timedelta(days=360)
+    # A current-day daily candle can be partially formed while NSE is open.
+    # Use only completed prior-day bars for EMA and previous-month pivots.
+    end = day - timedelta(days=1)
+    first = end - timedelta(days=359)
     resp = _get(access, "/data/history", {
         "symbol": nse_equity_symbol(ticker), "resolution": "D",
         "date_format": "1", "range_from": first.isoformat(),
-        "range_to": day.isoformat(), "cont_flag": "1",
+        "range_to": end.isoformat(), "cont_flag": "1",
     }, get=get)
     rows = resp.get("candles")
     if not isinstance(rows, list) or len(rows) > 400:
@@ -487,7 +490,7 @@ def fetch_daily_levels(access: FyersAccess, ticker: str, *,
             epoch = int(rec[0])
             parsed = datetime.fromtimestamp(epoch, INDIA).date()
             values = [_positive(v) for v in rec[1:5]]
-            if (first <= parsed <= day and all(x is not None for x in values)
+            if (first <= parsed <= end and all(x is not None for x in values)
                     and values[1] >= values[2]):
                 valid.append((pd.Timestamp(parsed), *(float(v) for v in values)))
         except (ValueError, TypeError, OverflowError, OSError):
