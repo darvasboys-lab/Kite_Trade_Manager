@@ -144,7 +144,17 @@ def render_fyers_settings():
             except FyersDataError as exc:
                 st.warning(str(exc))
         if st.button("Disconnect and forget FYERS credentials on this PC",
-                     key="fyers_remove_connection"):
+                     key="fyers_remove_connection",
+                     help="Stops local FYERS scanning and forgets the saved "
+                          "credentials. Existing broker-issued tokens are not revoked."):
+            chain = st.session_state.get("fno_fyers_chain_job") or {}
+            if chain.get("cancel"):
+                chain["cancel"].set()
+            technical_job = st.session_state.get("fno_technical_job") or {}
+            if st.session_state.get("fno_price_provider") == "FYERS" and technical_job.get("stop"):
+                technical_job["stop"].set()
+            for key in ("fno_fyers_cash_snapshot", "fno_fyers_chain_snapshot"):
+                st.session_state.pop(key, None)
             forget_vault()
             st.session_state.pop("_fyers_access", None)
             st.session_state.pop("_fyers_session_note", None)
