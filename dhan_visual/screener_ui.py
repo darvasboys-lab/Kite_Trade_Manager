@@ -184,6 +184,7 @@ def _start_auto_login(cid, force=False):
         ready = read_cached_token(cid)
         if ready:
             st.session_state["dhan_auto_access"] = ready
+            st.session_state["dhan_auto_access_cid"] = cid
             return
     st.session_state.pop("dhan_auto_error", None)
     st.session_state["dhan_auto_auth_job"] = {
@@ -192,11 +193,71 @@ def _start_auto_login(cid, force=False):
     }
 
 
+def _schedule_auto_profile_check(cid: str, token: str) -> None:
+    """One read-only profile check per valid auto-token, asynchronously."""
+    if not valid_client_id(cid) or not isinstance(token, str) or len(token) < 16:
+        return
+    fingerprint = sha256(token.encode()).hexdigest()
+    entry = st.session_state.get("fno_dhan_profile_status") or {}
+    if (entry.get("cid") == cid and
+            entry.get("token_fingerprint") == fingerprint and
+            _confirmed_dhan_profile(cid, token) is not None):
+        return
+    job = st.session_state.get("dhan_auto_profile_job")
+    if job is not None:
+        # Never overlap two profile requests or show another account's result.
+        if not job["future"].done():
+            return
+        # The heartbeat must consume the finished job before scheduling more.
+        return
+    if st.session_state.get("dhan_auto_profile_attempt") == (cid, fingerprint):
+        return
+    st.session_state["dhan_auto_profile_attempt"] = (cid, fingerprint)
+    st.session_state["dhan_auto_profile_job"] = {
+        "cid": cid, "fingerprint": fingerprint,
+        "future": _market_pool().submit(check_dhan_data_plan, cid, token),
+    }
+
+
 @st.fragment(run_every="15s")
 def _auto_login_heartbeat(cid):
-    """While app runs: process authentication and renew close to expiry."""
+    """Process saved TOTP login/profile jobs and renew expiring tokens."""
     if not is_configured(cid):
         return
+    profile_job = st.session_state.get("dhan_auto_profile_job")
+    if profile_job and profile_job["future"].done():
+        st.session_state.pop("dhan_auto_profile_job", None)
+        active = st.session_state.get("dhan_auto_access")
+        matching = bool(
+            profile_job["cid"] == cid
+            and isinstance(active, AutoAccess)
+            and active.usable()
+            and st.session_state.get("dhan_auto_access_cid") == cid
+            and profile_job["fingerprint"] ==
+            sha256(active.token.encode()).hexdigest()
+        )
+        if matching:
+            try:
+                profile = profile_job["future"].result()
+                st.session_state["fno_dhan_profile_status"] = {
+                    "cid": cid, "token_fingerprint": profile_job["fingerprint"],
+                    "status": profile,
+                }
+                st.session_state.pop("dhan_auto_error", None)
+                if profile.data_ready:
+                    st.session_state["fno_activate_live_on_next_run"] = True
+                    st.session_state["fno_activate_auto_quote_on_next_run"] = True
+                else:
+                    st.session_state["dhan_auto_error"] = (
+                        "Dhan auto-login succeeded, but the Data API plan is "
+                        "inactive. Check your subscription in Settings."
+                    )
+            except DhanProfileError as exc:
+                st.session_state["dhan_auto_error"] = (
+                    "Dhan token generated, but Data API profile check failed: "
+                    + str(exc)
+                )
+        st.rerun(scope="app")
     job = st.session_state.get("dhan_auto_auth_job")
     if job:
         if job["future"].done():
@@ -263,8 +324,10 @@ def _auto_login_panel(cid, manual_token, *, allow_login=True):
         if st.session_state.get("dhan_auto_error"):
             st.error(st.session_state["dhan_auto_error"])
 
-    if manual_token or not enabled:
+    if not enabled:
         return ""
+    # A previously pasted, expired manual token must NEVER suppress the
+    # saved PIN/TOTP flow. Auto-login is opt-in via the Enable button above.
     if not allow_login:
         # Opening a Yahoo/EOD dashboard must not issue broker tokens.
         old = read_cached_token(cid)
@@ -279,15 +342,19 @@ def _auto_login_panel(cid, manual_token, *, allow_login=True):
         else:
             _start_auto_login(cid)
     _auto_login_heartbeat(cid)
+    if stored and stored.usable() and allow_login:
+        _schedule_auto_profile_check(cid, stored.token)
     if st.session_state.get("dhan_auto_error"):
         st.error(st.session_state["dhan_auto_error"])
         if st.button("Retry Dhan TOTP login", key="dhan_auto_retry"):
             _start_auto_login(cid, force=True)
     if stored and stored.usable():
         st.caption(
-            "Automatic Dhan token active until "
+            "✓ Automatic Dhan token active until "
             + stored.expires.astimezone().strftime("%d %b %Y %H:%M")
         )
+        if st.session_state.get("dhan_auto_profile_job"):
+            st.caption("Checking the broker Data API plan in the background…")
         return stored.token
     return ""
 
