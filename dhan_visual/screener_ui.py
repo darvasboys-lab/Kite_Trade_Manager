@@ -216,7 +216,7 @@ def _auto_login_heartbeat(cid):
             _start_auto_login(cid)
 
 
-def _auto_login_panel(cid, manual_token):
+def _auto_login_panel(cid, manual_token, *, allow_login=True):
     """Optional local TOTP setup, independent of ResultBot's secrets."""
     if not valid_client_id(cid):
         return ""
@@ -226,7 +226,8 @@ def _auto_login_panel(cid, manual_token):
             "Provide your Dhan 6-digit PIN and TOTP setup secret ONCE. "
             "Windows Credential Manager protects these locally. "
             "Dhan returns a 24-hour token; while this dashboard is running "
-            "it can renew automatically without pasting a daily token."
+            "it can renew automatically when Dhan or Live CE data is in use, "
+            "without pasting a daily token."
         )
         st.warning(
             "This Dhan account may also be used by ResultBot. "
@@ -255,6 +256,10 @@ def _auto_login_panel(cid, manual_token):
 
     if manual_token or not enabled:
         return ""
+    if not allow_login:
+        # Opening a Yahoo/EOD dashboard must not issue broker tokens.
+        old = read_cached_token(cid)
+        return old.token if old else ""
     stored = st.session_state.get("dhan_auto_access")
     if not isinstance(stored, AutoAccess) or not stored.usable():
         stored = read_cached_token(cid)
@@ -276,7 +281,7 @@ def _auto_login_panel(cid, manual_token):
     return ""
 
 
-def _dhan_credentials():
+def _dhan_credentials(*, need_market=False):
     """One-time broker onboarding, then a compact status with token renewal.
 
     Green check represents *completed verified setup*, not a claim that a
@@ -416,8 +421,15 @@ def _dhan_credentials():
     # Keep the existing opt-in TOTP manager. It may issue a new broker token,
     # so its existing interference warning remains and user consent is required.
     current_id = current_id.strip()
-    automatic = _auto_login_panel(current_id, manual)
+    automatic = _auto_login_panel(
+        current_id, manual, allow_login=need_market,
+    )
     secure = load_manual_token(current_id) if valid_client_id(current_id) else ""
+    # A previously verified (but now expired) manual token cannot trigger
+    # automatic quote calls. The explicit token-only renewal button above
+    # remains available, and an independently current auto token can work.
+    if verified is not None and not token_still_current(verified):
+        return current_id, (automatic or secure)
     return current_id, (manual or automatic or secure)
 
 
@@ -571,7 +583,9 @@ def _price_panel(universe, expiry, available, provider, manual, credentials=None
     """Quote-source controls live in the compact top-right toolbar."""
     all_symbols = {row.entry.symbol for row in universe}
     if provider == "Dhan":
-        cid, token = credentials if credentials is not None else _dhan_credentials()
+        cid, token = credentials if credentials is not None else _dhan_credentials(
+            need_market=True,
+        )
         if cid and len(token) >= 16:
             identity = _start_dhan_prices(universe, cid, token, force=manual)
             snapshot = st.session_state.get("fno_dhan_snapshot") or {}
@@ -1026,7 +1040,12 @@ def render_screener():
     available = [row for row in universe if expiry in row.entry.lots]
     # Render onboarding once for all quote modes, not only when cash quotes
     # happen to be switched from Yahoo to Dhan.
-    dhan_credentials = _dhan_credentials()
+    dhan_credentials = _dhan_credentials(
+        need_market=(
+            provider == "Dhan" or
+            st.session_state.get("fno_ce5_mode") == "Live"
+        ),
+    )
     provider, all_prices = _price_panel(
         universe, expiry, available, provider, manual,
         credentials=dhan_credentials,
@@ -1083,6 +1102,9 @@ def render_screener():
         and technical_state.get("status") == "complete"
     )
     dhan_ce5 = available_otm_calls(available, expiry)
+    if st.session_state.pop("fno_activate_live_on_next_run", False):
+        # Safe to update before the CE radio widget exists in this run.
+        st.session_state["fno_ce5_mode"] = "Live"
     eod_calls, eod_date = _free_ce5_panel(
         expiry, dhan_count=len(dhan_ce5), available=available,
     )
