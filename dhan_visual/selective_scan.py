@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from hashlib import sha256
 from decimal import Decimal, InvalidOperation
 import time
 import pandas as pd
@@ -222,18 +223,72 @@ def _universe_rows(universe, expiry):
     return [item for item in universe if expiry in item.entry.lots]
 
 
-def _display(frame, *, market=False, futures=False):
+STRATEGY_COLUMNS = {
+    "5%+ OTM CE (%)": "Covered call",
+    "ATM Straddle Total (₹)": "Short straddle",
+    "Straddle (%)": "Short straddle",
+}
+
+
+def strategy_cell_target(event, frame):
+    """Resolve only a valid quoted action cell to its original dataframe row."""
+    if not isinstance(event, dict):
+        return None
+    selection = event.get("selection")
+    cells = selection.get("cells") if isinstance(selection, dict) else None
+    if not isinstance(cells, (list, tuple)) or len(cells) != 1:
+        return None
+    cell = cells[0]
+    if not isinstance(cell, (list, tuple)) or len(cell) != 2:
+        return None
+    index, column = cell
+    if (type(index) is not int or not 0 <= index < len(frame)
+            or not isinstance(column, str) or column not in STRATEGY_COLUMNS
+            or column not in frame.columns):
+        return None
+    row = frame.iloc[index]
+    try:
+        price = Decimal(str(row[column]))
+        if not price.is_finite() or price <= 0:
+            return None
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    return row["Stock"], STRATEGY_COLUMNS[column]
+
+
+def _strategy_cell_callback(key, frame, entries, expiry, snapshot_key, scan_day):
+    """Callback uses the exact displayed snapshot, never a newly sorted frame."""
+    if (st.session_state.get("ccs_selective_page") != "◎ OTM CE Home"
+            or st.session_state.get("ccs_legacy_full_scan")
+            or st.session_state.get(FUTURES_STATE)
+            or st.session_state.get("ccs_stock_strategy_active")):
+        return
+    access = connected_fyers()
+    snapshot = _snapshot(access)
+    if (not snapshot or snapshot["key"] != snapshot_key
+            or snapshot["expiry"] != expiry or snapshot.get("scan_day") != scan_day
+            or scan_day != datetime.now(IST).date().isoformat()):
+        return
+    target = strategy_cell_target(st.session_state.get(key), frame)
+    if target and target[0] in entries:
+        from .stock_strategy_ui import activate_strategy
+        symbol, preset = target
+        activate_strategy(symbol, entries[symbol], expiry, preset)
+
+
+def _display(frame, *, market=False, futures=False, strategy_context=None):
     config = {
         "CMP (₹)": st.column_config.NumberColumn("CMP (₹)", format="₹%.2f"),
         R1_COLUMN: st.column_config.TextColumn("> R1", help="CMP strictly above current monthly R1. Dash = not verified."),
         "Lot size": st.column_config.NumberColumn("Lot size", format="%d"),
         "Contract size (₹)": st.column_config.NumberColumn("Contract size (₹)", format="₹%.0f"),
-        "5%+ OTM CE (%)": st.column_config.NumberColumn("CE ≥ +5% (%)", format="%.2f%%"),
-        "ATM Straddle Total (₹)": st.column_config.NumberColumn("ATM Straddle Total (₹)", format="₹%.2f"),
-        "Straddle (%)": st.column_config.NumberColumn("Straddle (%)", format="%.2f%%"),
+        "5%+ OTM CE (%)": st.column_config.NumberColumn("CE ≥ +5% (%)", format="%.2f%%", help="Click the quoted CE percentage to build a covered call."),
+        "ATM Straddle Total (₹)": st.column_config.NumberColumn("ATM Straddle Total (₹)", format="₹%.2f", help="Click to build a short ATM straddle."),
+        "Straddle (%)": st.column_config.NumberColumn("Straddle (%)", format="%.2f%%", help="Click to build a short ATM straddle."),
         "Futures Price (₹)": st.column_config.NumberColumn("Futures Price (₹)", format="₹%.2f"),
         "Futures vs CMP (%)": st.column_config.NumberColumn("Futures vs CMP (%)", format="%+.2f%%"),
     }
+    raw_frame = frame.copy(deep=True) if strategy_context is not None else None
     # Display-only link: retain raw NSE symbols in snapshots and CSV exports.
     frame = clickable_stock_frame(frame, source="Stock", target="TradingView chart")
     config["Stock"] = None
@@ -241,9 +296,20 @@ def _display(frame, *, market=False, futures=False):
         "Stock", display_text=TRADINGVIEW_SYMBOL_DISPLAY,
         help="Click the stock symbol to open its NSE cash chart in TradingView.",
     )
+    key = dataframe_key("selective_futures" if futures else "selective_market" if market else "selective_home", st.session_state)
+    selection = {}
+    if strategy_context is not None and not raw_frame.empty:
+        from functools import partial
+        entries, expiry, snapshot_key, scan_day = strategy_context
+        digest = sha256((snapshot_key + raw_frame.to_json(orient="split")).encode()).hexdigest()[:20]
+        serial = st.session_state.get("ccs_strategy_launch_serial", 0)
+        key += f"_cells_{digest}_{serial}"
+        selection = dict(selection_mode="single-cell",
+                         on_select=partial(_strategy_cell_callback, key, raw_frame,
+                                           entries, expiry, snapshot_key, scan_day))
     st.dataframe(frame, hide_index=True, use_container_width=True, height=520,
-                 key=dataframe_key("selective_futures" if futures else "selective_market" if market else "selective_home", st.session_state),
-                 column_config=autofit_column_config(config, autofit_enabled(st.session_state)))
+                 key=key, column_config=autofit_column_config(config, autofit_enabled(st.session_state)),
+                 **selection)
 
 
 def futures_discount_frame(available, cash, futures, expiry):
@@ -454,7 +520,9 @@ def render_selective_home():
     if snapshot["options_at"]:
         st.caption("Options requested " + snapshot["options_at"] + " · each stock checked once; cached quotes are not refreshed automatically.")
     save_scan_controls(snapshot,frame)
-    _display(frame)
+    st.caption("Click any CE premium %, ATM straddle total or straddle % cell to open that stock’s Strategy Builder.")
+    _display(frame, strategy_context=({item.entry.symbol: item.entry for item in available},
+                                     snapshot["expiry"], snapshot["key"], snapshot.get("scan_day")))
     if not frame.empty:
         st.markdown("#### Build strategy")
         a, b, c = st.columns([1.5,1,1])
