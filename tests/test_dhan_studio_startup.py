@@ -64,7 +64,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
             auth_calls = [
                 args for args, kwargs in pool.calls
-                if args[0].__name__ == "load_or_generate"
+                if args[0] is generate
             ]
             self.assertEqual(len(auth_calls), 1)
             self.assertEqual(auth_calls[0][1], cid)
@@ -83,7 +83,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
             self.assertEqual(
-                sum(args[0].__name__ == "load_or_generate"
+                sum(args[0] is generate
                     for args, _ in pool.calls), 1,
             )
 
