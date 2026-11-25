@@ -1,0 +1,154 @@
+"""FYERS-first options and genuine Home ATM CE+PE tests (offline only)."""
+import unittest
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from unittest.mock import patch
+
+from dhan_visual.fyers_readonly import FyersAccess, FyersCall, FyersStraddle
+from dhan_visual.otm_home import otm_home_dataframe
+from test_dhan_studio_startup import app_with_catalogue, example, FakePool
+
+
+def valid_access():
+    return FyersAccess(
+        "ABCD1234-100", "offline-test-fyers-token-not-real",
+        datetime.now(timezone.utc) + timedelta(hours=8),
+    )
+
+
+def fyers_call():
+    return FyersCall(
+        "TCS", "DEC-26", Decimal("105"), Decimal("100"),
+        Decimal("2"), Decimal("2"),
+    )
+
+
+def fyers_straddle(expiry="DEC-26"):
+    return FyersStraddle(
+        "TCS", expiry, Decimal("100"), Decimal("100"),
+        Decimal("5"), Decimal("7"), Decimal("12"),
+    )
+
+
+class PreferredFYERSHomeTests(unittest.TestCase):
+    def test_ce_plus_pe_is_a_rupee_per_share_total_and_uses_same_expiry(self):
+        data = otm_home_dataframe(
+            example(), {}, {"TCS": fyers_call()},
+            straddles={"TCS": fyers_straddle()}, expiry="DEC-26",
+        )
+        self.assertEqual(
+            data.columns.tolist(),
+            ["Stock", "CMP (₹)", "5%+ OTM CE (%)", "ATM Straddle Total (₹)"],
+        )
+        self.assertEqual(
+            data.loc[data.Stock == "TCS", "ATM Straddle Total (₹)"].iloc[0],
+            12.0,
+        )
+        self.assertEqual(
+            data.loc[data.Stock == "TCS", "5%+ OTM CE (%)"].iloc[0],
+            2.0,
+        )
+        self.assertTrue(
+            data.loc[data.Stock == "SBIN", "ATM Straddle Total (₹)"].isna().all(),
+        )
+
+    def test_missing_or_mismatched_legs_cannot_fabricate_atm_total(self):
+        from dataclasses import replace
+        for value in (
+            fyers_straddle("NOV-26"),
+            replace(fyers_straddle(), symbol="INFY"),
+            replace(fyers_straddle(), call_ltp=Decimal("0")),
+            replace(fyers_straddle(), put_ltp=Decimal("0")),
+        ):
+            with self.subTest(value=value):
+                data = otm_home_dataframe(
+                    example(), {}, {"TCS": fyers_call()},
+                    straddles={"TCS": value}, expiry="DEC-26",
+                )
+                self.assertTrue(data["ATM Straddle Total (₹)"].isna().all())
+        # EOD has no actual ATM pair; no synthetic total is invented.
+        self.assertTrue(
+            otm_home_dataframe(example(), {}, {}, expiry="DEC-26")[
+                "ATM Straddle Total (₹)"
+            ].isna().all()
+        )
+
+    def test_saved_fyers_app_default_even_when_access_token_needs_renewal(self):
+        app = app_with_catalogue()
+        with patch("dhan_visual.broker_control.read_app_from_vault",
+                   return_value=("ABCD1234-100", "offline-test-only")), \
+             patch("dhan_visual.broker_control.read_access_from_vault",
+                   return_value=None), \
+             patch("dhan_visual.fyers_ui.read_app_from_vault", return_value=None), \
+             patch("dhan_visual.fyers_ui.read_access_from_vault", return_value=None), \
+             patch("dhan_visual.screener_ui._start_auto_login") as dhan_login, \
+             patch("dhan_visual.screener_ui.check_dhan_data_plan") as profile:
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(app.radio(key="ccs_broker_requested").value, "FYERS")
+            self.assertEqual(app.radio(key="fno_home_ce_source").value, "FYERS")
+            self.assertEqual(app.radio(key="fno_ce5_mode").value, "FYERS")
+            self.assertEqual(app.radio(key="fno_price_provider").value, "FYERS")
+            dhan_login.assert_not_called()
+            profile.assert_not_called()
+
+    def test_explicit_dhan_selection_wins_over_saved_fyers_config(self):
+        app = app_with_catalogue()
+        app.session_state["ccs_active_broker"] = "Dhan"
+        app.session_state["fno_ce5_mode"] = "EOD"
+        with patch("dhan_visual.broker_control.read_app_from_vault",
+                   return_value=("ABCD1234-100", "offline-test-only")), \
+             patch("dhan_visual.fyers_ui.read_app_from_vault", return_value=None):
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(app.radio(key="ccs_broker_requested").value, "Dhan")
+            self.assertEqual(app.radio(key="fno_home_ce_source").value, "EOD")
+
+    def test_home_uses_shared_matching_fyers_option_snapshot_not_old_expiry(self):
+        from dhan_visual.fyers_ui import _scope
+        app = app_with_catalogue()
+        app.session_state["fno_home_expiry"] = "DEC-26"
+        app.session_state["fno_expiry"] = "DEC-26"
+        app.session_state["_fyers_access"] = valid_access()
+        app.session_state["ccs_active_broker"] = "FYERS"
+        app.session_state["fno_ce5_mode"] = "FYERS"
+        app.session_state["fno_home_ce_source"] = "FYERS"
+        app.session_state["fno_price_provider"] = "FYERS"
+        app.session_state["fno_fyers_chain_snapshot"] = {
+            "key": _scope(valid_access(), ["SBIN", "TCS"], "DEC-26"),
+            "expiry": "DEC-26",
+            "calls": {"TCS": fyers_call()},
+            "straddles": {"TCS": fyers_straddle()},
+            "total": 2, "processed": 2, "errors": [],
+            "complete": True, "expiry_date": "2026-12-29",
+        }
+        pool = FakePool()
+        with patch("dhan_visual.fyers_ui._fyers_pool", return_value=pool), \
+             patch("dhan_visual.fyers_ui.read_app_from_vault", return_value=None), \
+             patch("dhan_visual.fyers_ui.read_access_from_vault", return_value=None):
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            home = app.dataframe[0].value
+            self.assertEqual(
+                home.loc[home.Stock == "TCS", "ATM Straddle Total (₹)"].iloc[0],
+                12.0,
+            )
+            self.assertEqual(
+                home.loc[home.Stock == "TCS", "5%+ OTM CE (%)"].iloc[0],
+                2.0,
+            )
+            self.assertEqual(
+                sum(args[0][0].__name__ == "_fyers_chain_worker" for args in pool.calls),
+                0, "Matching options snapshot should not refetch a chain",
+            )
+            # A stale expiry must not appear in the Home straddle column.
+            app.session_state["fno_fyers_chain_snapshot"]["expiry"] = "NOV-26"
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            stale = app.dataframe[0].value
+            self.assertTrue(stale["ATM Straddle Total (₹)"].isna().all())
+            self.assertTrue(stale["5%+ OTM CE (%)"].isna().all())
+
+
+if __name__ == "__main__":
+    unittest.main()
