@@ -481,8 +481,16 @@ def _start_dhan_prices(universe, cid, token, force=False):
         # finish naturally without exposing results to the new login.
     previous = st.session_state.get("fno_dhan_snapshot") or {}
     if st.session_state.get("fno_dhan_attempt_key") == identity:
+        last = st.session_state.get("fno_dhan_last_attempt_at")
+        if (last is None and not force
+                and previous.get("key") == identity):
+            # Existing valid in-memory snapshot from an earlier app version,
+            # browser state or test fixture. Treat it as freshly cached
+            # rather than re-requesting and replacing real cash prices.
+            st.session_state["fno_dhan_last_attempt_at"] = time.monotonic()
+            return identity
         if not should_fetch_again(
-            st.session_state.get("fno_dhan_last_attempt_at"),
+            last,
             now=time.monotonic(), errors=previous.get("errors") or (),
             manual=force, market_open=nse_regular_session(),
         ):
