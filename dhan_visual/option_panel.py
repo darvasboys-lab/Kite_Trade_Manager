@@ -260,7 +260,6 @@ def render_atm_panel(available, filtered_rows, expiry):
                                                     "Integration complete but current "
                                                     f"token was not saved: {exc}"
                                                 )
-                                        st.session_state["fno_dhan_optional_recheck"] = False
                                         st.session_state["fno_dhan_show_recheck"] = False
                                         st.session_state["fno_dhan_integration_complete"] = True
                                         st.session_state["fno_activate_live_on_next_run"] = True
