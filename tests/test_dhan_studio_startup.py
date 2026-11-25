@@ -49,15 +49,21 @@ class PayoffStudioStartupTests(unittest.TestCase):
         with patch("dhan_visual.screener_ui._market_pool", return_value=pool):
             app = app_with_catalogue().run()
         self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-        self.assertGreaterEqual(len(app.tabs), 2)
+        self.assertGreaterEqual(len(app.tabs), 4)
+        self.assertEqual(app.tabs[0].label, "◎ OTM CE Home")
+        self.assertEqual(app.tabs[1].label, "⌕ Market Screener")
+        self.assertEqual(
+            app.dataframe[0].value.columns.tolist(),
+            ["Stock", "CMP (₹)", "5%+ OTM CE (%)"],
+        )
         self.assertEqual(app.radio(key="fno_price_provider").value, "Auto (Dhan → Yahoo)")
         self.assertEqual(app.selectbox(key="fno_value_preset").value, "Below ₹7 lakh")
         self.assertGreaterEqual(len(app.dataframe), 1)
-        self.assertNotIn("Company", app.dataframe[0].value.columns)
-        self.assertIn("Symbol", app.dataframe[0].value.columns)
-        self.assertIn("TradingView chart", app.dataframe[0].value.columns)
+        self.assertNotIn("Company", app.dataframe[1].value.columns)
+        self.assertIn("Symbol", app.dataframe[1].value.columns)
+        self.assertIn("TradingView chart", app.dataframe[1].value.columns)
         from urllib.parse import parse_qs, urlsplit
-        df = app.dataframe[0].value
+        df = app.dataframe[1].value
         for _, item in df.iterrows():
             url = item["TradingView chart"]
             self.assertEqual(urlsplit(url).netloc, "www.tradingview.com")
@@ -68,7 +74,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
         self.assertIsNotNone(app.button(key="ccs_autofit_all_button"))
         for col in ("EMA 200", "EMA 50", "EMA 20", "EMA 10", "Monthly R1",
                     "5%+ CE premium (%)"):
-            self.assertIn(col, app.dataframe[0].value.columns)
+            self.assertIn(col, app.dataframe[1].value.columns)
         # Former full-width filter, search and quote source controls remain
         # reachable by exactly the same widget keys inside small popovers.
         self.assertEqual(app.radio(key="fno_value_sort").value, "Low → high")
@@ -81,7 +87,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
         with patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()):
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-            frame = app.dataframe[0].value
+            frame = app.dataframe[1].value
             self.assertEqual(
                 frame.columns.tolist()[:2], ["TradingView chart", "Symbol"]
             )
@@ -107,7 +113,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
             self.assertIsNotNone(app.button(key="ccs_r1_today_refresh"))
             # The existing strategy-builder tab has its own independent table.
             self.assertGreaterEqual(len(app.dataframe), 1)
-            self.assertIn("TradingView chart", app.dataframe[0].value.columns)
+            self.assertIn("TradingView chart", app.dataframe[1].value.columns)
 
     def test_r1_today_auto_scan_all_fno_underlyings_not_current_filters(self):
         from dhan_visual.technical_indicators import TechnicalLevels
@@ -148,7 +154,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
         with patch("dhan_visual.screener_ui._market_pool", return_value=pool):
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-            before = app.dataframe[0].value.copy()
+            before = app.dataframe[1].value.copy()
             self.assertNotIn("Company", before.columns)
             app.button(key="ccs_autofit_all_button").click().run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
@@ -166,7 +172,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
                 dataframe_key("ccs_covered_call_stages", app.session_state),
                 "ccs_covered_call_stages_autofit_1",
             )
-            self.assertTrue(app.dataframe[0].value.equals(before))
+            self.assertTrue(app.dataframe[1].value.equals(before))
             app.button(key="ccs_autofit_all_button").click().run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
             self.assertEqual(app.session_state["ccs_autofit_revision"], 2)
@@ -209,16 +215,16 @@ class PayoffStudioStartupTests(unittest.TestCase):
         }
         app.run()
         self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-        frame = app.dataframe[0].value
+        frame = app.dataframe[1].value
         self.assertEqual(frame["Symbol"].tolist(), ["SBIN", "TCS"])
         self.assertEqual(frame["Contract value (₹L)"].tolist(), [4.5, 6.75])
         app.toggle(key="fno_compact_contract_value").set_value(False).run()
         self.assertEqual(
-            app.dataframe[0].value["Contract value (₹)"].tolist(),
+            app.dataframe[1].value["Contract value (₹)"].tolist(),
             [450000., 675000.]
         )
         app.selectbox(key="fno_value_preset").set_value("All stocks").run()
-        self.assertEqual(len(app.dataframe[0].value), 2)
+        self.assertEqual(len(app.dataframe[1].value), 2)
 
     def test_switching_to_yahoo_starts_full_universe_in_background(self):
         app = app_with_catalogue()
@@ -401,7 +407,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
              patch("dhan_visual.straddle_panel.scan_all_straddles") as bulk:
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-            self.assertTrue(app.dataframe[0].value["5%+ CE premium (%)"].isna().all())
+            self.assertTrue(app.dataframe[1].value["5%+ CE premium (%)"].isna().all())
             app.selectbox(key="fno_atm_symbol").set_value("TCS").run()
             app.button(key="fno_atm_load").click().run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
@@ -410,7 +416,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
             self.assertEqual(
                 app.session_state["fno_atm_result"]["cid"], "1234567890"
             )
-            frame = app.dataframe[0].value
+            frame = app.dataframe[1].value
             self.assertEqual(
                 frame.loc[frame["Symbol"] == "TCS",
                           "5%+ CE premium (%)"].iloc[0],
@@ -669,7 +675,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
         app.session_state["fno_price_provider"] = "Dhan"
         app.run()
         self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-        cols = app.dataframe[0].value.columns.tolist()
+        cols = app.dataframe[1].value.columns.tolist()
         self.assertNotIn("Quote time", cols)
         self.assertNotIn("Price source", cols)
 
@@ -707,7 +713,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
         }
         app.run()
         self.assertFalse(app.exception,[str(x.message) for x in app.exception])
-        frame=app.dataframe[0].value
+        frame=app.dataframe[1].value
         tcs=frame.loc[frame["Symbol"]=="TCS"].iloc[0]
         self.assertEqual(tcs["EMA 200"],"☑ ₹99.00")
         self.assertEqual(tcs["EMA 50"],"—")
@@ -717,18 +723,18 @@ class PayoffStudioStartupTests(unittest.TestCase):
         app.session_state["fno_technicals"]["stage"]=1
         app.run()
         self.assertEqual(
-            app.dataframe[0].value.loc[
-                app.dataframe[0].value["Symbol"]=="TCS", "EMA 50"
+            app.dataframe[1].value.loc[
+                app.dataframe[1].value["Symbol"]=="TCS", "EMA 50"
             ].iloc[0], "☑ ₹100.00"
         )
         self.assertEqual(
-            app.dataframe[0].value.loc[
-                app.dataframe[0].value["Symbol"]=="TCS", "EMA 20"
+            app.dataframe[1].value.loc[
+                app.dataframe[1].value["Symbol"]=="TCS", "EMA 20"
             ].iloc[0], "—"
         )
         app.session_state["fno_technicals"]["stage"]=4
         app.run()
-        frame=app.dataframe[0].value
+        frame=app.dataframe[1].value
         tcs=frame.loc[frame["Symbol"]=="TCS"].iloc[0]
         self.assertEqual(tcs["EMA 20"],"₹102.00")
         self.assertEqual(tcs["EMA 10"],"₹103.00")
@@ -785,7 +791,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
              patch("dhan_visual.straddle_panel.scan_all_straddles") as scan:
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-            screen = app.dataframe[0].value
+            screen = app.dataframe[1].value
             self.assertEqual(
                 screen.loc[screen["Symbol"] == "TCS", "5%+ CE premium (%)"].iloc[0],
                 2.0,
@@ -868,7 +874,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
                  patch("dhan_visual.straddle_panel.scan_all_straddles") as scan:
                 app.run()
                 self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-                df = app.dataframe[0].value
+                df = app.dataframe[1].value
                 value = df.loc[df["Symbol"] == "TCS", "5%+ CE premium (%)"].iloc[0]
                 source = df.loc[df["Symbol"] == "TCS", "CE source"].iloc[0]
                 self.assertEqual(value, 2.0)
@@ -891,17 +897,17 @@ class PayoffStudioStartupTests(unittest.TestCase):
                 app.run()
                 self.assertFalse(app.exception, [str(x.message) for x in app.exception])
                 self.assertEqual(app.radio(key="fno_ce5_mode").value, "EOD")
-                frame = app.dataframe[0].value
+                frame = app.dataframe[1].value
                 self.assertEqual(frame.loc[frame["Symbol"] == "TCS",
                                            "5%+ CE premium (%)"].iloc[0], 2.0)
                 app.radio(key="fno_ce5_mode").set_value("Live").run()
                 self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-                frame = app.dataframe[0].value
+                frame = app.dataframe[1].value
                 self.assertTrue(frame["5%+ CE premium (%)"].isna().all())
                 app.radio(key="fno_ce5_mode").set_value("EOD").run()
                 self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-                self.assertEqual(app.dataframe[0].value.loc[
-                    app.dataframe[0].value["Symbol"] == "TCS",
+                self.assertEqual(app.dataframe[1].value.loc[
+                    app.dataframe[1].value["Symbol"] == "TCS",
                     "5%+ CE premium (%)"
                 ].iloc[0], 2.0)
                 scan.assert_not_called()
@@ -941,13 +947,13 @@ class PayoffStudioStartupTests(unittest.TestCase):
              patch("dhan_visual.screener_ui.scan_tej_eod") as paid:
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-            df = app.dataframe[0].value
+            df = app.dataframe[1].value
             tcs = df.loc[df["Symbol"] == "TCS"].iloc[0]
             self.assertEqual(tcs["5%+ CE premium (%)"], 2.0)
             self.assertEqual(tcs["CE source"], "TejHQ EOD 2026-11-23")
             app.radio(key="fno_ce5_mode").set_value("Live").run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-            self.assertTrue(app.dataframe[0].value["5%+ CE premium (%)"].isna().all())
+            self.assertTrue(app.dataframe[1].value["5%+ CE premium (%)"].isna().all())
             paid.assert_not_called()
 
     def test_compact_search_and_filters_retain_all_prior_actions(self):
@@ -957,13 +963,13 @@ class PayoffStudioStartupTests(unittest.TestCase):
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
             app.text_input(key="fno_symbol_find").set_value("TCS").run()
-            self.assertEqual(app.dataframe[0].value["Symbol"].tolist(), ["TCS"])
+            self.assertEqual(app.dataframe[1].value["Symbol"].tolist(), ["TCS"])
             app.text_input(key="fno_symbol_find").set_value("").run()
             app.radio(key="fno_value_sort").set_value("High → low").run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
             self.assertEqual(app.radio(key="fno_value_sort").value, "High → low")
             app.selectbox(key="fno_value_preset").set_value("All stocks").run()
-            self.assertEqual(len(app.dataframe[0].value), 2)
+            self.assertEqual(len(app.dataframe[1].value), 2)
 
     def test_dark_mode_button_toggles_without_broker_calls(self):
         app = app_with_catalogue()
