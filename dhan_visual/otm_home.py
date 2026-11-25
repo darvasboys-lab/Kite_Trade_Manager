@@ -15,6 +15,7 @@ import streamlit as st
 
 from .ce_eod_remote import IST
 from .fyers_ui import connected_fyers, fyers_cash_prices, fyers_chain_calls
+from .broker_control import active_broker, broker_allowed
 from .ce_eod_store import load_local_eod, save_verified_report, eod_cash_quotes
 from .nse_eod_ce import NseEodError, NseEodSnapshot, parse_nse_fo_eod
 from .dhan_integration_state import (
@@ -232,9 +233,9 @@ def render_otm_home():
         st.warning("No valid F&O expiry month available in the stock list")
         return
 
-    if st.session_state.pop("fno_activate_auto_quote_on_next_run", False):
+    if st.session_state.pop("fno_activate_auto_quote_on_next_run", False) and broker_allowed("Dhan"):
         st.session_state["fno_price_provider"] = AUTO_SOURCE
-    if st.session_state.pop("fno_fyers_select_on_next_run", False):
+    if st.session_state.pop("fno_fyers_select_on_next_run", False) and broker_allowed("FYERS"):
         st.session_state["fno_price_provider"] = "FYERS"
         st.session_state["fno_ce5_mode"] = "FYERS"
         st.session_state["fno_home_ce_source"] = "FYERS"
@@ -245,8 +246,8 @@ def render_otm_home():
     pending_live = st.session_state.pop("fno_activate_live_on_next_run", False)
     # Respect an ACTIVE Data API subscription only; a working Dhan login
     # without the data plan cannot supply genuine CE option LTP.
-    cid, token = _local_creds()
-    saved = verified_account(cid)
+    cid, token = _local_creds() if broker_allowed("Dhan") else ("", "")
+    saved = verified_account(cid) if broker_allowed("Dhan") else None
     profile = _confirmed_dhan_profile(cid, token)
     inactive = bool(profile is not None and not profile.data_ready)
     if "fno_ce5_mode" not in st.session_state:
@@ -255,7 +256,7 @@ def render_otm_home():
             (saved is not None and profile is None and token and
              token_still_current(saved)) else "EOD"
         )
-    if pending_live and not inactive:
+    if pending_live and not inactive and broker_allowed("Dhan"):
         st.session_state["fno_ce5_mode"] = "Live"
     if inactive and st.session_state.get("fno_ce5_mode") == "Live":
         # Inactive Dhan data cannot disable independent FYERS data.
@@ -278,8 +279,13 @@ def render_otm_home():
                 on_change=_home_expiry_changed,
             )
         with mode_col:
+            mode_choices = (
+                ["EOD", "FYERS"] if active_broker() == "FYERS"
+                else ["EOD", "Live"] if active_broker() == "Dhan"
+                else ["EOD"]
+            )
             st.radio(
-                "CE source", ["EOD", "FYERS", "Live"],
+                "CE source", mode_choices,
                 key="fno_home_ce_source", horizontal=True,
                 on_change=home_ce_mode_changed,
             )
@@ -296,58 +302,64 @@ def render_otm_home():
         ).hexdigest()
         if valid_client_id(cid) and token else False
     )
-    if profile:
-        if profile.data_ready:
-            st.success("✓ Dhan connected · Data API active · token verified")
-        else:
-            st.caption(
-                "Dhan login connected · paid Data API inactive · "
-                "free NSE EOD CE mode selected"
+    if broker_allowed("Dhan"):
+        if profile:
+            if profile.data_ready:
+                st.success("✓ Dhan connected · Data API active · token verified")
+            else:
+                st.caption(
+                    "Dhan login connected · paid Data API inactive · "
+                    "free NSE EOD CE mode selected"
+                )
+        elif saved and token and token_still_current(saved):
+            st.info(
+                "Dhan setup saved · token present · live connection not "
+                "rechecked in this session"
             )
-    elif saved and token and token_still_current(saved):
-        st.info(
-            "Dhan setup saved · token present · live connection not "
-            "rechecked in this session"
-        )
-    elif token:
-        st.warning("Dhan access token available, but current session's "
-                   "profile check is pending · Settings shows login status")
-    elif valid_client_id(cid) and is_configured(cid):
-        if st.session_state.get("dhan_auto_error"):
-            st.warning("Saved Dhan PIN/TOTP login needs attention · "
-                       "open Settings to see the broker response")
+        elif token:
+            st.warning("Dhan access token available, but current session's "
+                       "profile check is pending · Settings shows login status")
+        elif valid_client_id(cid) and is_configured(cid):
+            if st.session_state.get("dhan_auto_error"):
+                st.warning("Saved Dhan PIN/TOTP login needs attention · "
+                           "open Settings to see the broker response")
+            else:
+                st.info("Saved Dhan PIN/TOTP detected · generating or "
+                        "recovering today's token automatically")
         else:
-            st.info("Saved Dhan PIN/TOTP detected · generating or "
-                    "recovering today's token automatically")
+            st.warning("Dhan not connected · save PIN + permanent TOTP in Settings")
+
+        if valid_client_id(cid) and len(token) >= 16:
+            if st.button(
+                "Check Dhan connection", key="otm_home_check_connection",
+                help="One read-only Dhan Profile GET. Confirms current token "
+                     "and Data API entitlement, without repeating setup.",
+            ):
+                try:
+                    result = check_dhan_data_plan(cid, token)
+                    st.session_state["fno_dhan_profile_status"] = {
+                        "cid": cid, "status": result,
+                        "token_fingerprint": sha256(token.encode()).hexdigest(),
+                    }
+                    if result.data_ready:
+                        st.toast("✓ Dhan account and Data API verified", icon="✅")
+                    else:
+                        st.warning(
+                            "Dhan connected, but Data API subscription is inactive."
+                        )
+                    st.rerun()
+                except DhanProfileError as exc:
+                    st.error(str(exc))
+
+        # Compact account balance from the same read-only funds endpoint, no
+        # duplicate broker request between Home and Page 2.
+        if profile or saved:
+            _dhan_funds_panel(cid, token)
+
+    elif active_broker() == "FYERS":
+        st.caption("FYERS selected · Dhan login, verification and funds polling paused.")
     else:
-        st.warning("Dhan not connected · save PIN + permanent TOTP in Settings")
-
-    if valid_client_id(cid) and len(token) >= 16:
-        if st.button(
-            "Check Dhan connection", key="otm_home_check_connection",
-            help="One read-only Dhan Profile GET. Confirms current token "
-                 "and Data API entitlement, without repeating setup.",
-        ):
-            try:
-                result = check_dhan_data_plan(cid, token)
-                st.session_state["fno_dhan_profile_status"] = {
-                    "cid": cid, "status": result,
-                    "token_fingerprint": sha256(token.encode()).hexdigest(),
-                }
-                if result.data_ready:
-                    st.toast("✓ Dhan account and Data API verified", icon="✅")
-                else:
-                    st.warning(
-                        "Dhan connected, but Data API subscription is inactive."
-                    )
-                st.rerun()
-            except DhanProfileError as exc:
-                st.error(str(exc))
-
-    # Compact account balance from the same read-only funds endpoint, no
-    # duplicate broker request between Home and Page 2.
-    if profile or saved:
-        _dhan_funds_panel(cid, token)
+        st.caption("Public only · no broker account requests.")
 
     # Start cash data first in the background; the full heavy screener will
     # consume the same snapshots on Page 2, without additional requests.
@@ -368,7 +380,7 @@ def render_otm_home():
             st.caption("Dhan market-data plan inactive · using NSE EOD "
                        "reference prices when a daily report is available.")
     elif selected_source == "Dhan":
-        if valid_client_id(cid) and token:
+        if broker_allowed("Dhan") and valid_client_id(cid) and token:
             _start_dhan_prices(universe, cid, token)
     else:
         _start_yahoo_prices(universe, expiry)
@@ -381,7 +393,7 @@ def render_otm_home():
         else:
             st.info("Open Settings → FYERS to authorize your "
                     "non-trading account and load genuine CE/PE prices.")
-    elif mode == "Live":
+    elif mode == "Live" and broker_allowed("Dhan"):
         status = prepare_otm_scan(available, expiry)
         col_a, col_b = st.columns([1.5, 2.5])
         with col_a:
@@ -525,10 +537,13 @@ def render_otm_home():
                 "premiums or a real-time feed."
             )
 
-    cash = _cash_quotes(universe, cid, token)
+    cash = _cash_quotes(universe, cid, token) if broker_allowed("Dhan") else {}
     if provider == "FYERS" and connected_fyers():
-        fyers_quotes = fyers_cash_prices([item.entry.symbol for item in universe])
-        cash = merge_dhan_yahoo(fyers_quotes, cash)
+        # Do not mix prior Dhan snapshots into FYERS cash prices.
+        cash = fyers_cash_prices([item.entry.symbol for item in universe])
+    elif not broker_allowed("Dhan"):
+        # Public-only mode uses the existing Yahoo cache, not a broker login.
+        cash = _cash_quotes(universe, "", "")
     if mode == "EOD":
         # Historical spot references can fill a blank cash column, but must
         # never replace genuine available Dhan or Yahoo prices.
