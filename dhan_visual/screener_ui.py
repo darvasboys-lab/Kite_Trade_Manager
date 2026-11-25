@@ -1050,7 +1050,7 @@ def _eod_start():
     }
 
 
-@st.fragment(run_every="60s")
+@st.fragment(run_every="3s")
 def _eod_heartbeat():
     """Periodic low-frequency check, also if the app stays open past 18:00."""
     _eod_start()
