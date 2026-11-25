@@ -754,7 +754,7 @@ class PayoffStudioStartupTests(unittest.TestCase):
                 b.key == "fno_ce5_fetch_live" for b in app.button
             ))
             self.assertTrue(any(
-                "cash quotes alone are insufficient" in str(node.message).lower()
+                "cash quotes alone are insufficient" in str(node.value).lower()
                 for node in app.warning
             ))
             scan.assert_not_called()
