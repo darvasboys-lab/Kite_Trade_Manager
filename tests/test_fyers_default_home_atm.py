@@ -102,6 +102,7 @@ class PreferredFYERSHomeTests(unittest.TestCase):
         data = attach_futures_columns(frame, quotes)
         self.assertEqual(data["Futures vs CMP (%)"].iloc[:3].tolist(), [1.0, -2.0, 0.0])
         self.assertTrue(data["Futures vs CMP (%)"].iloc[3:].isna().all())
+        self.assertEqual(data["Futures Price (₹)"].iloc[3:5].tolist(), [1000.0, 1000.0])
         self.assertTrue(pd.isna(data["Futures Price (₹)"].iloc[5]))
         self.assertNotIn("Futures Price (₹)", frame.columns)
 
