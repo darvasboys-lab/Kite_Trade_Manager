@@ -20,6 +20,7 @@ from .auto_auth import is_configured
 from .ce_eod_remote import IST
 from .dhan_integration_state import (
     verified_account, record_verification, parse_dhan_token_expiry,
+    token_still_current,
 )
 from .local_client_settings import read_client_id, save_client_id, valid_client_id
 from .option_panel import _local_creds
@@ -133,9 +134,7 @@ def prepare_otm_scan(available, expiry: str, *, explicit=False,
     previous = verified_account(cid)
     if not (profile or previous):
         return "Dhan profile unverified · click Connect to Dhan in Settings"
-    if not profile and previous and not __import__(
-        "dhan_visual.dhan_integration_state", fromlist=["token_still_current"]
-    ).token_still_current(previous):
+    if not profile and previous and not token_still_current(previous):
         return "Dhan access token expired · renew it in Settings"
     key = _scan_key(available, expiry)
     history = st.session_state.setdefault("fno_straddle_snapshots", {})
@@ -188,6 +187,10 @@ def prepare_otm_scan(available, expiry: str, *, explicit=False,
 def _drain_events(snap):
     job = st.session_state.get("fno_straddle_job")
     if job is None or job["key"] != snap["key"]:
+        return False
+    if job.get("cid") and job["cid"] != snap.get("client_id"):
+        # A prior account's CE values must never be placed into the
+        # newly selected account's snapshot.
         return False
     changed = False
     queue = job["queue"]
@@ -311,17 +314,10 @@ def render_straddle_panel(available, expiry, *, priority_levels=None,
                                 status="", fatal="", started=False)
                     st.rerun()
 
-        if not valid_client_id(cid):
-            cid = st.text_input(
-                "Dhan Client ID", key="fno_straddle_client_id",
-                help="Only used for read-only market data; saved locally after you start the scan.",
-            ).strip()
-        if not token and not (valid_client_id(cid) and is_configured(cid)):
-            token = st.text_input(
-                "Dhan market-data access token", type="password",
-                key="fno_straddle_token",
-                help="No token is saved to the stock list, CSV or GitHub.",
-            ).strip()
+        # All account credentials are managed in the Settings tab.
+        # Do not repeat token forms inside Page 2's scanner.
+        if not valid_client_id(cid) or not token:
+            st.caption("Connect your Dhan account in Settings to scan CE options.")
         automatic = valid_client_id(cid) and is_configured(cid) and not token
 
         left_button, right_button = st.columns([1, 1])
