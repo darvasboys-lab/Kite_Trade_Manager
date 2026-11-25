@@ -116,6 +116,131 @@ class AutoAuthTests(unittest.TestCase):
             session.get.call_args.kwargs["headers"]["access-token"], token
         )
 
+    def test_http_200_error_envelope_is_not_misreported_as_client_mismatch(self):
+        """Dhan may return HTTP 200 with a failed auth payload, no token."""
+        session = MagicMock()
+        session.post.return_value.status_code = 200
+        session.post.return_value.json.return_value = {
+            "errorCode": "DH-901",
+            "errorMessage": "Invalid TOTP provided",
+        }
+        with patch("dhan_visual.auto_auth.generate_totp", return_value="654321"):
+            with self.assertRaisesRegex(AutoAuthError, "TOTP") as context:
+                request_new_access(CID, "123456", SEED, session=session)
+        self.assertNotIn("654321", str(context.exception))
+        self.assertNotIn("123456", str(context.exception))
+        self.assertNotIn("DH-901", str(context.exception))
+        self.assertNotIn("Client ID than", str(context.exception))
+        session.get.assert_not_called()
+
+    def test_successful_token_without_id_requires_matching_profile(self):
+        """Never cache or use missing-ID responses without GET /profile."""
+        future = (datetime.now(INDIA_ZONE) + timedelta(hours=20)).strftime(
+            "%Y-%m-%dT%H:%M:%S"
+        )
+        obj = {
+            "accessToken": "SAFE_FAKE_TOKEN_BUT_NO_CLIENT_ID_" * 2,
+            "expiryTime": future,
+        }
+        with self.assertRaisesRegex(AutoAuthError, "omitted Client ID"):
+            _parse_token_response(obj, CID)
+        session = MagicMock()
+        session.post.return_value.status_code = 200
+        session.post.return_value.json.return_value = obj
+        session.get.return_value.status_code = 200
+        session.get.return_value.json.return_value = {
+            "dhanClientId": CID, "dataPlan": "Active",
+        }
+        with patch("dhan_visual.auto_auth.generate_totp", return_value="654321"):
+            actual = request_new_access(CID, "123456", SEED, session=session)
+        self.assertEqual(actual.token, obj["accessToken"])
+        session.get.assert_called_once()
+
+    def test_missing_id_token_with_mismatched_profile_fails_closed(self):
+        future = (datetime.now(INDIA_ZONE) + timedelta(hours=20)).strftime(
+            "%Y-%m-%dT%H:%M:%S"
+        )
+        session = MagicMock()
+        session.post.return_value.status_code = 200
+        session.post.return_value.json.return_value = {
+            "accessToken": "SAFE_FAKE_TOKEN_BUT_NO_CLIENT_ID_" * 2,
+            "expiryTime": future,
+        }
+        session.get.return_value.status_code = 200
+        session.get.return_value.json.return_value = {
+            "dhanClientId": "9999999999",
+        }
+        with patch("dhan_visual.auto_auth.generate_totp", return_value="654321"):
+            with self.assertRaisesRegex(AutoAuthError, "does not match"):
+                request_new_access(CID, "123456", SEED, session=session)
+
+    def test_flat_or_nested_explicit_mismatched_id_is_never_accepted(self):
+        future = (datetime.now(INDIA_ZONE) + timedelta(hours=20)).strftime(
+            "%Y-%m-%dT%H:%M:%S"
+        )
+        base = {
+            "accessToken": "SAFE_FAKE_VALID_TOKEN_" * 3,
+            "expiryTime": future,
+        }
+        for response in [
+            {"dhanClientId": "9999999999", **base},
+            {"dhanClientId": CID, "data": {
+                "dhanClientId": "9999999999", **base,
+            }},
+        ]:
+            session = MagicMock()
+            session.post.return_value.status_code = 200
+            session.post.return_value.json.return_value = response
+            with self.subTest(response=response.keys()):
+                with patch("dhan_visual.auto_auth.generate_totp",
+                           return_value="654321"):
+                    with self.assertRaisesRegex(AutoAuthError, "different Client ID"):
+                        request_new_access(CID, "123456", SEED, session=session)
+                session.get.assert_not_called()
+
+    def test_nested_token_response_verifies_against_profile(self):
+        future = (datetime.now(INDIA_ZONE) + timedelta(hours=20)).strftime(
+            "%Y-%m-%dT%H:%M:%S"
+        )
+        session = MagicMock()
+        session.post.return_value.status_code = 200
+        session.post.return_value.json.return_value = {
+            "status": "success",
+            "data": {
+                "accessToken": "SAFE_FAKE_VALID_TOKEN_" * 3,
+                "expiryTime": future,
+            },
+        }
+        session.get.return_value.status_code = 200
+        session.get.return_value.json.return_value = {
+            "dhanClientId": CID, "dataPlan": "Active",
+        }
+        with patch("dhan_visual.auto_auth.generate_totp", return_value="654321"):
+            result = request_new_access(CID, "123456", SEED, session=session)
+        self.assertTrue(result.usable())
+        session.get.assert_called_once()
+
+    def test_data_subscription_inactive_still_allows_account_verified_token(self):
+        """Funds may work; CE remains disabled by the separate dataPlan gate."""
+        future = (datetime.now(INDIA_ZONE) + timedelta(hours=20)).strftime(
+            "%Y-%m-%dT%H:%M:%S"
+        )
+        session = MagicMock()
+        session.post.return_value.status_code = 200
+        session.post.return_value.json.return_value = {
+            "dhanClientId": CID,
+            "accessToken": "SAFE_FAKE_VALID_TOKEN_" * 3,
+            "expiryTime": future,
+        }
+        session.get.return_value.status_code = 200
+        session.get.return_value.json.return_value = {
+            "dhanClientId": CID, "dataPlan": "Deactive",
+        }
+        with patch("dhan_visual.auto_auth.generate_totp", return_value="654321"):
+            token = request_new_access(CID, "123456", SEED, session=session)
+        self.assertTrue(token.usable())
+        session.get.assert_called_once()
+
     def test_bad_profile_id_never_saves_token(self):
         token = "MOCK_LONG_JWT_BUT_NOT_A_REAL_TOKEN_" * 3
         session = MagicMock()
