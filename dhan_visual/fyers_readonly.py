@@ -337,6 +337,40 @@ def fetch_cash_quotes(access: FyersAccess, tickers: list[str], *,
     return output
 
 
+def fetch_futures_quotes(access: FyersAccess, tickers: list[str], expiry: str, *,
+                         get=None) -> dict[str, Quote]:
+    """Exact monthly NSE futures LTP, batched through the shared read-only gate."""
+    if not isinstance(expiry, str) or not re.fullmatch(
+            r"(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)-[0-9]{2}", expiry):
+        raise FyersDataError("Invalid futures expiry month.")
+    month, year = expiry.split("-")
+    wanted = {
+        "NSE:" + t + year + month + "FUT": t
+        for t in tickers if isinstance(t, str) and SYMBOL_RE.fullmatch(t)
+    }
+    output = {}
+    names = list(wanted)
+    for offset in range(0, len(names), 50):
+        batch = names[offset:offset + 50]
+        payload = _get(access, "/data/quotes", {"symbols": ",".join(batch)}, get=get)
+        stamp = datetime.now(INDIA).isoformat(timespec="seconds")
+        rows = payload.get("d")
+        if not isinstance(rows, list):
+            continue
+        allowed = set(batch)
+        for row in rows:
+            if not isinstance(row, dict) or row.get("s") != "ok":
+                continue
+            name = row.get("n")
+            if not isinstance(name, str) or name not in allowed:
+                continue
+            fields = row.get("v")
+            price = _positive(fields.get("lp")) if isinstance(fields, dict) else None
+            if price is not None:
+                output[wanted[name]] = Quote(price, stamp, "FYERS futures LTP")
+    return output
+
+
 def _select_expiry(expiries: list, requested_month: str) -> tuple[str, date] | None:
     try:
         month, yy = requested_month.upper().split("-")
