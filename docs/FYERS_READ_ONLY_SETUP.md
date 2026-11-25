@@ -22,6 +22,21 @@ On switching brokers, any already-running broker requests are allowed to finish
 This is **local request isolation**, not remote cancellation of a broker-issued
 session. Logouts and broker token revocation are independent operations.
 
+When a FYERS non-trading app is already stored in Windows Credential
+Manager, a **new app browser session starts with FYERS selected by default**
+for option-chain premiums, including 5%+ OTM CE and ATM straddle data.
+This local vault check does not log in to either broker. If the daily FYERS
+token has expired, reauthorize from Settings; the dashboard must not use
+stale premiums. An explicit manual switch to Dhan or Public only is respected.
+
+On **◎ OTM CE Home**, **ATM Straddle Total (₹)** is the actual premium
+**per share = ATM CE LTP + ATM PE LTP** for the selected expiry and the
+same stock/strike in the same FYERS option-chain response. It is not a
+lot-sized value, a percentage return, or an executable quote. Empty cells
+mean valid matched option legs are unavailable, not zero premium.
+No additional FYERS request is sent for the Home column: it uses the same
+paced options scan as the Market Screener.
+
 For first FYERS authorization, switch the selector to **FYERS**, then open
 **Settings → FYERS** and enter the App ID and App Secret. Do not enter your
 Dhan login again. The app will never ask for both broker credentials together.
