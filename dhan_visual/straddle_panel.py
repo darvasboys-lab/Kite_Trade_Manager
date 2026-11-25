@@ -117,6 +117,19 @@ def _active_profile_for(cid: str, token: str) -> DhanProfileStatus | None:
     return profile
 
 
+def _known_inactive_data_plan(cid: str, token: str) -> bool:
+    state = st.session_state.get("fno_dhan_profile_status") or {}
+    status = state.get("status")
+    return bool(
+        state.get("cid") == cid
+        and isinstance(token, str) and len(token) >= 16
+        and state.get("token_fingerprint") ==
+        sha256(token.encode()).hexdigest()
+        and isinstance(status, DhanProfileStatus)
+        and not status.data_ready
+    )
+
+
 def prepare_otm_scan(available, expiry: str, *, explicit=False,
                      priority_quotes=None, priority_levels=None) -> str:
     """Start ONE shared read-only Dhan CE/straddle scan before heavy Page 2.
@@ -133,12 +146,7 @@ def prepare_otm_scan(available, expiry: str, *, explicit=False,
     profile = _active_profile_for(cid, token)
     # An explicitly rechecked inactive plan overrides any previous saved
     # success record. Never repeatedly hit blocked Dhan option endpoints.
-    check = st.session_state.get("fno_dhan_profile_status") or {}
-    if (check.get("cid") == cid
-            and check.get("token_fingerprint") ==
-            sha256(token.encode()).hexdigest()
-            and isinstance(check.get("status"), DhanProfileStatus)
-            and not check["status"].data_ready):
+    if _known_inactive_data_plan(cid, token):
         return "Dhan Data API subscription inactive · check Settings"
     previous = verified_account(cid)
     if not (profile or previous):
@@ -365,6 +373,7 @@ def render_straddle_panel(available, expiry, *, priority_levels=None,
             and nse_regular_session()
             and valid_client_id(cid) and len(token) >= 16
             and verified_account(cid) is not None
+            and not _known_inactive_data_plan(cid, token)
             and st.session_state.get("fno_straddle_auto_started_key") != auto_key
         )
         if auto_start:
@@ -377,7 +386,9 @@ def render_straddle_panel(available, expiry, *, priority_levels=None,
         if requested:
             st.session_state.pop("fno_ce5_scan_requested", None)
         if start or auto_start or (requested and not busy):
-            if not valid_client_id(cid):
+            if _known_inactive_data_plan(cid, token):
+                st.error("Dhan Data API subscription inactive · check Settings.")
+            elif not valid_client_id(cid):
                 st.error("Enter your valid Dhan Client ID locally.")
             elif len(token) < 16 and not automatic:
                 st.error("Enter a valid Dhan access token or enable local TOTP login.")
