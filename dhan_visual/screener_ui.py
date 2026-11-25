@@ -204,6 +204,7 @@ def _auto_login_heartbeat(cid):
                 access = job["future"].result()
                 if job["cid"] == cid and is_configured(cid):
                     st.session_state["dhan_auto_access"] = access
+                    st.session_state["dhan_auto_access_cid"] = cid
                     st.session_state.pop("dhan_auto_auth_fail_at", None)
                     st.session_state.pop("dhan_auto_error", None)
             except AutoAuthError as exc:
@@ -269,10 +270,12 @@ def _auto_login_panel(cid, manual_token, *, allow_login=True):
         old = read_cached_token(cid)
         return old.token if old else ""
     stored = st.session_state.get("dhan_auto_access")
-    if not isinstance(stored, AutoAccess) or not stored.usable():
+    if (st.session_state.get("dhan_auto_access_cid") != cid
+            or not isinstance(stored, AutoAccess) or not stored.usable()):
         stored = read_cached_token(cid)
         if stored:
             st.session_state["dhan_auto_access"] = stored
+            st.session_state["dhan_auto_access_cid"] = cid
         else:
             _start_auto_login(cid)
     _auto_login_heartbeat(cid)
@@ -316,7 +319,11 @@ def _dhan_credentials(*, need_market=False):
     session_auto = st.session_state.get("dhan_auto_access")
     auto_current = bool(
         (isinstance(cached_auto, AutoAccess) and cached_auto.usable())
-        or (isinstance(session_auto, AutoAccess) and session_auto.usable())
+        or (
+            st.session_state.get("dhan_auto_access_cid") == current_id
+            and isinstance(session_auto, AutoAccess)
+            and session_auto.usable()
+        )
     )
     needs_token = bool(
         verified is not None and not (
@@ -970,10 +977,11 @@ def _free_ce5_panel(expiry, dhan_count=0, available=None):
              "option-chain LTP. No Yahoo options are fabricated.",
     )
     if mode == "Live":
+        job = st.session_state.get("fno_straddle_job")
         st.caption(
-            f"LIVE CE · {dhan_count} Dhan option-chain snapshots available. "
-            "To populate this column, run the opt-in full option-chain scan below. "
-            "No EOD price is substituted for live data."
+            f"Dhan Live CE · {dhan_count} stock snapshots · "
+            + ("scanning in background (rate limited)" if job
+               else "awaiting or using last completed Dhan scan")
         )
         return {}, ""
 
@@ -1186,8 +1194,15 @@ def render_screener():
     # happen to be switched from Yahoo to Dhan.
     dhan_credentials = _dhan_credentials(
         need_market=(
-            provider in ("Dhan", AUTO_SOURCE) or
-            st.session_state.get("fno_ce5_mode") == "Live"
+            provider == "Dhan"
+            or st.session_state.get("fno_ce5_mode") == "Live"
+            or (
+                provider == AUTO_SOURCE
+                and verified_account(
+                    str(st.session_state.get("dhan_local_cid")
+                        or read_client_id()).strip()
+                ) is not None
+            )
         ),
     )
     _dhan_funds_panel(*dhan_credentials)
