@@ -20,13 +20,19 @@ ACTIVE = "ccs_stock_strategy_active"
 CACHE = "ccs_stock_strategy_cache"
 
 
-def launch_strategy(symbol, entry, expiry, preset):
+def activate_strategy(symbol, entry, expiry, preset):
     # Pause automatic scanning while this separate on-demand data workspace is active.
     scan = st.session_state.get("ccs_selective_scan")
     if scan:
         scan["auto_scan"] = False
+    serial = int(st.session_state.get("ccs_strategy_launch_serial", 0)) + 1
+    st.session_state["ccs_strategy_launch_serial"] = serial
     st.session_state[ACTIVE] = dict(symbol=symbol, lots=dict(entry.lots),
-                                    expiry=expiry, preset=preset)
+                                    expiry=expiry, preset=preset, launch_serial=serial)
+
+
+def launch_strategy(symbol, entry, expiry, preset):
+    activate_strategy(symbol, entry, expiry, preset)
     st.rerun()
 
 
@@ -139,6 +145,9 @@ def render_stock_strategy():
         cache.clear()
         cache[scope] = dict(expiries=None,quotes=None,chains={},legs=[],errors={},preset_pending=ctx["preset"],revision=0)
     state = cache[scope]
+    if state.get("launch_serial") != ctx.get("launch_serial"):
+        state["launch_serial"] = ctx.get("launch_serial")
+        state["preset_pending"] = ctx.get("preset")
     restored = st.session_state.pop("ccs_strategy_restore",None)
     if restored and restored["symbol"]==symbol:
         state["legs"]=[Leg(**row) for row in restored["legs"]]
@@ -186,14 +195,15 @@ def render_stock_strategy():
     if state["errors"]:
         st.warning(" · ".join(state["errors"].values())+" · No automatic retries. Refresh manually.")
     chain = state["chains"].get(expiry,{})
-    pending = state.pop("preset_pending",None)
-    if pending and chain and not state["legs"]:
+    pending = state.get("preset_pending")
+    if pending and chain:
+        state["preset_pending"] = None
         preset = _preset(pending,chain,spot,expiry,lot)
         if preset is not None:
             state["legs"] = preset
             state["revision"] += 1
         else:
-            st.info("Preset unavailable: required quoted legs are missing. Add legs manually.")
+            st.info("Preset unavailable: required quoted legs are missing. Existing legs retained; add legs manually.")
     chain_col, builder = st.columns([1.4,1])
     with chain_col:
         st.markdown("#### Option chain")
