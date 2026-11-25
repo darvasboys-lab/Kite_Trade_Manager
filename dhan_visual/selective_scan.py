@@ -281,7 +281,8 @@ def render_selective_home():
     if apply:
         key = _scope(access, [], expiry)
         available = _universe_rows(universe, expiry)
-        if not snapshot or snapshot["key"] != key:
+        if (not snapshot or snapshot["key"] != key
+                or snapshot.get("scan_day") != datetime.now(IST).date().isoformat()):
             snapshot = new_snapshot(key, expiry, maximum, minimum)
             st.session_state[STATE] = snapshot
         snapshot.update(maximum=maximum, minimum=minimum, r1_filter=r1_filter)
