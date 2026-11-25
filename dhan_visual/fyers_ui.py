@@ -57,11 +57,14 @@ def render_fyers_settings():
         value=existing[0] if existing else "",
         key="fyers_local_app_id", max_chars=50,
     ).strip()
-    app_secret = st.text_input(
-        "FYERS App Secret · stays on this PC",
-        value=existing[1] if existing and existing[0] == app_id else "",
-        type="password", key="fyers_local_app_secret",
+    entered_secret = st.text_input(
+        "FYERS App Secret · blank uses your secure saved secret",
+        value="", type="password", key="fyers_local_app_secret",
+        help="Stored secrets are never re-sent to the browser. "
+             "Type only once for first-time setup or replacement.",
     )
+    app_secret = (entered_secret or
+                  (existing[1] if existing and existing[0] == app_id else ""))
     col1, col2 = st.columns([1, 1])
     with col1:
         if st.button("Save in Windows Credential Manager", key="fyers_save_keys",
