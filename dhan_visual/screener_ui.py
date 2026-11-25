@@ -1619,7 +1619,7 @@ def render_screener():
         expiry, dhan_count=len(dhan_ce5), available=available,
     )
     ce_mode = st.session_state.get("fno_ce5_mode", "EOD")
-    fyers_calls = fyers_chain_calls(available, expiry) if ce_mode == "FYERS" else {}
+    fyers_calls = fyers_chain_calls(available, expiry, page="screener") if ce_mode == "FYERS" else {}
     eod_fallback = 0
     if ce_mode == "EOD":
         local_snapshot = st.session_state.get("fno_eod_selected_snapshot")
@@ -1820,7 +1820,7 @@ def render_screener():
     st.caption(
         f"{provider} · {filled}/{len(available)} prices · "
         "☑ colored EMA = above EMA · ✅ above R1 · no tick = at/below · — waiting/unavailable · "
-        "Yahoo indicators reveal EMA200 → EMA50 → EMA20 → EMA10 → R1 · "
+        "Indicators reveal EMA200 → EMA50 → EMA20 → EMA10 → R1 · "
         f"CE ≥5% mode: {ce_mode} (FYERS / EOD / Dhan kept separate)"
     )
     with st.expander("Source details and timestamps", expanded=False):
