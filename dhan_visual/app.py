@@ -18,6 +18,8 @@ from dhan_visual.payoff import current_expiry_payoff, expiry_breakevens, theoret
 st.set_page_config(page_title="Covered Call Strategy Builder", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 # Presentation only: shared terminal palette and responsive native controls.
 from dhan_visual.terminal_theme import apply_terminal_theme
+from dhan_visual.workspace_ui import initialize, remember_pref, render_settings
+initialize()
 if "ccs_dark_mode" not in st.session_state:
     st.session_state["ccs_dark_mode"] = True
 apply_terminal_theme(st.session_state["ccs_dark_mode"])
@@ -26,7 +28,7 @@ st.markdown(
     """<section class="ps-header" aria-label="Covered Call Strategy Builder workspace">
       <div class="ps-topbar">
         <div class="ps-brand"><div class="ps-mark">↗</div>
-          <h1>Covered Call <span>Strategy Builder</span></h1></div>
+          <h1>CCS Terminal <span>· v1.0</span></h1></div>
         <div class="ps-chips">
           <span class="ps-chip safe">● Market-data only</span>
           <span class="ps-chip">Stock F&O</span>
@@ -46,6 +48,7 @@ with theme_action:
         help="Toggle the local appearance; market data and scanner rules are unchanged.",
     ):
         st.session_state["ccs_dark_mode"] = not st.session_state["ccs_dark_mode"]
+        remember_pref("dark",st.session_state["ccs_dark_mode"])
         st.rerun()
 
 # Explicit single-active-broker policy; all tabs below use the same mode.
@@ -83,19 +86,24 @@ if legacy:
     with settings:
         from dhan_visual.screener_ui import render_dhan_settings
         render_dhan_settings()
+        render_settings()
 else:
     from dhan_visual.selective_scan import render_selective_home, render_selective_market
     page = st.radio(
-        "Workspace", ["◎ OTM CE Home", "⌕ Market Screener", "▥ Manage Trade", "⚙ Settings"],
+        "Workspace", ["◎ OTM CE Home", "⌕ Market Screener", "◇ Strategy Builder", "▥ Manage Trade", "⚙ Settings"],
         horizontal=True, key="ccs_selective_page", label_visibility="collapsed",
     )
     if page == "◎ OTM CE Home":
         render_selective_home()
     elif page == "⌕ Market Screener":
         render_selective_market()
+    elif page == "◇ Strategy Builder":
+        from dhan_visual.stock_strategy_ui import render_independent_strategy
+        render_independent_strategy()
     elif page == "⚙ Settings":
         from dhan_visual.screener_ui import render_dhan_settings
         render_dhan_settings()
+        render_settings()
     else:
         manage = st.container()
 
