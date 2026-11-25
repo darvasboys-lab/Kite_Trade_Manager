@@ -4,6 +4,28 @@ This is for the existing **individual FYERS trading account**. Create a separate
 **NON-TRADING API app**; do NOT activate a trading app. No FYERS orders can be
 placed from the read-only connector, and the existing Dhan account remains separate.
 
+## One active broker at a time
+
+The app has a top-of-page **Active broker connection** selector:
+
+- **Dhan:** Dhan is the only active broker, with its existing saved token/PIN/TOTP
+  reused while valid. FYERS broker data requests remain paused.
+- **FYERS:** FYERS is the only active broker; Dhan login, token renewal,
+  profile checks, funds and option calls are paused. Saved Dhan credentials
+  and its cached token are **not deleted**, so switching back doesn't
+  require fresh login until the saved Dhan token actually expires.
+- **Public only:** Neither broker is contacted. NSE EOD and Yahoo public
+  references remain available.
+
+On switching brokers, any already-running broker requests are allowed to finish
+(or cancelled when possible) **before** requests for the other broker can start.
+This is **local request isolation**, not remote cancellation of a broker-issued
+session. Logouts and broker token revocation are independent operations.
+
+For first FYERS authorization, switch the selector to **FYERS**, then open
+**Settings → FYERS** and enter the App ID and App Secret. Do not enter your
+Dhan login again. The app will never ask for both broker credentials together.
+
 ## First-time FYERS setup (on your own Windows PC)
 
 1. Sign in at https://fyers.in/web/api-dashboard/user-apps
