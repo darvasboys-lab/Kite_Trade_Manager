@@ -6,7 +6,7 @@ The close and underlying reference MUST come from the same dated NSE report.
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 import io
@@ -42,6 +42,9 @@ class NseEodCall:
 class NseEodSnapshot:
     report_date: str
     quotes: dict[str, dict[str, NseEodCall]]
+    # Same-date reference underlying closes, including stocks with no priced
+    # 5%+ CE. Never substitute these historical closes for live LTP.
+    underlyings: dict[str, Decimal] = field(default_factory=dict)
 
 
 def _number(raw: str) -> Decimal | None:
@@ -113,6 +116,7 @@ def parse_nse_fo_eod(payload: bytes) -> NseEodSnapshot:
     asof = None
     groups: dict[tuple[str, str], dict[date, list[tuple[Decimal, Decimal, Decimal, int]]]] = {}
     seen_stock_ce = 0
+    observed_spots: dict[str, set[Decimal]] = {}
     for row_index, row in enumerate(reader, start=1):
         if row_index > MAX_RECORDS:
             raise NseEodError("NSE daily report exceeds record safety limit")
@@ -125,6 +129,12 @@ def parse_nse_fo_eod(payload: bytes) -> NseEodSnapshot:
             raise NseEodError("NSE CSV contains multiple business dates")
         if (row.get("FinInstrmTp") or "").strip().upper() != "STO":
             continue
+        symbol_for_spot = (row.get("TckrSymb") or "").strip().upper()
+        underlying_for_spot = _number(row.get("UndrlygPric", ""))
+        expiry_for_spot = _date(row.get("XpryDt", ""))
+        if (symbol_for_spot and underlying_for_spot
+                and expiry_for_spot and expiry_for_spot >= day):
+            observed_spots.setdefault(symbol_for_spot, set()).add(underlying_for_spot)
         if (row.get("OptnTp") or "").strip().upper() != "CE":
             continue
         seen_stock_ce += 1
@@ -171,4 +181,10 @@ def parse_nse_fo_eod(payload: bytes) -> NseEodSnapshot:
             report_date=asof.isoformat(), volume=volume,
         )
         result.setdefault(month, {})[symbol] = quote
-    return NseEodSnapshot(report_date=asof.isoformat(), quotes=result)
+    underlyings = {
+        symbol: next(iter(prices))
+        for symbol, prices in observed_spots.items() if len(prices) == 1
+    }
+    return NseEodSnapshot(
+        report_date=asof.isoformat(), quotes=result, underlyings=underlyings,
+    )
