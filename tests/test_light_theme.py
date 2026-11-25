@@ -38,13 +38,13 @@ class PayoffStudioLightThemeTests(unittest.TestCase):
         self.assertIn("stTabs [data-baseweb", source)
         self.assertIn("@media (max-width: 700px)", source)
 
-    def test_no_strategy_or_price_source_changes(self):
+    def test_no_strategy_changes_and_all_quote_sources_retained(self):
         source = APP.read_text(encoding="utf-8")
         self.assertIn("current_expiry_payoff", source)
         self.assertIn("current_closeout", source)
         self.assertIn("render_screener()", source)
         ui = (ROOT / "dhan_visual" / "screener_ui.py").read_text(encoding="utf-8")
-        self.assertIn('"Quote source", ["Dhan", "Yahoo Finance"], index=1', ui)
+        self.assertIn('"Quote source", [AUTO_SOURCE, "Dhan", "Yahoo Finance"]', ui)
         self.assertIn('key="fno_compact_contract_value"', ui)
         self.assertIn("render_atm_panel", ui)
         self.assertIn("render_straddle_panel(available, expiry,", ui)
