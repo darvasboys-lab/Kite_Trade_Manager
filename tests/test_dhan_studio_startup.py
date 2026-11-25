@@ -82,6 +82,129 @@ class PayoffStudioStartupTests(unittest.TestCase):
         self.assertIsNotNone(app.button(key="fno_manual_price_refresh"))
         self.assertIsNotNone(app.button(key="fno_refresh_universe"))
 
+    def test_home_and_page_two_share_same_otm_ce_without_extra_calls(self):
+        """No two option-chain requests and no synthetic CE percentages."""
+        from dhan_visual.straddle_scan import OtmCall5Quote
+        from dhan_visual.straddle_panel import _scan_key
+        app = app_with_catalogue()
+        app.session_state["dhan_local_cid"] = "1234567890"
+        app.session_state["dhan_local_access_token"] = "TOKEN_OFFLINE_FOR_TESTS_ONLY"
+        app.session_state["fno_ce5_mode"] = "Live"
+        app.session_state["fno_home_expiry"] = "DEC-26"
+        app.session_state["fno_expiry"] = "DEC-26"
+        app.session_state["fno_price_provider"] = "Yahoo Finance"
+        app.session_state["fno_yahoo_snapshot"] = {
+            "key": "fixture",
+            "quotes": {
+                "TCS": Quote(Decimal("100"), "mock", "Yahoo Finance"),
+                "SBIN": Quote(Decimal("95"), "mock", "Yahoo Finance"),
+            },
+        }
+        call = OtmCall5Quote(
+            "TCS", "2026-12-29", Decimal("105"),
+            Decimal("100"), Decimal("2"), Decimal("2"),
+            "offline fixture",
+        )
+        key = _scan_key(example(), "DEC-26")
+        app.session_state["fno_straddle_snapshots"] = {
+            key: {
+                "key": key, "month": "DEC-26", "client_id": "1234567890",
+                "total": 2, "rows": {}, "otm_calls": {"TCS": call},
+                "errors": {}, "status": "Complete", "processed": 2,
+                "started": True, "fatal": "",
+            }
+        }
+        with patch("dhan_visual.screener_ui._market_pool",
+                   return_value=FakePool()), \
+             patch("dhan_visual.straddle_panel.scan_all_straddles") as scan:
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            home = app.dataframe[0].value
+            main = app.dataframe[1].value
+            self.assertEqual(
+                home.loc[home["Stock"] == "TCS", "5%+ OTM CE (%)"].iloc[0],
+                2.0,
+            )
+            self.assertTrue(
+                home.loc[home["Stock"] == "SBIN", "5%+ OTM CE (%)"].isna().all()
+            )
+            self.assertEqual(
+                main.loc[main["Symbol"] == "TCS", "5%+ CE premium (%)"].iloc[0],
+                2.0,
+            )
+            scan.assert_not_called()
+            self.assertEqual(
+                app.dataframe[0].value.columns.tolist(),
+                ["Stock", "CMP (₹)", "5%+ OTM CE (%)"],
+            )
+
+    def test_only_one_home_option_worker_from_profile_verified_token(self):
+        """After explicit Dhan Connect, Home requests one paced worker."""
+        from datetime import timedelta
+        from dhan_visual.dhan_readonly_check import DhanProfileStatus
+        from dhan_visual.straddle_panel import _scan_key
+        app = app_with_catalogue()
+        cid, token = "1234567890", "PROFILE_ONLY_TEST_TOKEN_12345"
+        app.session_state["dhan_local_cid"] = cid
+        app.session_state["dhan_local_access_token"] = token
+        app.session_state["fno_ce5_mode"] = "Live"
+        app.session_state["fno_home_expiry"] = "DEC-26"
+        app.session_state["fno_expiry"] = "DEC-26"
+        app.session_state["fno_dhan_profile_status"] = {
+            "cid": cid,
+            "token_fingerprint": hashlib.sha256(token.encode()).hexdigest(),
+            "status": DhanProfileStatus(
+                "Active", "2026-12-31",
+                (datetime.now(IST) + timedelta(hours=12)).strftime("%d/%m/%Y %H:%M"),
+                True, datetime.now(IST).isoformat(),
+            ),
+        }
+        pool = FakePool()
+        with patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()), \
+             patch("dhan_visual.screener_ui._funds_pool", return_value=FakePool()), \
+             patch("dhan_visual.straddle_panel._straddle_pool",
+                   return_value=pool), \
+             patch("dhan_visual.straddle_panel.verified_account", return_value=None), \
+             patch("dhan_visual.screener_ui.verified_account", return_value=None), \
+             patch("dhan_visual.option_panel.verified_account", return_value=None), \
+             patch("dhan_visual.straddle_panel.nse_regular_session",
+                   return_value=True):
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(len(pool.calls), 1)
+            self.assertEqual(pool.calls[0][0][0].__name__, "scan_all_straddles")
+            app.run()
+            self.assertEqual(len(pool.calls), 1)
+            job = app.session_state["fno_straddle_job"]
+            self.assertFalse(job["future"].done())
+            self.assertEqual(job["cid"], cid)
+            self.assertEqual(job["key"], _scan_key(example(), "DEC-26"))
+
+    def test_home_and_screener_expiry_selectors_stay_in_sync(self):
+        app = app_with_catalogue()
+        with patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()):
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            app.selectbox(key="fno_home_expiry").set_value("DEC-26").run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(app.selectbox(key="fno_expiry").value, "DEC-26")
+            app.selectbox(key="fno_expiry").set_value("NOV-26").run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(app.selectbox(key="fno_home_expiry").value, "NOV-26")
+
+    def test_dhan_credentials_only_in_settings_not_repeated_on_page_two(self):
+        app = app_with_catalogue()
+        with patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()):
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(app.tabs[3].label, "⚙ Settings")
+            self.assertIsNotNone(app.text_input(key="dhan_local_cid"))
+            self.assertIsNotNone(app.text_input(key="dhan_local_access_token"))
+            self.assertFalse(any(
+                t.key in ("fno_straddle_client_id", "fno_straddle_token")
+                for t in app.text_input
+            ))
+
     def test_clickable_stock_column_is_link_not_duplicate_company(self):
         app = app_with_catalogue()
         with patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()):
