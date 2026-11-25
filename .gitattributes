@@ -3,3 +3,9 @@
 *.md text eol=lf
 *.txt text eol=lf
 *.sh text eol=lf
+
+# Legacy launchers already contain CRLF in their committed blobs.
+# Preserve their exact bytes so existing Windows checkouts are not falsely dirty.
+# Other batch files retain normal LF storage / CRLF checkout.
+/run_dhan_preview.bat -text !eol
+/start.bat -text !eol
