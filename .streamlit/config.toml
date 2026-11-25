@@ -1,8 +1,8 @@
-# Payoff Studio: light, high-contrast options workspace.
+# Native Streamlit controls and data grid: charcoal terminal default.
 [theme]
-base = "light"
-primaryColor = "#BD425A"
-backgroundColor = "#FDF9FA"
-secondaryBackgroundColor = "#FFFFFF"
-textColor = "#17253B"
+base = "dark"
+primaryColor = "#48c9a1"
+backgroundColor = "#10151c"
+secondaryBackgroundColor = "#171e27"
+textColor = "#e7edf4"
 font = "sans serif"
