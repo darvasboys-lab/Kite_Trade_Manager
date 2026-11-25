@@ -44,7 +44,7 @@ class PayoffStudioLightThemeTests(unittest.TestCase):
         self.assertIn("current_closeout", source)
         self.assertIn("render_screener()", source)
         ui = (ROOT / "dhan_visual" / "screener_ui.py").read_text(encoding="utf-8")
-        self.assertIn('"Quote source", [AUTO_SOURCE, "Dhan", "Yahoo Finance"]', ui)
+        self.assertIn('"Quote source", [AUTO_SOURCE, "FYERS", "Dhan", "Yahoo Finance"]', ui)
         self.assertIn('key="fno_compact_contract_value"', ui)
         self.assertIn("render_atm_panel", ui)
         self.assertIn("render_straddle_panel(available, expiry,", ui)
