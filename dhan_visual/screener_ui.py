@@ -32,6 +32,11 @@ from dhan_visual.nse_eod_ce import MAX_UPLOAD_BYTES, NseEodError, parse_nse_fo_e
 from dhan_visual.ce_eod_local import NSE_FO_NAME, recent_nse_fo_reports
 from dhan_visual.ce_eod_remote import EodDownloadResult, IST, fetch_published_nse_eod
 from dhan_visual.ce_tejhq import TejEodCall, scan_tej_eod
+from dhan_visual.dhan_funds import read_dhan_balance, DhanFundsError
+from dhan_visual.quote_routing import (
+    AUTO_SOURCE, choose_cash_source, merge_dhan_yahoo,
+    missing_underlyings, should_fetch_again, nse_regular_session,
+)
 from dhan_visual.dhan_readonly_check import check_dhan_data_plan, DhanProfileError
 from dhan_visual.dhan_integration_state import (
     verified_account, token_still_current, load_manual_token,
@@ -199,6 +204,7 @@ def _auto_login_heartbeat(cid):
                 access = job["future"].result()
                 if job["cid"] == cid and is_configured(cid):
                     st.session_state["dhan_auto_access"] = access
+                    st.session_state["dhan_auto_access_cid"] = cid
                     st.session_state.pop("dhan_auto_auth_fail_at", None)
                     st.session_state.pop("dhan_auto_error", None)
             except AutoAuthError as exc:
@@ -221,21 +227,24 @@ def _auto_login_panel(cid, manual_token, *, allow_login=True):
     if not valid_client_id(cid):
         return ""
     enabled = is_configured(cid)
-    with st.expander("Automatic Dhan access token · TOTP setup", expanded=False):
-        st.caption(
-            "Provide your Dhan 6-digit PIN and TOTP setup secret ONCE. "
-            "Windows Credential Manager protects these locally. "
-            "Dhan returns a 24-hour token; while this dashboard is running "
-            "it can renew automatically when Dhan or Live CE data is in use, "
-            "without pasting a daily token."
-        )
-        st.warning(
-            "This Dhan account may also be used by ResultBot. "
-            "Creating a separate token can sometimes interrupt other sessions. "
-            "Enable only if you accept this risk. ResultBot itself will not be changed."
-        )
+    with st.expander(
+        "Remember Dhan login securely · PIN + TOTP (optional)",
+        expanded=not enabled and not bool(manual_token),
+    ):
+        if not enabled:
+            st.caption(
+                "To avoid entering a new access token each day, save your "
+                "Dhan PIN and permanent TOTP setup secret here ONCE. "
+                "Windows Credential Manager holds them locally. "
+                "A fresh access token still has 24-hour validity."
+            )
+        if not enabled:
+            st.warning(
+                "Issuing another Dhan token may disrupt other trading sessions. "
+                "Enable automatic renewal only if you accept this risk."
+            )
         if enabled:
-            st.success("Secure TOTP settings are saved in Windows Credential Manager.")
+            st.success("✓ Secure one-time login saved in Windows Credential Manager.")
             st.button("Delete local TOTP/PIN and disable auto-login",
                       key="dhan_auto_delete", on_click=_auto_disable, args=(cid,))
         else:
@@ -261,10 +270,12 @@ def _auto_login_panel(cid, manual_token, *, allow_login=True):
         old = read_cached_token(cid)
         return old.token if old else ""
     stored = st.session_state.get("dhan_auto_access")
-    if not isinstance(stored, AutoAccess) or not stored.usable():
+    if (st.session_state.get("dhan_auto_access_cid") != cid
+            or not isinstance(stored, AutoAccess) or not stored.usable()):
         stored = read_cached_token(cid)
         if stored:
             st.session_state["dhan_auto_access"] = stored
+            st.session_state["dhan_auto_access_cid"] = cid
         else:
             _start_auto_login(cid)
     _auto_login_heartbeat(cid)
@@ -302,6 +313,23 @@ def _dhan_credentials(*, need_market=False):
     cached_manual = load_manual_token(current_id) if valid_client_id(current_id) else ""
     available_token = existing_manual or cached_manual
     auto_available = bool(valid_client_id(current_id) and is_configured(current_id))
+    cached_auto = read_cached_token(current_id) if auto_available else None
+    # A freshly generated Dhan TOTP token may be valid even when the
+    # original setup-time manual token has expired.
+    session_auto = st.session_state.get("dhan_auto_access")
+    auto_current = bool(
+        (isinstance(cached_auto, AutoAccess) and cached_auto.usable())
+        or (
+            st.session_state.get("dhan_auto_access_cid") == current_id
+            and isinstance(session_auto, AutoAccess)
+            and session_auto.usable()
+        )
+    )
+    needs_token = bool(
+        verified is not None and not (
+            token_still_current(verified) or auto_current
+        )
+    )
     # Avoid showing the complete onboarding form once the broker has passed
     # both the plan/profile check AND one real option-chain test.
     if verified is not None:
@@ -324,43 +352,40 @@ def _dhan_credentials(*, need_market=False):
             f"on {verified.verified_at[:10]}. "
             "The setup is remembered; no full reintegration is needed."
         )
-        if not token_still_current(verified):
+        if needs_token:
             st.warning(
-                "Dhan access token needs renewal. The integration is already "
-                "complete: only update the temporary token below. "
-                "Dhan tokens expire after 24 hours."
+                "Dhan token expired. The setup remains verified; renew the "
+                "token or use your saved secure TOTP settings."
             )
         elif not (available_token or auto_available):
             st.info(
                 "Dhan is integrated, but there is no usable token in this "
                 "browser session. Update only the access token below."
             )
-        else:
-            st.caption(
-                "Dhan setup remembered. Live data still depends on the "
-                "current token and Data API entitlement."
-            )
+        # Verified setup is durable. The token and market data are not.
     else:
-        st.info(
-            "Connect Dhan once: enter credentials locally, check the Data API "
-            "plan, then verify one stock's ATM straddle and 5%+ CE. "
-            "After success, a large green tick replaces this setup prompt."
-        )
+        if not st.session_state.get("fno_first_dhan_hint_seen"):
+            st.toast(
+                "Dhan setup is available below. Verify it once to enable "
+                "automatic Live CE and secure credential reuse.", icon="🔐"
+            )
+            st.session_state["fno_first_dhan_hint_seen"] = True
 
     setup_open = verified is None or (
-        not (available_token or auto_available) or
-        not token_still_current(verified)
+        not (available_token or auto_available) or needs_token
     )
     with st.expander(
         "Dhan setup · one-time (read-only)" if verified is None
         else "Dhan access · update token / manage connection",
         expanded=setup_open,
     ):
-        st.caption(
-            "Enter credentials only on this PC, never in chat. "
-            "A Client ID is remembered locally. Access tokens are not saved "
-            "to project files or GitHub."
-        )
+        if not st.session_state.get("fno_vault_hint_seen"):
+            st.toast(
+                "Use your own PC for Dhan credentials. Tokens and TOTP "
+                "secrets can be saved in Windows Credential Manager only.",
+                icon="🔒",
+            )
+            st.session_state["fno_vault_hint_seen"] = True
         cid = st.text_input(
             "Dhan Client ID", value=default_id,
             key="dhan_local_cid",
@@ -382,9 +407,9 @@ def _dhan_credentials(*, need_market=False):
                  "This is a password field; no access token is sent to ChatGPT.",
         ).strip()
         remember = st.checkbox(
-            "Remember the current token in Windows Credential Manager "
-            "(only until its expiry)",
-            value=False, key="dhan_remember_manual_token",
+            "Securely remember this verified token on this Windows PC "
+            "(until expiry)",
+            value=True, key="dhan_remember_manual_token",
             help="Optional. Saves ONLY after both one-time checks succeed, "
                  "or after a verified token-only renewal. "
                  "A manual token cannot work after its 24-hour expiry.",
@@ -421,17 +446,19 @@ def _dhan_credentials(*, need_market=False):
     # Keep the existing opt-in TOTP manager. It may issue a new broker token,
     # so its existing interference warning remains and user consent is required.
     current_id = current_id.strip()
+    old_manual_expired = bool(
+        verified is not None and not token_still_current(verified)
+    )
     automatic = _auto_login_panel(
         current_id,
-        "" if verified is not None and not token_still_current(verified)
-        else manual,
+        "" if old_manual_expired else manual,
         allow_login=need_market,
     )
     secure = load_manual_token(current_id) if valid_client_id(current_id) else ""
     # A previously verified (but now expired) manual token cannot trigger
     # automatic quote calls. The explicit token-only renewal button above
     # remains available, and an independently current auto token can work.
-    if verified is not None and not token_still_current(verified):
+    if old_manual_expired:
         return current_id, (automatic or secure)
     return current_id, (manual or automatic or secure)
 
@@ -444,7 +471,7 @@ def _universe_key(universe):
 
 
 def _start_dhan_prices(universe, cid, token, force=False):
-    """Start all-stock market-data prefetch on first valid login, without click."""
+    """Bounded Dhan LTP snapshots: at most one per five minutes by default."""
     identity = sha256((cid + ":" + token + ":" + _universe_key(universe)).encode()).hexdigest()
     existing = st.session_state.get("fno_dhan_job")
     if existing and not existing["future"].done():
@@ -452,9 +479,24 @@ def _start_dhan_prices(universe, cid, token, force=False):
             return identity
         # Keep old worker out of the new credentials' display path; it will
         # finish naturally without exposing results to the new login.
-    if not force and st.session_state.get("fno_dhan_attempt_key") == identity:
-        return identity
+    previous = st.session_state.get("fno_dhan_snapshot") or {}
+    if st.session_state.get("fno_dhan_attempt_key") == identity:
+        last = st.session_state.get("fno_dhan_last_attempt_at")
+        if (last is None and not force
+                and previous.get("key") == identity):
+            # Existing valid in-memory snapshot from an earlier app version,
+            # browser state or test fixture. Treat it as freshly cached
+            # rather than re-requesting and replacing real cash prices.
+            st.session_state["fno_dhan_last_attempt_at"] = time.monotonic()
+            return identity
+        if not should_fetch_again(
+            last,
+            now=time.monotonic(), errors=previous.get("errors") or (),
+            manual=force, market_open=nse_regular_session(),
+        ):
+            return identity
     st.session_state["fno_dhan_attempt_key"] = identity
+    st.session_state["fno_dhan_last_attempt_at"] = time.monotonic()
     st.session_state["fno_dhan_job"] = {
         "key": identity,
         "future": _market_pool().submit(load_dhan_all, list(universe), cid, token),
@@ -467,8 +509,10 @@ def _start_yahoo_prices(universe, expiry, force=False):
     """Queue all Yahoo stocks in 25-symbol background batches, automatically."""
     key = _universe_key(universe)
     current = st.session_state.get("fno_yahoo_job")
-    if current and not current["future"].done() and current["key"] == key:
-        return key
+    if current and not current["future"].done():
+        # Never launch overlapping Yahoo bulk scans while source/missing
+        # subsets change; the first in-flight result can still fill rows.
+        return current["key"]
     if not force and st.session_state.get("fno_yahoo_attempt_key") == key:
         return key
     st.session_state["fno_yahoo_attempt_key"] = key
@@ -582,36 +626,140 @@ def _poll_market_data():
         st.caption(f"Yahoo · {snap.get('processed', 0)}/{yahoo_busy['total']} scanned")
 
 
-def _price_panel(universe, expiry, available, provider, manual, credentials=None):
-    """Quote-source controls live in the compact top-right toolbar."""
-    all_symbols = {row.entry.symbol for row in universe}
-    if provider == "Dhan":
-        cid, token = credentials if credentials is not None else _dhan_credentials(
-            need_market=True,
+@st.cache_resource
+def _funds_pool():
+    return ThreadPoolExecutor(max_workers=1, thread_name_prefix="dhan-funds-readonly")
+
+
+@st.fragment(run_every="5s")
+def _poll_dhan_funds():
+    """Only the main Streamlit thread reads the worker result or updates UI."""
+    job = st.session_state.get("fno_dhan_funds_job")
+    if not job:
+        return
+    if not job["future"].done():
+        st.caption("Dhan balance · updating…")
+        return
+    try:
+        data = job["future"].result()
+        snapshot = {"key": job["key"], "data": data, "error": ""}
+    except DhanFundsError as exc:
+        snapshot = {"key": job["key"], "data": None, "error": str(exc)}
+    except Exception:
+        snapshot = {
+            "key": job["key"], "data": None,
+            "error": "Dhan balance worker failed",
+        }
+    st.session_state["fno_dhan_funds_snapshot"] = snapshot
+    st.session_state.pop("fno_dhan_funds_job", None)
+    st.rerun(scope="app")
+
+
+def _dhan_funds_panel(cid, token):
+    """Top strip; a read-only GET every five minutes, never on every rerun."""
+    status = verified_account(cid) if valid_client_id(cid) else None
+    if status is None:
+        return  # no funds requested or displayed for an unverified account
+    if len(token) < 16:
+        st.metric("Dhan available balance", "—", help="Token renewal needed")
+        return
+    key = sha256((cid + ":" + token).encode()).hexdigest()
+    job = st.session_state.get("fno_dhan_funds_job")
+    prior = st.session_state.get("fno_dhan_funds_snapshot") or {}
+    same = prior.get("key") == key
+    previous = st.session_state.get("fno_dhan_funds_attempt") or {}
+    now = time.monotonic()
+    blocked = (
+        same and "429" in str(prior.get("error") or "")
+    )
+    window = 3600 if blocked else (300 if nse_regular_session() else 1800)
+    due = (
+        previous.get("key") != key
+        or now - previous.get("when", -1e12) >= window
+    )
+    if (due and
+            not (job and not job["future"].done())):
+        st.session_state["fno_dhan_funds_attempt"] = {
+            "key": key, "when": now,
+        }
+        st.session_state["fno_dhan_funds_job"] = {
+            "key": key,
+            "future": _funds_pool().submit(read_dhan_balance, cid, token),
+        }
+    if same and prior.get("data") is not None:
+        entry = prior["data"]
+        st.metric(
+            "Dhan available balance",
+            f"₹{float(entry.available):,.2f}",
+            help="Dhan available trading balance, from GET /v2/fundlimit. "
+                 "Not an available options margin guarantee.",
         )
-        if cid and len(token) >= 16:
+        st.caption(f"Funds snapshot · {entry.checked_at} UTC")
+    else:
+        st.metric("Dhan available balance", "—")
+        if same and prior.get("error"):
+            st.caption("Funds: " + prior["error"])
+    if st.session_state.get("fno_dhan_funds_job"):
+        _poll_dhan_funds()
+
+
+def _price_panel(universe, expiry, available, provider, manual, credentials=None):
+    """Dhan-first by default for verified accounts; Yahoo per missing stock.
+
+    In Auto, no Dhan requests are sent until one-time integration succeeded.
+    The fallback runs only AFTER a bounded Dhan snapshot has completed or if
+    no authorized Dhan token is available. Each row retains its own source.
+    """
+    all_symbols = {row.entry.symbol for row in universe}
+    cid, token = credentials if credentials is not None else _dhan_credentials(
+        need_market=True,
+    )
+    ready = bool(
+        valid_client_id(cid) and len(token) >= 16
+        and verified_account(cid) is not None
+    )
+    effective = choose_cash_source(
+        provider, verified=ready, token_available=len(token) >= 16,
+    )
+    if effective == "Dhan":
+        if valid_client_id(cid) and len(token) >= 16:
             identity = _start_dhan_prices(universe, cid, token, force=manual)
             snapshot = st.session_state.get("fno_dhan_snapshot") or {}
             if snapshot.get("key") != identity:
                 snapshot = {}
-            prices = {
+            dhan_prices = {
                 sym: value for sym, value in snapshot.get("quotes", {}).items()
                 if sym in all_symbols
             }
+            prices = dict(dhan_prices)
             if st.session_state.get("fno_dhan_job"):
-                st.caption(f"Dhan · loading {len(universe)} stocks")
+                st.caption(f"Dhan cash LTP · fetching {len(universe)} stocks…")
             elif snapshot.get("requested_at"):
-                st.caption(f"Dhan · {len(prices)} prices ready")
-            for error in (snapshot.get("errors", []) or [])[:3]:
+                st.caption(f"Dhan · {len(dhan_prices)} cash quotes · cached snapshot")
+            for error in (snapshot.get("errors") or [])[:2]:
                 st.warning(error)
         else:
-            prices = {}
-            st.info(
-                "The F&O list is automatic. To fetch **Dhan** prices automatically, "
-                "enter your Client ID and current access token once in the local "
-                "login panel. Your active subscription alone does not authenticate "
-                "this Streamlit app. You may select Yahoo without Dhan login."
-            )
+            dhan_prices, prices = {}, {}
+            st.warning("Dhan cash LTP unavailable · check your local token.")
+        if provider == AUTO_SOURCE and not st.session_state.get("fno_dhan_job"):
+            # Yahoo does not replace any actual Dhan LTP; use it only for
+            # missing stocks after the broker request is complete.
+            missing = missing_underlyings(universe, dhan_prices)
+            if missing:
+                key = _start_yahoo_prices(missing, expiry, force=manual)
+                fallback = st.session_state.get("fno_yahoo_snapshot") or {}
+                if fallback.get("key") == key:
+                    yahoo_prices = {
+                        sym: q for sym, q in fallback.get("quotes", {}).items()
+                        if sym in {row.entry.symbol for row in missing}
+                    }
+                    prices = merge_dhan_yahoo(dhan_prices, yahoo_prices)
+                else:
+                    yahoo_prices = {}
+                st.caption(
+                    f"Auto · Dhan {len(dhan_prices)} · "
+                    f"Yahoo fallback {len(yahoo_prices)} (missing only)"
+                )
     else:
         key = _start_yahoo_prices(universe, expiry, force=manual)
         snap = st.session_state.get("fno_yahoo_snapshot") or {}
@@ -622,14 +770,16 @@ def _price_panel(universe, expiry, available, provider, manual, credentials=None
             if sym in all_symbols
         }
         total = len(universe)
-        scanned = snap.get("processed", 0)
-        st.caption(f"Yahoo · {len(prices)}/{total} priced · {scanned}/{total} scanned")
+        st.caption(
+            f"Yahoo · {len(prices)}/{total} priced · "
+            f"{snap.get('processed', 0)}/{total} scanned"
+        )
         for error in (snap.get("errors") or [])[:2]:
             st.warning(error)
-
     if st.session_state.get("fno_dhan_job") or st.session_state.get("fno_yahoo_job"):
         _poll_market_data()
-    return provider, prices
+    return (provider if provider != AUTO_SOURCE else
+            f"Auto · {effective} first"), prices
 
 
 @st.cache_data(show_spinner=False, max_entries=3)
@@ -835,10 +985,11 @@ def _free_ce5_panel(expiry, dhan_count=0, available=None):
              "option-chain LTP. No Yahoo options are fabricated.",
     )
     if mode == "Live":
+        job = st.session_state.get("fno_straddle_job")
         st.caption(
-            f"LIVE CE · {dhan_count} Dhan option-chain snapshots available. "
-            "To populate this column, run the opt-in full option-chain scan below. "
-            "No EOD price is substituted for live data."
+            f"Dhan Live CE · {dhan_count} stock snapshots · "
+            + ("scanning in background (rate limited)" if job
+               else "awaiting or using last completed Dhan scan")
         )
         return {}, ""
 
@@ -940,13 +1091,17 @@ def _free_ce5_panel(expiry, dhan_count=0, available=None):
     return calls, report_day
 
 
-def _ce5_choice(symbol, dhan_calls, eod_calls, eod_date, mode="EOD"):
+def _ce5_choice(symbol, dhan_calls, eod_calls, eod_date, mode="EOD",
+                scan_pending=False):
     """Return only the explicitly selected CE price type, never a silent mix."""
     if mode == "Live":
         if symbol in dhan_calls:
             quote = dhan_calls[symbol]
             return quote, f"Dhan LTP snapshot · {quote.captured_at}"
-        return None, "Live unavailable · Dhan scan required"
+        return None, (
+            "Dhan Live · scanning option chains…"
+            if scan_pending else "Live unavailable · no positive CE quote / scan pending"
+        )
     if mode != "EOD":
         raise ValueError("Unknown CE mode")
     if symbol in eod_calls:
@@ -971,6 +1126,11 @@ def render_screener():
              <p>Contract value · EMA trend · monthly R1 · options premium</p></div>
            </div>""", unsafe_allow_html=True,
     )
+
+    # Apply post-verification routing before rendering Streamlit's radio
+    # widget. Never modify a widget-owned session key after it exists.
+    if st.session_state.pop("fno_activate_auto_quote_on_next_run", False):
+        st.session_state["fno_price_provider"] = AUTO_SOURCE
 
     # Compact one-row toolbar: visible expiry + three tucked-away controls.
     # All prior Streamlit widget keys are preserved for saved user selections.
@@ -1021,15 +1181,17 @@ def render_screener():
     with source_col:
         with st.popover("◉ Source", use_container_width=True):
             provider = st.radio(
-                "Quote source", ["Dhan", "Yahoo Finance"], index=1,
-                key="fno_price_provider", horizontal=True,
-                help="Yahoo is default; Dhan needs a valid local data token.",
+                "Quote source", [AUTO_SOURCE, "Dhan", "Yahoo Finance"],
+                index=0, key="fno_price_provider", horizontal=False,
+                help="Default: verified Dhan LTP, with Yahoo only for missing "
+                     "stocks. Yahoo alone until Dhan setup succeeds.",
             )
             manual = st.button("↻ Refresh prices", key="fno_manual_price_refresh")
             if st.button("↻ Refresh stock list", key="fno_refresh_universe"):
                 _start_universe(force=True)
                 st.rerun()
-            st.caption("Yahoo bars may be delayed.")
+            # Source details are available in the tooltip; not repeated
+            # as permanent instructional text on every app rerun.
     with autofit_col:
         st.button(
             "↔ Auto-fit all", key="ccs_autofit_all_button",
@@ -1045,10 +1207,18 @@ def render_screener():
     # happen to be switched from Yahoo to Dhan.
     dhan_credentials = _dhan_credentials(
         need_market=(
-            provider == "Dhan" or
-            st.session_state.get("fno_ce5_mode") == "Live"
+            provider == "Dhan"
+            or st.session_state.get("fno_ce5_mode") == "Live"
+            or (
+                provider == AUTO_SOURCE
+                and verified_account(
+                    str(st.session_state.get("dhan_local_cid")
+                        or read_client_id()).strip()
+                ) is not None
+            )
         ),
     )
+    _dhan_funds_panel(*dhan_credentials)
     provider, all_prices = _price_panel(
         universe, expiry, available, provider, manual,
         credentials=dhan_credentials,
@@ -1105,6 +1275,11 @@ def render_screener():
         and technical_state.get("status") == "complete"
     )
     dhan_ce5 = available_otm_calls(available, expiry)
+    # Across browser/app restarts a verified Dhan connection defaults to
+    # Live CE. A user-selected EOD preference still survives normal reruns.
+    if ("fno_ce5_mode" not in st.session_state
+            and verified_account(dhan_credentials[0]) is not None):
+        st.session_state["fno_ce5_mode"] = "Live"
     if st.session_state.pop("fno_activate_live_on_next_run", False):
         # Safe to update before the CE radio widget exists in this run.
         st.session_state["fno_ce5_mode"] = "Live"
@@ -1156,8 +1331,12 @@ def render_screener():
         )
         # Try Dhan chain first; only then a user-uploaded NSE daily file.
         # Each ratio uses its OWN source's same-time underlying, never Yahoo CMP.
+        scan_pending = bool(st.session_state.get("fno_straddle_job"))
         ce5_selected = [
-            _ce5_choice(symbol, dhan_ce5, eod_calls, eod_date, ce_mode)
+            _ce5_choice(
+                symbol, dhan_ce5, eod_calls, eod_date, ce_mode,
+                scan_pending=scan_pending,
+            )
             for symbol in frame["Symbol"]
         ]
         frame["5%+ CE premium (%)"] = [
@@ -1255,7 +1434,10 @@ def render_screener():
             technicals, stage=4,
         )
         export_selected = [
-            _ce5_choice(sym, dhan_ce5, eod_calls, eod_date, ce_mode)
+            _ce5_choice(
+                sym, dhan_ce5, eod_calls, eod_date, ce_mode,
+                scan_pending=bool(st.session_state.get("fno_straddle_job")),
+            )
             for sym in exported["Symbol"]
         ]
         exported["5%+ CE premium (%)"] = [

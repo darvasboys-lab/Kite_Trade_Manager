@@ -1,12 +1,13 @@
-"""Streamlit UI for full-universe, descending ATM short-straddle premium ranking.
+"""Streamlit UI for full-universe, descending ATM short-straddle ranking.
 
-This screen never requests 219 option chains automatically on page load.
-One explicit Scan All click starts a safe, background, rate-limited pass of
-the *entire* selected monthly stock F&O universe; no repeated per-stock clicks.
+After successful, persisted, one-time Dhan setup the Live CE mode may start
+ONE paced read-only full-universe scan per session/day. Before verification
+there are no automatic option-chain requests. User retains Stop/Resume.
 """
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from decimal import Decimal
 from hashlib import sha256
 from queue import SimpleQueue
@@ -16,10 +17,13 @@ import pandas as pd
 import streamlit as st
 
 from .auto_auth import is_configured
+from .ce_eod_remote import IST
+from .dhan_integration_state import verified_account
 from .local_client_settings import read_client_id, save_client_id, valid_client_id
 from .option_panel import _local_creds
 from .straddle_scan import otm_call_5_from_atm, rank_straddles, scan_all_straddles
 from .load_priority import strongest_first
+from .quote_routing import nse_regular_session
 from .table_layout import autofit_column_config, autofit_enabled, dataframe_key
 from .tradingview_links import clickable_stock_frame, TRADINGVIEW_SYMBOL_DISPLAY
 
@@ -137,7 +141,12 @@ def render_straddle_panel(available, expiry, *, priority_levels=None,
     total = len(available)
     key = _scan_key(available, expiry)
     history = st.session_state.setdefault("fno_straddle_snapshots", {})
+    cid, token = _local_creds()
     snap = history.get(key)
+    # Prevent old broker-account rows from blocking a new account's scan.
+    if (snap and snap.get("client_id") and snap["client_id"] != cid
+            and not st.session_state.get("fno_straddle_job")):
+        snap = None
     if snap is None:
         snap = {
             "key": key, "month": expiry, "total": total,
@@ -154,11 +163,12 @@ def render_straddle_panel(available, expiry, *, priority_levels=None,
     our_job = busy and active["key"] == key
 
     st.markdown("#### ATM short-straddle screener")
-    st.caption(
-        "ATM straddle % = (CE+PE) ÷ Dhan CMP ×100 · "
-        "+5% CE % = CE LTP at first strike ≥ CMP×1.05 ÷ CMP ×100 · "
-        "one read-only option-chain response per stock."
-    )
+    if not st.session_state.get("fno_straddle_intro_seen"):
+        st.toast(
+            "Live CE and ATM straddle use one paced Dhan option chain per stock. "
+            "Each response must have genuine positive LTPs.", icon="📈",
+        )
+        st.session_state["fno_straddle_intro_seen"] = True
     with st.container(border=True):
         left, right = st.columns([2.1, 1])
         with left:
@@ -167,12 +177,7 @@ def render_straddle_panel(available, expiry, *, priority_levels=None,
                 f"{len(snap['rows'])} valid straddles"
             )
             if not snap["started"]:
-                st.caption(
-                    "A single click scans the full universe in the background. "
-                    "Dhan limits option-chain requests to approximately one every "
-                    "3 seconds; strongest confirmed EMA/R1 stocks are scanned first, "
-                    "then all remaining stocks. The main Yahoo screener stays usable."
-                )
+                st.caption("Ready · Dhan option chain (paced, read-only)")
             elif our_job:
                 st.caption(
                     f"Scanning {snap['processed']}/{total} · "
@@ -190,7 +195,6 @@ def render_straddle_panel(available, expiry, *, priority_levels=None,
                                 status="", fatal="", started=False)
                     st.rerun()
 
-        cid, token = _local_creds()
         if not valid_client_id(cid):
             cid = st.text_input(
                 "Dhan Client ID", key="fno_straddle_client_id",
@@ -226,7 +230,26 @@ def render_straddle_panel(available, expiry, *, priority_levels=None,
                 active["cancel"].set()
                 snap["status"] = "Stopping after current Dhan request…"
 
-        if start:
+        # After validated integration, the first Live CE visit schedules
+        # one full scan, prioritized by strongest signals. It is never
+        # repeated on 2-second UI refreshes or after a user stops it.
+        # Reopening the app may trigger one new daily session snapshot.
+        auto_key = f"{cid}:{key}:{datetime.now(IST).date().isoformat()}"
+        auto_start = (
+            not start
+            and not snap["started"]
+            and not busy
+            and total > 0
+            and st.session_state.get("fno_ce5_mode") == "Live"
+            and nse_regular_session()
+            and valid_client_id(cid) and len(token) >= 16
+            and verified_account(cid) is not None
+            and st.session_state.get("fno_straddle_auto_started_key") != auto_key
+        )
+        if auto_start:
+            st.session_state["fno_straddle_auto_started_key"] = auto_key
+            st.caption("Live CE · starting a single paced Dhan scan…")
+        if start or auto_start:
             if not valid_client_id(cid):
                 st.error("Enter your valid Dhan Client ID locally.")
             elif len(token) < 16 and not automatic:

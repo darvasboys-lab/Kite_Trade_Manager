@@ -15,7 +15,7 @@ from .atm_options import OptionDataError, load_atm_options
 from .straddle_scan import otm_call_5_from_atm, straddle_from_atm
 from .dhan_readonly_check import DhanProfileError, check_dhan_data_plan
 from .dhan_integration_state import (
-    verified_account, load_manual_token, record_verification,
+    verified_account, token_still_current, load_manual_token, record_verification,
     parse_dhan_token_expiry, save_manual_token,
 )
 from .auto_auth import AutoAccess, AutoAuthError, is_configured, load_or_generate, read_cached_token
@@ -32,27 +32,36 @@ def format_rupees(raw, compact=False) -> str:
 
 
 def _local_creds():
-    """Read only local session/environment/vault; never initiate auto-login."""
+    """Read-only local credentials, with verified token-expiry/account guards."""
     cid = str(
         st.session_state.get("dhan_local_cid")
         or os.environ.get("DHAN_CLIENT_ID")
         or read_client_id()
         or ""
     ).strip()
-    token = str(
+    manual = str(
         st.session_state.get("dhan_local_access_token")
         or os.environ.get("DHAN_ACCESS_TOKEN")
         or ""
     ).strip()
+    # Never offer a stale manual token to option-chain workers once the
+    # original verified Dhan Profile validity has passed.
+    saved = verified_account(cid)
+    if saved is not None and not token_still_current(saved):
+        manual = ""
     auto = st.session_state.get("dhan_auto_access")
-    if not token and isinstance(auto, AutoAccess) and auto.usable():
-        token = auto.token
-    if not token and cid and is_configured(cid):
-        old = read_cached_token(cid)
-        if old:
-            token = old.token
-    if not token and cid:
-        token = load_manual_token(cid)
+    auto_token = (
+        auto.token
+        if (isinstance(auto, AutoAccess) and auto.usable()
+            and st.session_state.get("dhan_auto_access_cid") == cid)
+        else ""
+    )
+    cached_auto = read_cached_token(cid) if cid and is_configured(cid) else None
+    token = (
+        manual or auto_token
+        or (cached_auto.token if cached_auto else "")
+        or (load_manual_token(cid) if cid else "")
+    )
     return cid, token
 
 
@@ -183,6 +192,7 @@ def render_atm_panel(available, filtered_rows, expiry):
                             access = load_or_generate(cid)
                             access_token = access.token
                             st.session_state["dhan_auto_access"] = access
+                            st.session_state["dhan_auto_access_cid"] = cid
                         except AutoAuthError as exc:
                             st.error(f"Dhan option-chain authentication failed: {exc}")
                 if len(access_token) < 16:
@@ -263,6 +273,7 @@ def render_atm_panel(available, filtered_rows, expiry):
                                         st.session_state["fno_dhan_show_recheck"] = False
                                         st.session_state["fno_dhan_integration_complete"] = True
                                         st.session_state["fno_activate_live_on_next_run"] = True
+                                        st.session_state["fno_activate_auto_quote_on_next_run"] = True
                                     except (ValueError, OSError) as exc:
                                         st.warning(
                                             "Live quote verified but connection status "
