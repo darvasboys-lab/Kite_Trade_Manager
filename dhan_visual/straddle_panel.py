@@ -131,6 +131,15 @@ def prepare_otm_scan(available, expiry: str, *, explicit=False,
     if not valid_client_id(cid) or len(token) < 16:
         return "Dhan access token missing or expired · connect in Settings"
     profile = _active_profile_for(cid, token)
+    # An explicitly rechecked inactive plan overrides any previous saved
+    # success record. Never repeatedly hit blocked Dhan option endpoints.
+    check = st.session_state.get("fno_dhan_profile_status") or {}
+    if (check.get("cid") == cid
+            and check.get("token_fingerprint") ==
+            sha256(token.encode()).hexdigest()
+            and isinstance(check.get("status"), DhanProfileStatus)
+            and not check["status"].data_ready):
+        return "Dhan Data API subscription inactive · check Settings"
     previous = verified_account(cid)
     if not (profile or previous):
         return "Dhan profile unverified · click Connect to Dhan in Settings"
