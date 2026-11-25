@@ -141,6 +141,8 @@ class SelectiveScanTests(unittest.TestCase):
             chain.assert_called_once()
             self.assertEqual(chain.call_args.args[1], "TCS")
             self.assertEqual(app.dataframe[0].value.Stock.tolist(), ["TCS"])
+            self.assertEqual(app.dataframe[0].value["TradingView chart"].tolist(),
+                             ["https://www.tradingview.com/chart/?symbol=NSE%3ATCS#stock=TCS"])
             self.assertEqual(app.dataframe[0].value["> R1"].tolist(), ["✅ Yes"])
             daily.assert_called_once()
             app.run()
@@ -148,6 +150,8 @@ class SelectiveScanTests(unittest.TestCase):
             chain.assert_called_once()
             app.radio(key="ccs_selective_page").set_value("⌕ Market Screener").run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(app.dataframe[0].value["TradingView chart"].tolist(),
+                             ["https://www.tradingview.com/chart/?symbol=NSE%3ATCS#stock=TCS"])
             cash.assert_called_once()
             chain.assert_called_once()
             daily.assert_called_once()
