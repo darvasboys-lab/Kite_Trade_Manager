@@ -293,6 +293,11 @@ with theme_action:
         st.session_state["ccs_dark_mode"] = not st.session_state["ccs_dark_mode"]
         st.rerun()
 
+# Explicit single-active-broker policy; all tabs below use the same mode.
+# Switching preserves saved Dhan/FYERS credentials without simultaneous logins.
+from dhan_visual.broker_control import render_single_broker_selector
+render_single_broker_selector()
+
 # Streamlit renders every tab's Python body on a page run: the full Market
 # Screener keeps filling its background queues while the first lightweight
 # OTM CE table is visible. Never start a duplicate Dhan option-chain worker.
