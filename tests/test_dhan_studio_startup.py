@@ -493,7 +493,9 @@ class PayoffStudioStartupTests(unittest.TestCase):
              patch("dhan_visual.screener_ui._funds_pool",
                    return_value=funds), \
              patch("dhan_visual.straddle_panel._straddle_pool",
-                   return_value=straddle):
+                   return_value=straddle), \
+             patch("dhan_visual.straddle_panel.nse_regular_session",
+                   return_value=True):
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
             self.assertEqual(app.radio(key="fno_price_provider").value,
