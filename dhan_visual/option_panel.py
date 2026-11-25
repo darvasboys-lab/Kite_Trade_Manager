@@ -11,6 +11,7 @@ import os
 import streamlit as st
 
 from .atm_options import OptionDataError, load_atm_options
+from .straddle_scan import otm_call_5_from_atm, straddle_from_atm
 from .auto_auth import AutoAccess, AutoAuthError, is_configured, load_or_generate, read_cached_token
 from .local_client_settings import read_client_id, save_client_id, valid_client_id
 
@@ -48,12 +49,13 @@ def _local_creds():
 
 
 def render_atm_panel(available, filtered_rows, expiry):
-    """Shows ATM CE/PE only for the chosen underlying, after button click."""
-    with st.expander("ATM options · CE / PE (load when needed)", expanded=False):
+    """Explicit one-stock Dhan read-only chain verification before full scan."""
+    with st.expander("Dhan connection test · ATM straddle + 5% CE", expanded=False):
         st.caption(
-            "Select a stock to retrieve its ATM call and put premiums, "
-            "bid/ask prices and premium value per lot. This uses Dhan's read-only "
-            "option chain and makes no request until Load is clicked."
+            "First verify ONE stock's exact selected-month expiry, ATM CE/PE "
+            "and 5%+ OTM CE in a single Dhan option-chain response. "
+            "Requires Data API entitlement. No market-data request is sent "
+            "until you click Test. No orders or account changes."
         )
         items = {x.entry.symbol: x for x in available}
         symbols = sorted(items)
@@ -82,9 +84,10 @@ def render_atm_panel(available, filtered_rows, expiry):
                      "Enter credentials only on your own laptop.",
             )
         pressed = st.button(
-            "Load ATM CE / PE",
+            "Test Dhan · ATM + straddle + 5% CE",
             key="fno_atm_load",
-            help="Fetch the selected stock's active expiry and its option chain from Dhan.",
+            help="One read-only Dhan chain request for exactly the selected stock. "
+                 "Checks ATM CE, PE, straddle ratio and first 5%+ OTM call.",
         )
         if pressed:
             st.session_state.pop("fno_atm_result", None)
@@ -118,12 +121,18 @@ def render_atm_panel(available, filtered_rows, expiry):
                                 item.equity_security_id, cid, access_token,
                             )
                             st.session_state["fno_atm_result"] = {
-                                "symbol": selected, "month": expiry, "quote": result,
+                                "symbol": selected, "month": expiry,
+                                "cid": cid, "quote": result,
                             }
+                            # Refresh the upstream CE table using this SAME
+                            # option-chain snapshot; no second Dhan request.
+                            st.rerun()
                         except OptionDataError as exc:
                             st.error(str(exc))
         saved = st.session_state.get("fno_atm_result") or {}
-        if saved.get("symbol") != selected or saved.get("month") != expiry:
+        if (saved.get("symbol") != selected
+                or saved.get("month") != expiry
+                or (saved.get("cid") and saved["cid"] != cid)):
             return
         result = saved["quote"]
         compact = st.session_state.get("fno_compact_contract_value", True)
@@ -152,8 +161,49 @@ def render_atm_panel(available, filtered_rows, expiry):
                 f"PE premium × lot ({result.lot_size}): "
                 f"**{format_rupees(result.pe.premium_per_lot(result.lot_size), compact)}**"
             )
+        # One broker request serves both user-required calculations. A
+        # positive result proves token, entitlement, expiry and data parsing
+        # for THIS stock only; it does not certify the full-universe scan.
+        try:
+            straddle = straddle_from_atm(result)
+        except OptionDataError as exc:
+            st.warning(f"ATM straddle not available: {exc}")
+        else:
+            st.metric(
+                "ATM Straddle % (CE + PE / underlying)",
+                f"{float(straddle.premium_pct):.2f}%",
+            )
+            st.caption(
+                f"CE + PE LTP ₹{float(straddle.combined_ltp):,.2f} · "
+                f"gross premium/lot ₹{float(straddle.gross_lot_premium):,.2f}. "
+                "Not guaranteed sell credit or profit."
+            )
+        otm = otm_call_5_from_atm(result)
+        if otm is None:
+            st.warning(
+                "5%+ OTM CE not available: no first eligible listed call "
+                "with a positive Dhan LTP in this response. "
+                "Do not substitute another strike."
+            )
+        else:
+            st.metric(
+                "5%+ OTM CE / underlying",
+                f"{float(otm.premium_pct):.2f}%",
+            )
+            st.caption(
+                f"First listed strike ≥ 105% of Dhan underlying: "
+                f"₹{float(otm.strike):,.2f} · "
+                f"CE LTP ₹{float(otm.call_ltp):,.2f}. "
+                "The CE value can also appear in the main table in Live mode."
+            )
+        if result.ce.ltp is not None and result.pe.ltp is not None and otm:
+            st.success(
+                "Dhan read-only option chain verified for this stock: "
+                "ATM CE, ATM PE, straddle and 5%+ OTM call."
+            )
         st.caption(
             f"Dhan option-chain snapshot requested {result.captured_at}. "
-            "Values are indicative and can be stale outside trading hours; "
-            "premium × lot is not expected profit or required margin."
+            "This verifies one stock only; data can be stale after market hours. "
+            "Premium × lot is not expected profit or required margin. "
+            "Use the Live CE toggle to see Dhan calls in the main table."
         )
