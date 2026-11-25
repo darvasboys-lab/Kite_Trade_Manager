@@ -1135,6 +1135,79 @@ class PayoffStudioStartupTests(unittest.TestCase):
             app.run()
             self.assertEqual(len(pool.calls), 1)  # never duplicates in-flight
 
+    def test_current_active_dhan_profile_can_fetch_ce_before_one_stock_onboarding(self):
+        """No stale 'verify one stock' gate after PIN/TOTP profile succeeds."""
+        from datetime import timedelta
+        from dhan_visual.dhan_readonly_check import DhanProfileStatus
+        cid, token = "1234567890", "FRESH_TOTP_TOKEN_FROM_WINDOWS_VAULT"
+        app = app_with_catalogue()
+        app.session_state["dhan_local_cid"] = cid
+        app.session_state["dhan_local_access_token"] = token
+        app.session_state["fno_ce5_mode"] = "Live"
+        app.session_state["fno_home_expiry"] = "DEC-26"
+        app.session_state["fno_expiry"] = "DEC-26"
+        app.session_state["fno_dhan_profile_status"] = {
+            "cid": cid,
+            "token_fingerprint": hashlib.sha256(token.encode()).hexdigest(),
+            "status": DhanProfileStatus(
+                "Active", "2026-12-31",
+                (datetime.now(IST) + timedelta(hours=12)).strftime("%d/%m/%Y %H:%M"),
+                True, datetime.now(IST).isoformat(),
+            ),
+        }
+        pool = FakePool()
+        with patch("dhan_visual.screener_ui.verified_account", return_value=None), \
+             patch("dhan_visual.straddle_panel.verified_account", return_value=None), \
+             patch("dhan_visual.otm_home.verified_account", return_value=None), \
+             patch("dhan_visual.option_panel.verified_account", return_value=None), \
+             patch("dhan_visual.straddle_panel.nse_regular_session", return_value=False), \
+             patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()), \
+             patch("dhan_visual.screener_ui._funds_pool", return_value=FakePool()), \
+             patch("dhan_visual.straddle_panel._straddle_pool", return_value=pool):
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertIsNotNone(app.button(key="fno_ce5_fetch_live"))
+            self.assertFalse(any(
+                "one-stock profile + option-chain check" in str(n.value).lower()
+                for n in app.warning
+            ))
+            self.assertTrue(any(
+                "dhan data api verified" in str(n.value).lower()
+                for n in app.info
+            ))
+            self.assertEqual(len(pool.calls), 0)  # market closed; manual action
+            app.button(key="fno_ce5_fetch_live").click().run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(len(pool.calls), 1)
+            self.assertEqual(pool.calls[0][0][0].__name__, "scan_all_straddles")
+            self.assertEqual(pool.calls[0][0][2], "DEC-26")
+            app.run()
+            self.assertEqual(len(pool.calls), 1)  # in-flight deduplicated
+
+    def test_saved_totp_without_usable_token_shows_generation_not_reconnect_demand(self):
+        """An opted-in account should show auth progress, not request onboarding."""
+        app = app_with_catalogue()
+        app.session_state["dhan_local_cid"] = "1234567890"
+        app.session_state["fno_ce5_mode"] = "Live"
+        with patch("dhan_visual.screener_ui.is_configured", return_value=True), \
+             patch("dhan_visual.screener_ui.read_cached_token", return_value=None), \
+             patch("dhan_visual.option_panel.is_configured", return_value=True), \
+             patch("dhan_visual.option_panel.read_cached_token", return_value=None), \
+             patch("dhan_visual.otm_home.is_configured", return_value=True), \
+             patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()), \
+             patch("dhan_visual.straddle_panel.scan_all_straddles") as worker:
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertTrue(any(
+                "automatic token generation" in str(n.value).lower()
+                for n in app.info
+            ))
+            self.assertFalse(any(
+                "one-stock profile + option-chain check" in str(n.value).lower()
+                for n in app.warning
+            ))
+            worker.assert_not_called()
+
     def test_unverified_live_ce_explains_missing_option_data_without_fetch(self):
         app = app_with_catalogue()
         app.session_state["fno_ce5_mode"] = "Live"
@@ -1149,8 +1222,8 @@ class PayoffStudioStartupTests(unittest.TestCase):
                 b.key == "fno_ce5_fetch_live" for b in app.button
             ))
             self.assertTrue(any(
-                "cash quotes alone are insufficient" in str(node.value).lower()
-                for node in app.warning
+                "data api profile has not been verified" in str(node.value).lower()
+                for node in app.info
             ))
             scan.assert_not_called()
 

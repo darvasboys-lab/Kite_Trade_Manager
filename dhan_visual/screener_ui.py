@@ -1192,14 +1192,27 @@ def _free_ce5_panel(expiry, dhan_count=0, available=None):
              "option-chain LTP. No Yahoo options are fabricated.",
     )
     if mode == "Live":
-        # Stock cash LTP is NOT an options premium. A separate, paced Dhan
-        # option-chain scan is necessary to calculate the actual 5%+ CE.
-        job = st.session_state.get("fno_straddle_job")
-        cid = str(st.session_state.get("dhan_local_cid") or read_client_id()).strip()
-        verified = bool(valid_client_id(cid) and verified_account(cid))
-        snap = (st.session_state.get("fno_straddle_snapshots") or {})
+        # Dhan account/profile validation and actual options pricing are two
+        # separate milestones. A token-matched ACTIVE Data API profile is
+        # sufficient to START the first read-only CE/straddle scan; that scan
+        # saves the one-time option-chain milestone after its first genuine
+        # eligible ATM + 5% CE response.
+        cid, token = _local_creds()
+        profile = _confirmed_dhan_profile(cid, token)
+        prior = verified_account(cid) if valid_client_id(cid) else None
+        has_current_token = isinstance(token, str) and len(token) >= 16
+        profile_ready = bool(profile is not None and profile.data_ready)
+        profile_inactive = bool(profile is not None and not profile.data_ready)
+        saved_ready = bool(
+            prior is not None and has_current_token
+            and token_still_current(prior)
+        )
+        # An expressly inactive current plan overrides older saved history.
+        eligible = not profile_inactive and (profile_ready or saved_ready)
+
+        history = st.session_state.get("fno_straddle_snapshots") or {}
         candidates = [
-            state for state in snap.values()
+            state for state in history.values()
             if isinstance(state, dict) and state.get("month") == expiry
             and state.get("client_id") == cid
         ]
@@ -1207,43 +1220,87 @@ def _free_ce5_panel(expiry, dhan_count=0, available=None):
         total = len(available or [])
         checked = int(current.get("processed", 0))
         errors = current.get("errors") or {}
-        if job:
+        job = st.session_state.get("fno_straddle_job")
+        scanning = bool(job and not job["future"].done())
+        blocked_by_limit = any(
+            term in str(current.get("fatal", "")).lower()
+            for term in ("429", "rate limit")
+        )
+        if scanning:
             st.caption(
-                f"Dhan CE option chains · {checked}/{total} stocks checked · "
-                f"{dhan_count} usable 5%+ CE quotes · rate-limited scan running"
+                f"Dhan option chain · {checked}/{total} checked · "
+                f"{dhan_count} genuine 5%+ CE premiums · scan running"
             )
         elif dhan_count:
             st.caption(
-                f"Dhan CE · {dhan_count}/{total} verified option premiums · "
-                f"{checked} stocks checked · last snapshot, not a live stream"
-            )
-        elif not verified:
-            st.warning(
-                "CE unavailable: Dhan options integration has not yet passed "
-                "the one-stock profile + option-chain check. "
-                "Complete Dhan setup below; cash quotes alone are insufficient."
+                f"Dhan CE · {dhan_count}/{total} option premiums · "
+                f"{checked} contracts checked · last broker snapshot"
             )
         elif current.get("fatal"):
-            st.warning(f"CE scan stopped: {current['fatal']}")
-        elif current.get("started"):
+            st.warning(f"Dhan CE scan stopped: {current['fatal']}")
+        elif profile_inactive:
             st.warning(
-                f"No valid 5%+ CE prices from {checked} attempted stocks. "
-                "See Unavailable stocks and quote details below."
+                "Dhan profile is connected but the Data API subscription is "
+                "inactive. Activate the data plan before requesting CE."
+            )
+        elif current.get("started") and checked:
+            st.warning(
+                f"Dhan option chain checked {checked}/{total} stocks, but "
+                "no eligible 5%+ CE LTP was available yet. See the "
+                "per-stock reasons in the ATM straddle section below."
+            )
+        elif eligible:
+            st.info(
+                "Dhan Data API verified. The first 5%+ CE scan has not "
+                "produced an options premium yet. Use Fetch CE below "
+                "when the scan is not already running."
+            )
+        elif valid_client_id(cid) and is_configured(cid):
+            if not has_current_token:
+                if st.session_state.get("dhan_auto_error"):
+                    st.warning(
+                        "Saved Dhan PIN/TOTP login needs attention. "
+                        "Open Settings for the broker error; no second "
+                        "one-stock onboarding is necessary."
+                    )
+                else:
+                    st.info(
+                        "Saved PIN/TOTP detected. Automatic token generation "
+                        "or renewal is in progress; option-chain verification "
+                        "will follow the read-only Dhan profile check."
+                    )
+            else:
+                st.info(
+                    "An automatically generated Dhan token is present. "
+                    "Waiting for the matching Data API profile check. "
+                    "See Home connection status for any errors."
+                )
+        elif has_current_token:
+            st.info(
+                "Dhan access token is present but the current Data API "
+                "profile has not been verified. Use Check Dhan connection "
+                "on Home; no options re-onboarding is needed."
             )
         else:
             st.info(
-                "Live CE requires Dhan option-chain snapshots; these are separate "
-                "from cash LTPs. Start the paced scan below."
+                "Dhan options are not connected. Configure Client ID and "
+                "PIN/permanent TOTP secret once in Settings."
             )
-        if verified and not job:
+
+        if eligible and not scanning:
             if st.button(
                 "↻ Fetch 5%+ CE & ATM straddles",
                 key="fno_ce5_fetch_live",
-                help="One read-only, sequential Dhan option-chain pass; "
-                     "uses the same response for 5%+ CE and ATM straddle.",
+                disabled=blocked_by_limit,
+                help="One read-only, sequential Dhan option-chain pass, "
+                     "shared with OTM Home. No trades or faster retries.",
             ):
                 st.session_state["fno_ce5_scan_requested"] = expiry
                 st.rerun()
+            if blocked_by_limit:
+                st.caption(
+                    "Dhan has reported a rate limit; avoid immediate retries."
+                )
         return {}, ""
 
     _eod_start()
