@@ -214,7 +214,13 @@ def render_otm_home():
         if valid_client_id(cid) and token else False
     )
     if profile:
-        st.success("✓ Dhan connected · Data API active · token verified")
+        if profile.data_ready:
+            st.success("✓ Dhan connected · Data API active · token verified")
+        else:
+            st.warning(
+                "Dhan profile connected, but the Data API plan is inactive. "
+                "OTM option-chain access is not available."
+            )
     elif saved and token and token_still_current(saved):
         st.info(
             "Dhan setup saved · token present · live connection not "
@@ -273,7 +279,11 @@ def render_otm_home():
         with col_a:
             if st.button(
                 "↻ Fetch 5%+ CE now", key="otm_home_fetch",
-                disabled=not token or not (profile or saved),
+                disabled=(
+                    not token or (
+                        profile is not None and not profile.data_ready
+                    ) or not (profile or saved)
+                ),
                 help="Uses one paced Dhan option-chain request per stock. "
                      "No broker orders or accelerated retries.",
                 use_container_width=True,
