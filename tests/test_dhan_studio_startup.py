@@ -273,6 +273,97 @@ class PayoffStudioStartupTests(unittest.TestCase):
             self.assertEqual(load.call_args.args[3], 1333)
             self.assertEqual(app.session_state["fno_atm_result"]["quote"].ce.ltp, Decimal("12"))
 
+    def test_top_connect_button_fetches_balance_only_after_explicit_click(self):
+        """Connected broker profile -> actual read-only funds -> green success."""
+        from dhan_visual.dhan_readonly_check import DhanProfileStatus
+        from dhan_visual.dhan_funds import FundsSnapshot
+        from datetime import timedelta
+        client = "1234567890"
+        token = "SYNTHETIC_BROKER_TOKEN_DO_NOT_USE"
+        expiry = (datetime.now(IST) + timedelta(hours=10)).strftime(
+            "%d/%m/%Y %H:%M"
+        )
+        profile_result = DhanProfileStatus(
+            "Active", "2026-12-31", expiry, True,
+            datetime.now(IST).isoformat(),
+        )
+        funds = FakePool()
+        app = app_with_catalogue()
+        app.session_state["dhan_local_cid"] = client
+        app.session_state["dhan_local_access_token"] = token
+        app.session_state["dhan_remember_manual_token"] = False
+        with patch("dhan_visual.screener_ui.verified_account", return_value=None), \
+             patch("dhan_visual.option_panel.verified_account", return_value=None), \
+             patch("dhan_visual.straddle_panel.verified_account", return_value=None), \
+             patch("dhan_visual.screener_ui.check_dhan_data_plan",
+                   return_value=profile_result) as connect, \
+             patch("dhan_visual.option_panel.check_dhan_data_plan") as duplicate, \
+             patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()), \
+             patch("dhan_visual.screener_ui._funds_pool", return_value=funds), \
+             patch("dhan_visual.straddle_panel.scan_all_straddles") as options:
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertIsNotNone(app.button(key="dhan_connect_button"))
+            self.assertEqual(len(funds.calls), 0)
+            connect.assert_not_called()
+            app.button(key="dhan_connect_button").click().run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            connect.assert_called_once_with(client, token)
+            self.assertIsNone(app.session_state.get("dhan_connect_button"))
+            self.assertEqual(len(funds.calls), 1)
+            self.assertEqual(funds.calls[0][0][0].__name__, "read_dhan_balance")
+            self.assertTrue(any(
+                "Dhan connected" in str(node.value) for node in app.success
+            ))
+            self.assertFalse(any(
+                b.key == "fno_dhan_profile_check" for b in app.button
+            ))
+            duplicate.assert_not_called()
+            options.assert_not_called()
+            # A confirmed positive balance is displayed only after the
+            # read-only endpoint itself returns a valid account-matched value.
+            funds.future.set_result(FundsSnapshot(
+                Decimal("1234.50"), Decimal("100"), Decimal("900"),
+                datetime.now(IST).isoformat(),
+            ))
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertTrue(any(
+                "Balance fetched successfully" in str(node.value)
+                for node in app.success
+            ))
+            self.assertTrue(any(
+                "1,234.50" in str(metric.value) for metric in app.metric
+            ))
+            app.run()
+            self.assertEqual(len(funds.calls), 1)
+            connect.assert_called_once()
+            options.assert_not_called()
+
+    def test_profile_for_other_token_never_triggers_funds(self):
+        from dhan_visual.dhan_readonly_check import DhanProfileStatus
+        app = app_with_catalogue()
+        app.session_state["dhan_local_cid"] = "1234567890"
+        app.session_state["dhan_local_access_token"] = "TOKEN_B_LONG_FOR_TESTS_ONLY"
+        app.session_state["fno_dhan_profile_status"] = {
+            "cid": "1234567890",
+            "token_fingerprint": hashlib.sha256(
+                b"TOKEN_A_LONG_FOR_TESTS_ONLY"
+            ).hexdigest(),
+            "status": DhanProfileStatus(
+                "Active", "2026-12-31", "25/11/2099 20:00",
+                True, datetime.now(IST).isoformat(),
+            )
+        }
+        funds = FakePool()
+        with patch("dhan_visual.screener_ui.verified_account", return_value=None), \
+             patch("dhan_visual.screener_ui._market_pool", return_value=FakePool()), \
+             patch("dhan_visual.screener_ui._funds_pool", return_value=funds):
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertIsNotNone(app.button(key="dhan_connect_button"))
+            self.assertEqual(len(funds.calls), 0)
+
     def test_dhan_profile_button_requires_explicit_click(self):
         """Only a user click may call GET /v2/profile."""
         app = app_with_catalogue()
