@@ -409,9 +409,11 @@ class PayoffStudioStartupTests(unittest.TestCase):
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
             self.assertEqual(len(pool.calls), 0)
+            self.assertEqual(app.radio(key="fno_home_ce_source").value, "EOD")
+            self.assertEqual(app.radio(key="fno_ce5_mode").value, "EOD")
             self.assertTrue(any(
-                "data api plan is inactive" in str(node.value).lower()
-                for node in app.warning
+                "paid data api inactive" in str(node.value).lower()
+                for node in app.caption
             ))
             app.button(key="fno_straddle_start").click().run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
