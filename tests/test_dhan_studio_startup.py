@@ -176,6 +176,97 @@ class PayoffStudioStartupTests(unittest.TestCase):
         self.assertIsNotNone(app.button(key="fno_manual_price_refresh"))
         self.assertIsNotNone(app.button(key="fno_refresh_universe"))
 
+    def test_free_nse_home_import_fills_both_pages_without_dhan_api(self):
+        """One downloaded official daily ZIP supplies Home and Page 2 CE."""
+        from dhan_visual.nse_eod_ce import parse_nse_fo_eod
+        from test_ce_eod_local import daily_report
+        from zipfile import ZipFile, ZIP_DEFLATED
+        import io
+        raw = io.BytesIO()
+        with ZipFile(raw, "w", ZIP_DEFLATED) as zf:
+            zf.writestr(
+                "BhavCopy_NSE_FO_0_0_0_20261123_F_0000.csv",
+                daily_report(),
+            )
+        snapshot = parse_nse_fo_eod(raw.getvalue())
+        app = app_with_catalogue()
+        app.session_state["fno_ce5_mode"] = "EOD"
+        app.session_state["fno_home_expiry"] = "DEC-26"
+        app.session_state["fno_expiry"] = "DEC-26"
+        app.session_state["fno_ce5_home_uploaded"] = {
+            "snapshot": snapshot, "filename": "Official report.zip",
+        }
+        with patch("dhan_visual.screener_ui._market_pool",
+                   return_value=FakePool()), \
+             patch("dhan_visual.straddle_panel.scan_all_straddles") as options:
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            home = app.dataframe[0].value
+            page2 = app.dataframe[1].value
+            self.assertEqual(
+                home.loc[home["Stock"] == "TCS",
+                         "5%+ OTM CE (%)"].iloc[0], 2.0
+            )
+            self.assertEqual(
+                page2.loc[page2["Symbol"] == "TCS",
+                          "5%+ CE premium (%)"].iloc[0], 2.0
+            )
+            self.assertEqual(
+                page2.loc[page2["Symbol"] == "TCS",
+                          "CE source"].iloc[0], "NSE EOD 2026-11-23"
+            )
+            self.assertEqual(app.radio(key="fno_home_ce_source").value, "EOD")
+            options.assert_not_called()
+
+    def test_inactive_dhan_data_api_switches_home_to_free_eod(self):
+        """Successful PIN/TOTP login is NOT a paid options subscription."""
+        from dhan_visual.dhan_readonly_check import DhanProfileStatus
+        from datetime import timedelta
+        cid, token = "1234567890", "PROFILE_ACTIVE_BUT_DATA_INACTIVE"
+        app = app_with_catalogue()
+        app.session_state["dhan_local_cid"] = cid
+        app.session_state["dhan_local_access_token"] = token
+        app.session_state["fno_home_expiry"] = "DEC-26"
+        app.session_state["fno_expiry"] = "DEC-26"
+        app.session_state["fno_ce5_mode"] = "Live"
+        app.session_state["fno_dhan_profile_status"] = {
+            "cid": cid,
+            "token_fingerprint": hashlib.sha256(token.encode()).hexdigest(),
+            "status": DhanProfileStatus(
+                "Deactive", "2026-12-31",
+                (datetime.now(IST) + timedelta(hours=18)).strftime(
+                    "%d/%m/%Y %H:%M"
+                ),
+                True, datetime.now(IST).isoformat(),
+            ),
+        }
+        with patch("dhan_visual.screener_ui._market_pool",
+                   return_value=FakePool()), \
+             patch("dhan_visual.screener_ui._funds_pool",
+                   return_value=FakePool()), \
+             patch("dhan_visual.straddle_panel.scan_all_straddles") as options:
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(app.radio(key="fno_home_ce_source").value, "EOD")
+            self.assertEqual(app.radio(key="fno_ce5_mode").value, "EOD")
+            self.assertTrue(any(
+                "free nse eod" in str(n.value).lower()
+                for n in app.caption
+            ))
+            options.assert_not_called()
+
+    def test_free_eod_source_selection_syncs_with_page_two(self):
+        app = app_with_catalogue()
+        with patch("dhan_visual.screener_ui._market_pool",
+                   return_value=FakePool()):
+            app.run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            app.radio(key="fno_home_ce_source").set_value("Live").run()
+            self.assertEqual(app.radio(key="fno_ce5_mode").value, "Live")
+            app.radio(key="fno_ce5_mode").set_value("EOD").run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertEqual(app.radio(key="fno_home_ce_source").value, "EOD")
+
     def test_home_and_page_two_share_same_otm_ce_without_extra_calls(self):
         """No two option-chain requests and no synthetic CE percentages."""
         from dhan_visual.straddle_scan import OtmCall5Quote
@@ -318,9 +409,11 @@ class PayoffStudioStartupTests(unittest.TestCase):
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
             self.assertEqual(len(pool.calls), 0)
+            self.assertEqual(app.radio(key="fno_home_ce_source").value, "EOD")
+            self.assertEqual(app.radio(key="fno_ce5_mode").value, "EOD")
             self.assertTrue(any(
-                "data api plan is inactive" in str(node.value).lower()
-                for node in app.warning
+                "paid data api inactive" in str(node.value).lower()
+                for node in app.caption
             ))
             app.button(key="fno_straddle_start").click().run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])

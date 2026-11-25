@@ -1185,9 +1185,11 @@ def _tejhq_eod_panel(available, expiry):
 
 def _free_ce5_panel(expiry, dhan_count=0, available=None):
     """Explicit EOD/Live choice: never silently substitute one for another."""
+    from dhan_visual.otm_home import page_two_ce_mode_changed
     mode = st.radio(
         "CE ≥+5% data", ["EOD", "Live"], horizontal=True,
         key="fno_ce5_mode", index=0,
+        on_change=page_two_ce_mode_changed,
         help="EOD: official NSE F&O daily close (free). Live: opt-in Dhan "
              "option-chain LTP. No Yahoo options are fabricated.",
     )
@@ -1306,6 +1308,16 @@ def _free_ce5_panel(expiry, dhan_count=0, available=None):
     _eod_start()
     _eod_heartbeat()
     candidates = []
+    # Home's free owner-upload is a validated parsed snapshot, not
+    # another web request. Both tabs see the same report and premiums.
+    from dhan_visual.nse_eod_ce import NseEodSnapshot
+    imported = st.session_state.get("fno_ce5_home_uploaded") or {}
+    home_snap = imported.get("snapshot")
+    if isinstance(home_snap, NseEodSnapshot):
+        candidates.append((
+            home_snap,
+            f"Home import/{imported.get('filename', 'NSE daily report')}",
+        ))
     remote = st.session_state.get("fno_ce5_remote_snapshot")
     if remote and remote.snapshot:
         candidates.append((remote.snapshot, "Official NSE archive (automatic)"))

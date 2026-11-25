@@ -6,7 +6,7 @@ Both pages use the SAME option-chain queue/snapshot, no duplicate CE calls.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
 
@@ -14,6 +14,7 @@ import pandas as pd
 import streamlit as st
 
 from .ce_eod_remote import IST
+from .nse_eod_ce import NseEodError, NseEodSnapshot, parse_nse_fo_eod
 from .dhan_integration_state import (
     verified_account, token_still_current,
 )
@@ -33,7 +34,7 @@ from .table_layout import dataframe_key, autofit_column_config, autofit_enabled
 from .screener_ui import (
     _auto_universe, _dhan_funds_panel, _start_dhan_prices,
     _start_yahoo_prices, _universe_key,
-    _confirmed_dhan_profile,
+    _confirmed_dhan_profile, _parse_ce5_upload,
 )
 
 
@@ -44,6 +45,48 @@ def _home_expiry_changed() -> None:
 def screen_expiry_changed() -> None:
     """Page 2 expiry switch propagates back to the first Home page."""
     st.session_state["fno_home_expiry"] = st.session_state["fno_expiry"]
+
+
+def home_ce_mode_changed() -> None:
+    """Keep Free EOD / Dhan Live mode shared with full Page 2."""
+    st.session_state["fno_ce5_mode"] = st.session_state["fno_home_ce_source"]
+
+
+def page_two_ce_mode_changed() -> None:
+    st.session_state["fno_home_ce_source"] = st.session_state["fno_ce5_mode"]
+
+
+def choose_home_eod_calls(
+    expiry: str, shared: dict, uploaded: dict,
+) -> tuple[dict, str]:
+    """Newest validated EOD snapshot wins; nothing is passed off as live."""
+    sources = []
+    if (isinstance(shared, dict) and shared.get("month") == expiry
+            and shared.get("mode") == "EOD" and shared.get("asof")):
+        sources.append((str(shared["asof"]), shared.get("calls") or {}))
+    if isinstance(uploaded, dict):
+        snap = uploaded.get("snapshot")
+        if isinstance(snap, NseEodSnapshot):
+            sources.append((snap.report_date, snap.quotes.get(expiry, {})))
+    if not sources:
+        return {}, ""
+    day, values = max(sources, key=lambda row: row[0])
+    return values, day
+
+
+def validate_home_eod_upload(payload: bytes, *,
+                             today: date | None = None) -> NseEodSnapshot:
+    """Reject stale/future and invalid owner-imported NSE reports."""
+    snap = _parse_ce5_upload(payload)
+    day = date.fromisoformat(snap.report_date)
+    reference = today or datetime.now(IST).date()
+    if day > reference:
+        raise NseEodError("NSE report has a future business date")
+    if reference - day > timedelta(days=10):
+        raise NseEodError(
+            "NSE report is older than 10 days. Please download a recent report."
+        )
+    return snap
 
 
 def _cash_quotes(universe, cid: str, token: str):
@@ -101,12 +144,12 @@ def _otm_table(available, expiry, *, cid, token, cash_quotes):
         st.rerun(scope="app")
     calls = available_otm_calls(available, expiry)
     mode = st.session_state.get("fno_ce5_mode", "EOD")
+    eod_date = ""
     if mode == "EOD":
-        shared = st.session_state.get("fno_shared_ce") or {}
-        selected = (
-            shared.get("calls", {})
-            if shared.get("month") == expiry and shared.get("mode") == "EOD"
-            else {}
+        selected, eod_date = choose_home_eod_calls(
+            expiry,
+            st.session_state.get("fno_shared_ce") or {},
+            st.session_state.get("fno_ce5_home_uploaded") or {},
         )
     else:
         selected = calls
@@ -121,8 +164,8 @@ def _otm_table(available, expiry, *, cid, token, cash_quotes):
         )
     else:
         st.caption(
-            f"NSE EOD · {priced}/{total} CE references · "
-            "switch to Live for Dhan option-chain prices"
+            f"Free NSE EOD {eod_date or '(report not loaded)'} · "
+            f"{priced}/{total} CE closing-price references · not live"
         )
     st.dataframe(
         frame, hide_index=True, use_container_width=True, height=625,
@@ -179,8 +222,29 @@ def render_otm_home():
 
     if st.session_state.pop("fno_activate_auto_quote_on_next_run", False):
         st.session_state["fno_price_provider"] = AUTO_SOURCE
-    if st.session_state.pop("fno_activate_live_on_next_run", False):
+    pending_live = st.session_state.pop("fno_activate_live_on_next_run", False)
+    # Respect an ACTIVE Data API subscription only; a working Dhan login
+    # without the data plan cannot supply genuine CE option LTP.
+    cid, token = _local_creds()
+    saved = verified_account(cid)
+    profile = _confirmed_dhan_profile(cid, token)
+    inactive = bool(profile is not None and not profile.data_ready)
+    if "fno_ce5_mode" not in st.session_state:
+        st.session_state["fno_ce5_mode"] = (
+            "Live" if (profile is not None and profile.data_ready) or
+            (saved is not None and profile is None and token and
+             token_still_current(saved)) else "EOD"
+        )
+    if pending_live and not inactive:
         st.session_state["fno_ce5_mode"] = "Live"
+    if inactive:
+        # On a profile-verified inactive subscription, free EOD is the
+        # only operational options feed. Do not strand Home in Live mode.
+        st.session_state["fno_ce5_mode"] = "EOD"
+    current_mode = st.session_state["fno_ce5_mode"]
+    if ("fno_home_ce_source" not in st.session_state
+            or st.session_state["fno_home_ce_source"] != current_mode):
+        st.session_state["fno_home_ce_source"] = current_mode
     selected = st.session_state.get("fno_home_expiry")
     if selected not in expiries:
         main_selected = st.session_state.get("fno_expiry")
@@ -195,16 +259,15 @@ def render_otm_home():
                 on_change=_home_expiry_changed,
             )
         with mode_col:
-            st.caption("CE source: " + st.session_state.get("fno_ce5_mode", "EOD"))
+            st.radio(
+                "CE source", ["EOD", "Live"],
+                key="fno_home_ce_source", horizontal=True,
+                on_change=home_ce_mode_changed,
+            )
         with check_col:
             st.caption("Read-only · no trading orders")
 
     available = [item for item in universe if expiry in item.entry.lots]
-    cid, token = _local_creds()
-    saved = verified_account(cid)
-    profile = _confirmed_dhan_profile(cid, token)
-    if "fno_ce5_mode" not in st.session_state:
-        st.session_state["fno_ce5_mode"] = "Live" if (profile or saved) else "EOD"
     mode = st.session_state["fno_ce5_mode"]
     funds = st.session_state.get("fno_dhan_funds_snapshot") or {}
     balance_known = (
@@ -218,9 +281,9 @@ def render_otm_home():
         if profile.data_ready:
             st.success("✓ Dhan connected · Data API active · token verified")
         else:
-            st.warning(
-                "Dhan profile connected, but the Data API plan is inactive. "
-                "OTM option-chain access is not available."
+            st.caption(
+                "Dhan login connected · paid Data API inactive · "
+                "free NSE EOD CE mode selected"
             )
     elif saved and token and token_still_current(saved):
         st.info(
@@ -319,7 +382,56 @@ def render_otm_home():
             if status and status not in ("Existing CE snapshot",):
                 st.caption(status)
     else:
-        st.caption("EOD selected · choose Live on Page 2 for Dhan CE")
+        # Owner-controlled free daily ZIP upload is available directly on
+        # Home, not hidden on Page 2. Works offline without any broker API.
+        imported = st.session_state.get("fno_ce5_home_uploaded") or {}
+        snap = imported.get("snapshot")
+        if isinstance(snap, NseEodSnapshot):
+            count = len(snap.quotes.get(expiry, {}))
+            st.success(
+                f"✓ NSE EOD {snap.report_date} loaded · "
+                f"{count} eligible 5%+ CE reference premiums for {expiry}"
+            )
+        with st.expander(
+            "Import free NSE F&O daily ZIP/CSV",
+            expanded=not isinstance(snap, NseEodSnapshot),
+        ):
+            st.markdown(
+                "Get **F&O-UDiFF Common Bhavcopy Final (ZIP)** from "
+                "[NSE Derivatives Reports]"
+                "(https://www.nseindia.com/all-reports-derivatives), "
+                "then upload that ZIP here. Choose the report published "
+                "after market close, not the cash-equity bhavcopy."
+            )
+            uploaded = st.file_uploader(
+                "NSE F&O daily ZIP or CSV (free)",
+                type=["zip", "csv"],
+                key="fno_home_eod_file",
+            )
+            if uploaded is not None:
+                try:
+                    snapshot = validate_home_eod_upload(uploaded.getvalue())
+                    st.session_state["fno_ce5_home_uploaded"] = {
+                        "snapshot": snapshot, "filename": uploaded.name,
+                    }
+                    st.success(
+                        f"✓ Read NSE {snapshot.report_date} · "
+                        f"{len(snapshot.quotes.get(expiry, {}))} "
+                        f"matching {expiry} stock calls"
+                    )
+                    if not snapshot.quotes.get(expiry):
+                        st.warning(
+                            "This file is valid but contains no eligible "
+                            f"stock CE closing prices for {expiry}. "
+                            "Try an expiry month that exists in the report."
+                        )
+                except (NseEodError, ValueError) as exc:
+                    st.error(f"Cannot use the selected NSE file: {exc}")
+            st.caption(
+                "Reports contain closing prices and may include "
+                "untraded contracts. These are references, not executable "
+                "premiums or a real-time feed."
+            )
 
     cash = _cash_quotes(universe, cid, token)
     _otm_table(available, expiry, cid=cid, token=token, cash_quotes=cash)
