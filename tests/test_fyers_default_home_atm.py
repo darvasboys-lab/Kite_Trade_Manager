@@ -66,19 +66,44 @@ class PreferredFYERSHomeTests(unittest.TestCase):
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
             fetch.assert_not_called()
-            self.assertTrue(app.dataframe[0].value["Futures Price (₹)"].isna().all())
+            self.assertNotIn("Futures Price (₹)", app.dataframe[0].value.columns)
+            self.assertNotIn("Futures vs CMP (%)", app.dataframe[0].value.columns)
             app.button(key="fno_home_refresh_futures").click().run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
             fetch.assert_called_once()
             home = app.dataframe[0].value
             self.assertEqual(home.loc[home.Stock == "TCS", "Futures Price (₹)"].iloc[0], 1005)
+            self.assertIn("Futures vs CMP (%)", home.columns)
             app.run()
             fetch.assert_called_once()
+            app.button(key="fno_home_refresh_futures").click().run()
+            self.assertNotIn("Futures Price (₹)", app.dataframe[0].value.columns)
+            self.assertNotIn("Futures vs CMP (%)", app.dataframe[0].value.columns)
+            fetch.assert_called_once()
+            app.button(key="fno_home_refresh_futures").click().run()
+            self.assertEqual(fetch.call_count, 2)
             app.selectbox(key="fno_home_expiry").set_value("NOV-26").run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-            fetch.assert_called_once()
-            self.assertTrue(app.dataframe[0].value["Futures Price (₹)"].isna().all())
+            self.assertEqual(fetch.call_count, 2)
+            self.assertNotIn("Futures Price (₹)", app.dataframe[0].value.columns)
+            self.assertNotIn("Futures vs CMP (%)", app.dataframe[0].value.columns)
 
+
+    def test_signed_futures_basis(self):
+        import pandas as pd
+        from dhan_visual.otm_home import attach_futures_columns
+        frame = pd.DataFrame({"Stock": ["A", "B", "C", "D", "E", "F"],
+                              "CMP (₹)": [1000, 1000, 1000, 0, None, 1000]})
+        quotes = {
+            s: Quote(Decimal(p), "offline", "FYERS futures LTP")
+            for s, p in (("A", "1010"), ("B", "980"), ("C", "1000"),
+                         ("D", "1000"), ("E", "1000"))
+        }
+        data = attach_futures_columns(frame, quotes)
+        self.assertEqual(data["Futures vs CMP (%)"].iloc[:3].tolist(), [1.0, -2.0, 0.0])
+        self.assertTrue(data["Futures vs CMP (%)"].iloc[3:].isna().all())
+        self.assertTrue(pd.isna(data["Futures Price (₹)"].iloc[5]))
+        self.assertNotIn("Futures Price (₹)", frame.columns)
 
     def test_contract_size_and_straddle_percent(self):
         from dataclasses import replace
