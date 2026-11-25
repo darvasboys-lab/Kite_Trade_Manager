@@ -122,6 +122,9 @@ def _pending_status():
 def render_single_broker_selector() -> None:
     st.session_state.setdefault(ACTIVE_KEY, "Dhan")
     st.session_state.setdefault("ccs_broker_committed", active_broker())
+    # Complete a deferred switch BEFORE the radio widget is instantiated.
+    # Streamlit forbids changing a widget's session-state key afterward.
+    _pending_status()
     st.radio(
         "Active broker connection · only one at a time",
         OPTIONS,
@@ -130,7 +133,6 @@ def render_single_broker_selector() -> None:
              "The inactive broker sends no requests or token renewals. "
              "Existing broker-issued sessions are not remotely revoked.",
     )
-    _pending_status()
     current = active_broker()
     if st.session_state.get(PENDING_KEY):
         st.info("Broker change in progress. No new broker login will start.")
