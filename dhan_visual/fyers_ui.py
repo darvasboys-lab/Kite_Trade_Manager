@@ -297,7 +297,8 @@ def _start_fyers_chain(access: FyersAccess, symbols: list[str],
         "key": key, "future": future, "updates": updates, "cancel": cancel,
     }
     st.session_state["fno_fyers_chain_snapshot"] = {
-        "key": key, "calls": {}, "straddles": {}, "total": len(symbols),
+        "key": key, "expiry": expiry, "symbols": tuple(symbols),
+        "calls": {}, "straddles": {}, "total": len(symbols),
         "processed": 0, "errors": [], "complete": False, "expiry_date": "",
     }
     return key
