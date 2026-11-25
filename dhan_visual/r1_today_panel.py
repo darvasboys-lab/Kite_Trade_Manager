@@ -148,6 +148,9 @@ def render_r1_today_panel(available, expiry: str, technicals,
         }
         history[key] = snap
     job = st.session_state.get("ccs_r1_today_job")
+    if (job is not None and job["key"] != key
+            and job.get("stop")):
+        job["stop"].set()
     if job is not None and job["key"] == key:
         _drain(job, snap)
         job = st.session_state.get("ccs_r1_today_job")
