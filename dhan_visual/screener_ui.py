@@ -1029,8 +1029,15 @@ def _eod_pool():
 
 
 def _eod_start():
-    """One official EOD request per IST day / session unless user retries."""
-    key = datetime.now(IST).date().isoformat()
+    """Automatically check official EOD on startup and again after 18:00 IST.
+
+    Keep one bounded request per session. An already-open app can refresh the
+    new report after exchange publication without needing another manual ZIP.
+    """
+    local = datetime.now(IST)
+    key = local.date().isoformat() + (
+        "-after-close" if local.hour >= 18 else ""
+    )
     running = st.session_state.get("fno_ce5_remote_job")
     if running and not running["future"].done():
         return
@@ -1043,9 +1050,10 @@ def _eod_start():
     }
 
 
-@st.fragment(run_every="3s")
+@st.fragment(run_every="60s")
 def _eod_heartbeat():
-    """Refresh only after a finished read-only fetch, never on every rerun."""
+    """Periodic low-frequency check, also if the app stays open past 18:00."""
+    _eod_start()
     job = st.session_state.get("fno_ce5_remote_job")
     if not job:
         return
@@ -1058,6 +1066,17 @@ def _eod_heartbeat():
             )
         if job["key"] == st.session_state.get("fno_ce5_remote_attempt_key"):
             st.session_state["fno_ce5_remote_snapshot"] = result
+            if result.snapshot is not None and result.payload:
+                try:
+                    saved = save_verified_report(result.payload)
+                    st.session_state["fno_ce5_auto_saved_date"] = saved.report_date
+                    st.session_state.pop("fno_ce5_auto_save_error", None)
+                except (OSError, NseEodError, ValueError):
+                    # The in-memory snapshot remains usable. Report a truthful
+                    # persistence warning instead of declaring a permanent save.
+                    st.session_state["fno_ce5_auto_save_error"] = (
+                        "Automatic report loaded, but local disk save failed."
+                    )
         st.session_state.pop("fno_ce5_remote_job", None)
         st.rerun(scope="app")
     else:
