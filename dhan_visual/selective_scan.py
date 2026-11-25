@@ -11,9 +11,9 @@ from .ce_eod_remote import IST
 from .fyers_ui import connected_fyers, _scope
 from .fyers_readonly import (
     FyersDataError, fetch_cash_quotes, fetch_chain, resolve_expiry_timestamp,
-    fetch_daily_levels, fetch_r1_intraday_bars,
+    fetch_daily_levels, fetch_r1_intraday_bars, fetch_futures_quotes,
 )
-from .otm_home import otm_home_dataframe, filter_home_contracts, _manual_futures_column
+from .otm_home import otm_home_dataframe, filter_home_contracts, attach_futures_columns
 from .screener import choose_expiry, expiry_options
 from .screener_ui import _auto_universe
 from .technical_ui import attach_technical_columns
@@ -25,6 +25,8 @@ BATCH = 35
 BATCH_INTERVAL_SECONDS = 60.0
 HISTORY_BATCH = 10
 STATE = "ccs_selective_scan"
+FUTURES_STATE = "ccs_futures_discount_snapshot"
+FUTURES_MAX_LAKH = 7
 R1_ALL = "Include all stocks"
 R1_ABOVE = "Above R1 only"
 R1_COLUMN = "> R1"
@@ -188,7 +190,8 @@ def run_automatic_batch(access, available, snapshot, *, now=None):
 @st.fragment(run_every="3s")
 def _automatic_scan_heartbeat():
     """Only mounted on Home; never continue after navigation or logout."""
-    if (st.session_state.get("ccs_stock_strategy_active")
+    if (st.session_state.get(FUTURES_STATE)
+            or st.session_state.get("ccs_stock_strategy_active")
             or st.session_state.get("ccs_legacy_full_scan")
             or st.session_state.get("ccs_selective_page") != "◎ OTM CE Home"):
         return
@@ -219,7 +222,7 @@ def _universe_rows(universe, expiry):
     return [item for item in universe if expiry in item.entry.lots]
 
 
-def _display(frame, *, market=False):
+def _display(frame, *, market=False, futures=False):
     config = {
         "CMP (₹)": st.column_config.NumberColumn("CMP (₹)", format="₹%.2f"),
         R1_COLUMN: st.column_config.TextColumn("> R1", help="CMP strictly above current monthly R1. Dash = not verified."),
@@ -239,8 +242,77 @@ def _display(frame, *, market=False):
         help="Click the stock symbol to open its NSE cash chart in TradingView.",
     )
     st.dataframe(frame, hide_index=True, use_container_width=True, height=520,
-                 key=dataframe_key("selective_market" if market else "selective_home", st.session_state),
+                 key=dataframe_key("selective_futures" if futures else "selective_market" if market else "selective_home", st.session_state),
                  column_config=autofit_column_config(config, autofit_enabled(st.session_state)))
+
+
+def futures_discount_frame(available, cash, futures, expiry):
+    """Every priced contract strictly below 7 lakh, independent of CE/R1."""
+    frame = otm_home_dataframe(available, cash, {}, expiry=expiry)
+    frame = filter_home_contracts(frame, FUTURES_MAX_LAKH)
+    frame = frame[["Stock", "CMP (₹)", "Lot size", "Contract size (₹)"]]
+    frame = attach_futures_columns(frame, futures)
+    return frame.sort_values(["Futures vs CMP (%)", "Stock"], ascending=[True, True],
+                             na_position="last").reset_index(drop=True)
+
+
+def load_futures_discount(access, universe, expiry):
+    """One explicit full-universe cash snapshot, then batched qualified futures."""
+    available = _universe_rows(universe, expiry)
+    cash = fetch_cash_quotes(access, [item.entry.symbol for item in available])
+    candidate = futures_discount_frame(available, cash, {}, expiry)
+    symbols = candidate["Stock"].tolist()
+    quotes = fetch_futures_quotes(access, symbols, expiry) if symbols else {}
+    return futures_discount_frame(available, cash, quotes, expiry), len(available), len(cash)
+
+
+def render_futures_discount(access, universe, expiry):
+    key = (_scope(access, [], expiry), datetime.now(IST).date().isoformat())
+    state = st.session_state.get(FUTURES_STATE)
+    if not state or state["key"] != key:
+        state = dict(key=key, expiry=expiry, frame=None, error="", at="")
+        st.session_state[FUTURES_STATE] = state
+    st.markdown("### Futures · Discount to Premium")
+    st.caption(f"{expiry} · CMP × selected-expiry lot < ₹7,00,000 · independent of CE premium and R1 filters")
+    a,b = st.columns(2)
+    if a.button("Refresh all futures", key="ccs_futures_refresh", use_container_width=True):
+        render_futures_discount_request(access, universe, expiry)
+        st.rerun()
+    if b.button("Hide futures / return to shortlist", key="ccs_futures_hide", use_container_width=True):
+        st.session_state.pop(FUTURES_STATE, None)
+        st.rerun()
+    if state["error"]:
+        st.warning(state["error"] + " · No automatic retry. Refresh manually.")
+    frame = state["frame"]
+    if frame is None:
+        if not state["error"]:
+            st.info("Snapshot expired or broker changed. Refresh manually to load the selected month.")
+        return
+    basis = pd.to_numeric(frame["Futures vs CMP (%)"], errors="coerce")
+    priced = basis.notna()
+    x,y,z = st.columns(3)
+    x.metric("Contracts below ₹7 lakh",len(frame))
+    y.metric("Trading at discount",int((basis<0).sum()))
+    z.metric("Futures prices available",int(priced.sum()))
+    st.caption(f"Snapshot requested {state['at']} · cash quotes {state['cash']}/{state['total']} eligible stocks. Missing futures prices appear last; missing CMP cannot establish contract size.")
+    st.caption("Basis = (futures − CMP) / CMP × 100. Cash and futures are sequential snapshots, not simultaneous fills.")
+    _display(frame, futures=True)
+    st.download_button("Download futures CSV",frame.to_csv(index=False),file_name="ccs-futures-discount.csv",key="ccs_futures_csv")
+
+
+def render_futures_discount_request(access, universe, expiry):
+    # Request is only made after an explicit form submit or refresh click.
+    key = (_scope(access, [], expiry), datetime.now(IST).date().isoformat())
+    state = dict(key=key, expiry=expiry, frame=None, error="", at="")
+    try:
+        with st.spinner("Loading all sub-₹7 lakh stock futures in quote batches…"):
+            state["frame"], state["total"], state["cash"] = load_futures_discount(access, universe, expiry)
+        state["at"] = _stamp()
+    except FyersDataError as exc:
+        state["error"] = str(exc)
+    except Exception:
+        state["error"] = "Futures quote request stopped."
+    st.session_state[FUTURES_STATE] = state
 
 
 def render_selective_home():
@@ -286,10 +358,20 @@ def render_selective_home():
                              horizontal=True, key="selective_r1_choice",
                              help="Above R1 only excludes both below/equal R1 and unknown R1. "
                                   "History is requested only after contract and CE filters.")
-        note, action = st.columns([2, 1])
+        note, action, future_action = st.columns([2, 1, 1])
         note.caption("Read-only · no market-data requests before Start scan.")
         apply = action.form_submit_button("Apply filters / Start scan", type="primary",
                                          use_container_width=True)
+        show_futures = future_action.form_submit_button("Show futures · < ₹7L", use_container_width=True)
+    if show_futures:
+        if snapshot:
+            snapshot["auto_scan"] = False
+        render_futures_discount_request(access, universe, expiry)
+    if apply:
+        st.session_state.pop(FUTURES_STATE, None)
+    elif st.session_state.get(FUTURES_STATE):
+        render_futures_discount(access, universe, expiry)
+        return
     if apply:
         key = _scope(access, [], expiry)
         available = _universe_rows(universe, expiry)
@@ -372,7 +454,6 @@ def render_selective_home():
     if snapshot["options_at"]:
         st.caption("Options requested " + snapshot["options_at"] + " · each stock checked once; cached quotes are not refreshed automatically.")
     save_scan_controls(snapshot,frame)
-    frame = _manual_futures_column(frame, snapshot["expiry"])
     _display(frame)
     if not frame.empty:
         st.markdown("#### Build strategy")
