@@ -31,6 +31,10 @@ from .r1_today import session_r1_cross
 PORT = 8502
 HOST = f"127.0.0.1:{PORT}"
 ORIGIN = "http://" + HOST
+
+def allowed_host(host):
+    return host in (HOST, f"localhost:{PORT}")
+
 TOKEN = secrets.token_urlsafe(32)
 ROOT = Path(__file__).parent / "phone"
 LOCK = Lock()
@@ -305,7 +309,7 @@ class Handler(BaseHTTPRequestHandler):
     def response(self,code,data):
         self.send_bytes(code,json.dumps(data,default=str,allow_nan=False).encode(),"application/json")
     def do_GET(self):
-        if self.headers.get("Host") != HOST:
+        if not allowed_host(self.headers.get("Host")):
             return self.response(403,{"error":"Invalid host"})
         files = {"/":("index.html","text/html; charset=utf-8"),
                  "/manifest.webmanifest":("manifest.webmanifest","application/manifest+json"),
@@ -318,7 +322,8 @@ class Handler(BaseHTTPRequestHandler):
             data = data.replace(b"__CCS_TOKEN__",TOKEN.encode())
         self.send_bytes(200,data,item[1])
     def do_POST(self):
-        if (self.headers.get("Host")!=HOST or self.headers.get("Origin")!=ORIGIN
+        host = self.headers.get("Host")
+        if (not allowed_host(host) or self.headers.get("Origin")!="http://"+host
                 or not hmac.compare_digest(self.headers.get("X-CCS-Token",""),TOKEN)):
             return self.response(403,{"error":"Invalid local request"})
         if self.headers.get("Content-Type","").split(";")[0]!="application/json":
@@ -348,5 +353,6 @@ class Handler(BaseHTTPRequestHandler):
             self.response(500,{"error":"Local operation failed ("+type(exc).__name__+"). No automatic retry."})
 
 if __name__=="__main__":
-    print("CCS Phone candidate: "+ORIGIN,flush=True)
+    print("CCS Phone candidate: http://localhost:"+str(PORT),flush=True)
+    print("Legacy local address: "+ORIGIN,flush=True)
     ThreadingHTTPServer(("127.0.0.1",PORT),Handler).serve_forever()
