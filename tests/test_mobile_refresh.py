@@ -109,7 +109,7 @@ class MobileRefreshTests(unittest.TestCase):
     def test_startup_filters_use_first_expiry_and_requested_values(self):
         from dhan_visual.mobile_refresh_ui import startup_filters
         self.assertEqual(startup_filters(["DEC-26", "JAN-27", "FEB-27"]),
-                         dict(expiry="DEC-26", maximum=7, minimum=5,
+                         dict(expiry="DEC-26", maximum=7, minimum=0,
                               r1_filter="Include all stocks"))
         with self.assertRaises(ValueError):
             startup_filters([])
@@ -169,3 +169,16 @@ class MobileRefreshTests(unittest.TestCase):
         self.assertIn("Elapsed: 2m 22s", html)
         self.assertIn("5.25%", html)
         self.assertIn('1 <span>opportunities', html)
+
+    def test_any_quoted_premium_is_not_five_percent_yield(self):
+        from dhan_visual.selective_scan import qualified_rows
+        from test_dhan_studio_startup import example
+        snap = new_snapshot("key", "DEC-26", 7, 0)
+        snap.update(cash=quotes(), calls={"TCS":call("TCS","3")})
+        self.assertEqual(qualified_rows(example(), snap)["Stock"].tolist(), ["TCS"])
+        snap["minimum"] = 5
+        self.assertTrue(qualified_rows(example(), snap).empty)
+        snap["minimum"] = 0
+        snap.update(complete=True, completed_at="2026-11-27T15:00:00+05:30")
+        payload = payload_for(snap, qualified_rows(example(), snap))
+        self.assertEqual(validate({"version":1,"snapshot":payload})["snapshot"]["filters"]["minimum"],0)
