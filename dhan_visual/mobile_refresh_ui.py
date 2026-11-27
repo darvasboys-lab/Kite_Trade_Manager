@@ -1,6 +1,7 @@
 """Mobile-only refresh and atomic publication of complete scans."""
 from datetime import datetime
 import json
+import time
 import pandas as pd
 import streamlit as st
 from .ce_eod_remote import IST
@@ -100,6 +101,7 @@ def begin(access, universe, filters):
     if job is None:
         st.session_state[ERROR] = "Another refresh is running. Retry when it finishes."
         return
+    job["started_at"] = time.monotonic()
     st.session_state[JOB] = job
     st.session_state.pop(ERROR,None)
 
@@ -110,7 +112,7 @@ def refresh_panel(universe):
     access = connected_fyers()
     if not job:
         if st.session_state.get(ERROR):
-            st.caption(st.session_state[ERROR])
+            st.warning(st.session_state[ERROR])
         return
     future = job["future"]
     if not access or job["key"] != _scope(access, [], job["filters"]["expiry"]):
@@ -123,6 +125,8 @@ def refresh_panel(universe):
     if not future.done():
         percent, stage = job["progress"]
         st.progress(min(percent,99)/100, text=f"{percent}% · {stage}")
+        elapsed = int(time.monotonic() - job.get("started_at", time.monotonic()))
+        st.caption(f"Refresh elapsed: {elapsed // 60}m {elapsed % 60:02d}s · previous data remains available.")
         if st.button("Cancel refresh", key="ccs_cancel_refresh"):
             job["cancel"].set()
         return
@@ -182,7 +186,7 @@ def render_mobile_refresh(access, universe, filters, apply):
             st.caption(f"{label} · {timestamp:%d %b %H:%M IST} · {shown['filters']['expiry']}")
         refresh_panel(universe)
         job = st.session_state.get(JOB)
-        if st.button("Refresh data", key="ccs_mobile_refresh", use_container_width=True,
+        if st.button("Retry refresh" if st.session_state.get(ERROR) else "Refresh data", key="ccs_mobile_refresh", use_container_width=True,
                      disabled=bool(job)):
             st.session_state[AUTO] = token_scope
             begin(access,universe,filters)
