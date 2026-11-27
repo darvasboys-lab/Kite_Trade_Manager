@@ -143,3 +143,13 @@ class MobileRefreshTests(unittest.TestCase):
                                      lambda: None, fetch, lambda _: None)
         fetch.assert_called_once()
         cancel.wait.assert_not_called()
+
+    def test_nifty_fpi_index_excluded_from_catalogue_and_cached_universe(self):
+        from dhan_visual.screener import INDEX_SYMBOLS, Underlying
+        from dhan_visual.selective_scan import _universe_rows
+        from dhan_visual.dhan_market import DhanUnderlying
+        self.assertIn("NIFTYFPI", INDEX_SYMBOLS)
+        entries = [DhanUnderlying(Underlying(symbol, symbol, {"DEC-26": 100}), i)
+                   for i, symbol in enumerate(("NIFTYFPI", "NIFTY", "TCS"), 1)]
+        self.assertEqual([x.entry.symbol for x in _universe_rows(entries, "DEC-26")],
+                         ["TCS"])
