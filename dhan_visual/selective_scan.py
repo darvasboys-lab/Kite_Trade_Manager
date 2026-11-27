@@ -491,16 +491,82 @@ def render_futures_discount_request(access, universe, expiry):
     st.session_state[FUTURES_STATE] = state
 
 
+def render_ios_disconnected_home():
+    """Local-only empty state; saved rows never become live strategy inputs."""
+    from .workspace_ui import load_workspace
+    from .broker_control import active_broker, PENDING_KEY
+    data = load_workspace() or {}
+    saved = data.get("snapshot")
+    filters = (saved or {}).get("filters") or data.get("preferences", {}).get("filters") or {}
+    maximum = filters.get("maximum", 7)
+    st.markdown(
+        '<div class="ccs-ios-summary"><small>OTM COVERED CALL SCANNER</small>'
+        '<div class="ccs-ios-count">— <span>opportunities</span></div>'
+        '<div class="ccs-ios-progress"></div><small>Awaiting connection</small>'
+        '<div class="ccs-ios-summarygrid"><div><small>Highest CE premium</small><strong>—</strong></div>'
+        f'<div><small>Contract limit</small><strong>₹{int(maximum)} lakh</strong></div></div></div>',
+        unsafe_allow_html=True)
+    with st.container(border=True, key="ccs_ios_connect"):
+        if st.session_state.get(PENDING_KEY):
+            st.markdown("**Switching connection**")
+            st.caption("Waiting for previous requests to finish.")
+        else:
+            st.markdown("**Connect FYERS**")
+            st.caption("Renew your daily session" if active_broker() == "FYERS" else "Select FYERS in Settings")
+        st.button("Unlock FYERS" if active_broker() == "FYERS" else "Connection settings",
+                  key="ccs_ios_connect_settings", use_container_width=True,
+                  disabled=bool(st.session_state.get(PENDING_KEY)),
+                  on_click=lambda: st.session_state.update(ccs_selective_page="⚙ Settings"))
+    st.markdown("### Opportunities")
+    if not saved:
+        st.markdown('<div class="ccs-ios-empty">Connect FYERS to load opportunities</div>', unsafe_allow_html=True)
+        return
+    st.caption("Saved shortlist · Historical only · " + saved["saved_at"])
+    st.caption("Renew FYERS and scan for current quotes. Saved results cannot launch a strategy.")
+    rows = saved.get("rows", [])
+    if not rows:
+        st.caption("No opportunities in the saved shortlist.")
+        return
+    frame = pd.DataFrame(rows)
+    pages = card_pages(len(frame))
+    page = st.selectbox("Result page", list(range(pages)),
+                        format_func=lambda n: f"{n + 1} / {pages}", key="ccs_ios_saved_page") if pages > 1 else 0
+    for offset, (_, row) in enumerate(frame.iloc[page * 8:page * 8 + 8].iterrows()):
+        symbol = str(row["Stock"])
+        with st.container(border=True, key=f"ccs_ios_saved_card_{offset}"):
+            strike = card_value(row.get("CE strike"), "CE strike")
+            if strike != "—":
+                strike = f"{float(row['CE strike']):g} CE"
+            st.markdown(
+                f'<div class="ccs-ios-stockhead"><span class="ccs-ios-logo">{escape(symbol[:1])}</span>'
+                f'<div><b>{escape(symbol)}</b><small>{escape(strike)}</small></div>'
+                f'<strong>{escape(card_value(row.get("CMP (₹)"), "CMP (₹)"))}</strong></div>'
+                '<div class="ccs-ios-saved-tiles">'
+                f'<div><small>1.05 CE</small><strong>{escape(card_value(row.get("5%+ OTM CE (%)"), "5%+ OTM CE (%)"))}</strong></div>'
+                f'<div><small>STRADDLE</small><strong>{escape(card_value(row.get("Straddle (%)"), "Straddle (%)"))}</strong></div></div>',
+                unsafe_allow_html=True)
+            with st.expander("View details"):
+                for col in frame.columns:
+                    if col != "Stock":
+                        st.text(f"{col}: {card_value(row[col], col)}")
+                st.link_button("TradingView chart ↗", tradingview_chart_url(symbol))
+    st.download_button("Download saved shortlist CSV", frame.to_csv(index=False), "ccs-shortlist.csv", key="ccs_ios_saved_csv")
+
+
 def render_selective_home():
     from .workspace_ui import prepare_filters, save_scan_controls, remember_pref, render_historical_shortlist
     from .stock_strategy_ui import ACTIVE, launch_strategy, render_stock_strategy
     if st.session_state.get(ACTIVE):
         render_stock_strategy()
         return
-    st.markdown("### OTM Covered Call")
-    st.caption("Select filters first. Nothing is fetched from FYERS or Yahoo until you apply a scan.")
-    render_historical_shortlist()
     access = connected_fyers()
+    if phone_layout() and not access:
+        render_ios_disconnected_home()
+        return
+    if not phone_layout():
+        st.markdown("### OTM Covered Call")
+        st.caption("Select filters first. Nothing is fetched from FYERS or Yahoo until you apply a scan.")
+    render_historical_shortlist()
     if not access:
         st.info("Connect and select FYERS in Settings to use the data-saving scan.")
         return
