@@ -21,7 +21,7 @@ from .screener_ui import _auto_universe
 from .technical_ui import attach_technical_columns
 from .r1_today import session_r1_cross
 from .tradingview_links import clickable_stock_frame, TRADINGVIEW_SYMBOL_DISPLAY, tradingview_chart_url
-from .mobile_cards import card_pages, card_value, phone_layout
+from .mobile_cards import card_pages, card_value, phone_layout, sort_ce5_rows
 from .table_layout import dataframe_key, autofit_column_config, autofit_enabled, click_autofit
 
 BATCH = 35
@@ -652,7 +652,8 @@ def render_ios_saved_shortlist(saved, *, disconnected=False, strategy_context=No
     if not rows:
         st.caption("No opportunities match the accepted filters.")
         return
-    frame = pd.DataFrame(rows)
+    frame = sort_ce5_rows(pd.DataFrame(rows))
+    st.caption("Sorted by 5% OTM CE premium · highest first")
     if strategy_context is not None:
         with st.expander("Display options"):
             view = st.radio("Results layout", ["Full table", "Mobile cards"], index=1,
