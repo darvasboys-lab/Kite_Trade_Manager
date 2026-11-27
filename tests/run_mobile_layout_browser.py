@@ -1,0 +1,112 @@
+"""Run with Streamlit fixture server on port 8502 and Playwright Chromium installed."""
+from pathlib import Path
+from playwright.sync_api import sync_playwright
+
+BASE = "http://127.0.0.1:8502/"
+OUT = Path("mobile-layout-artifacts")
+OUT.mkdir(exist_ok=True)
+CHECK = r"""() => {
+ const visible = e => { const r=e.getBoundingClientRect(), s=getComputedStyle(e);
+   return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none'; };
+ const bounds = e => e.getBoundingClientRect();
+ const issues=[];
+ const main=document.querySelector('[data-testid="stMain"]');
+ const dock=document.querySelector('.st-key-ccs_ios_dock');
+ const w=document.documentElement.clientWidth;
+ if (!dock || !visible(dock)) issues.push('missing navigation dock');
+ if (main && main.scrollWidth>main.clientWidth+3) issues.push('main horizontal overflow');
+ if (document.documentElement.scrollWidth>w+3) issues.push('page horizontal overflow');
+ if (dock) {
+   const buttons=[...dock.querySelectorAll('button')].filter(visible);
+   if (buttons.length!==5) issues.push('expected five navigation buttons');
+   for (const e of buttons) {
+     const r=bounds(e);
+     if (r.left< -2 || r.right>w+2 || r.height<44) issues.push('dock button outside viewport or too small');
+   }
+   for (let i=1;i<buttons.length;i++) if(bounds(buttons[i-1]).right>bounds(buttons[i]).left+2)
+     issues.push('dock buttons overlap');
+ }
+ for(const parent of document.querySelectorAll('.block-container [data-testid="stVerticalBlock"]')) {
+   if(parent.closest('.st-key-ccs_ios_dock')) continue;
+   const children=[...parent.children].filter(e=>visible(e)&&
+     !e.matches('[data-testid="stEmpty"]')&&!e.querySelector('.st-key-ccs_ios_dock')&&
+     !e.matches('.st-key-ccs_ios_dock')&&getComputedStyle(e).position!=='fixed');
+   for(let i=1;i<children.length;i++){
+     const a=bounds(children[i-1]),b=bounds(children[i]);
+     if(a.bottom>b.top+3 && a.right>b.left+2 && b.right>a.left+2)
+       issues.push('vertical siblings overlap: '+children[i-1].innerText.slice(0,55)+' / '+children[i].innerText.slice(0,55));
+   }
+ }
+ for(const e of document.querySelectorAll('.block-container .ccs-ios-summary,.block-container .ccs-ios-stockhead,.block-container .ccs-card-grid,.block-container [data-testid="stForm"],.block-container [data-testid="stPlotlyChart"],.block-container [data-testid="stDataFrame"]')){
+   if(!visible(e))continue;
+   const r=bounds(e);
+   if(r.left< -2||r.right>w+2)issues.push('content outside viewport: '+(e.className||e.dataset.testid));
+ }
+ return issues;
+}"""
+
+def verify(page, name):
+    page.wait_for_timeout(400)
+    page.screenshot(path=str(OUT / (name + ".png")))
+    errors = page.locator('[data-testid="stException"]')
+    assert not errors.count(), f"{name}: {errors.all_text_contents()}"
+    issues = page.evaluate(CHECK)
+    assert not issues, f"{name}: {issues}"
+    print("PASS", name, flush=True)
+
+def navigate(page, index, marker):
+    page.locator(".st-key-ccs_ios_dock button").nth(index).click()
+    page.get_by_text(marker, exact=True).first.wait_for(timeout=30000)
+
+def open_case(browser, width, height, mode):
+    context = browser.new_context(viewport={"width":width,"height":height},
+        device_scale_factor=1, is_mobile=True, has_touch=True,
+        user_agent="Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0 Mobile Safari/537.36")
+    page = context.new_page()
+    page.goto(BASE+"?layout_case="+mode,wait_until="domcontentloaded")
+    page.locator(".st-key-ccs_ios_dock button").first.wait_for(timeout=45000)
+    return context,page
+
+def main():
+    with sync_playwright() as p:
+        browser=p.chromium.launch(headless=True,args=["--no-sandbox"])
+        for w,h in ((320,700),(360,800),(390,844),(430,932),(740,360)):
+            context,page=open_case(browser,w,h,"accepted")
+            prefix=f"{w}x{h}"
+            page.locator(".ccs-ios-summary").wait_for()
+            verify(page,prefix+"-home")
+            navigate(page,1,"Market Screener · Shortlisted stocks only")
+            verify(page,prefix+"-screener")
+            navigate(page,2,"Strategy Builder")
+            verify(page,prefix+"-strategy")
+            page.get_by_role("button",name="Open strategy builder").click()
+            page.get_by_text("Option chain",exact=True).wait_for()
+            page.get_by_role("button",name="Apply preset").click()
+            page.locator('[data-testid="stPlotlyChart"]').wait_for()
+            verify(page,prefix+"-strategy-payoff")
+            navigate(page,3,"Profit / loss at expiry")
+            verify(page,prefix+"-trades")
+            page.get_by_role("tab",name="▦ Buy Stages").click()
+            verify(page,prefix+"-buy-stages")
+            page.get_by_role("tab",name="☷ Position Details").click()
+            verify(page,prefix+"-position-details")
+            navigate(page,4,"FYERS · read-only market data")
+            verify(page,prefix+"-settings")
+            if w==390:
+                page.get_by_role("button",name="Dark mode",exact=True).click()
+                verify(page,prefix+"-settings-dark")
+            context.close()
+        for mode in ("locked","loading","ready"):
+            context,page=open_case(browser,390,844,mode)
+            page.locator(".ccs-ios-summary").wait_for()
+            if mode=="loading":
+                page.get_by_text("60% · Option chains 78/135",exact=True).wait_for()
+                assert page.locator(".ccs-ios-progress").count()==1
+            if mode=="ready":
+                page.get_by_role("button",name="Update now").wait_for()
+            verify(page,"390-"+mode)
+            context.close()
+        browser.close()
+
+if __name__=="__main__":
+    main()
