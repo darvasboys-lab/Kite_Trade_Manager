@@ -21,6 +21,7 @@ from .fyers_readonly import (
 from .ce_eod_remote import IST
 from .broker_control import broker_allowed
 from .mobile_fyers_vault import MobileVault, VaultError, exists as mobile_vault_exists
+from . import fyers_local_oauth as local_oauth
 
 
 @st.cache_resource
@@ -52,6 +53,56 @@ def prepare_saved_login(state, credentials):
     state["_fyers_oauth_state"] = new_state()
 
 
+def _local_callback_allowed():
+    # Never allow a pending credential handoff on a publicly bound server.
+    try:
+        return (st.get_option("server.address") == "127.0.0.1"
+                and st.context.headers.get("Host") == "127.0.0.1:8502")
+    except Exception:
+        return False
+
+
+def render_fyers_quick_authorize(credentials, vault=None):
+    if not credentials or not _local_callback_allowed() or not broker_allowed("FYERS"):
+        return
+    st.markdown("#### Quick FYERS renewal")
+    st.caption("One-time FYERS dashboard setup: set your non-trading app redirect URL to "
+               + local_oauth.CALLBACK + " if FYERS accepts this local address. "
+               "After signing in, CCS captures the authorization code and verifies the token automatically.")
+    try:
+        state, url = local_oauth.prepare(credentials, vault, st.session_state.get("_fyers_local_state"))
+        st.session_state["_fyers_local_state"] = state
+        st.link_button("Authorize FYERS · automatic return ↗", url, type="primary", use_container_width=True)
+        st.caption("Daily FYERS confirmation may still be required. Keep CCS running; use the returned browser tab.")
+    except FyersDataError as exc:
+        st.warning(str(exc))
+
+
+def handle_fyers_local_return():
+    if "auth_code" not in st.query_params and "state" not in st.query_params:
+        return
+    states = st.query_params.get_all("state")
+    codes = st.query_params.get_all("auth_code")
+    st.query_params.clear()
+    try:
+        access, vault, secret = local_oauth.consume(
+            states, codes, windows_credentials=read_app_from_vault() if sys.platform == "win32" else None,
+            allow=_local_callback_allowed() and broker_allowed("FYERS"))
+        st.session_state["_fyers_access"] = access
+        try:
+            if vault is not None:
+                st.session_state["_fyers_mobile_vault"] = vault
+                vault.save_access(access, secret)
+            else:
+                save_access_to_vault(access)
+            st.session_state["_fyers_session_note"] = "FYERS verified and saved. No token copying required."
+        except (FyersDataError, VaultError):
+            st.session_state["_fyers_session_note"] = "FYERS verified for this session; secure storage unavailable."
+        st.success(st.session_state["_fyers_session_note"])
+    except (FyersDataError, VaultError) as exc:
+        st.warning(str(exc))
+
+
 def render_fyers_settings():
     st.markdown("### FYERS · read-only market data")
     if not broker_allowed("FYERS"):
@@ -71,7 +122,7 @@ def render_fyers_settings():
         "[Create a non-trading FYERS app]"
         "(https://fyers.in/web/api-dashboard/user-apps) · "
         "App name: **Covered Call Strategy Builder** · "
-        "Redirect URL: `https://trade.fyers.in/api-login/redirect-uri/index.html`"
+        "Manual fallback redirect URL: `https://trade.fyers.in/api-login/redirect-uri/index.html`"
     )
     windows = sys.platform == "win32"
     vault = st.session_state.get("_fyers_mobile_vault") if not windows else None
@@ -107,6 +158,8 @@ def render_fyers_settings():
                 return
         else:
             st.caption("Save your FYERS App ID and Secret once in an encrypted vault. No Windows credential manager needed.")
+    if existing and not connected_fyers():
+        render_fyers_quick_authorize(existing, vault)
     if vault:
         if not connected_fyers() and not st.session_state.get("_fyers_oauth_state"):
             prepare_saved_login(st.session_state, vault.credentials())
@@ -275,6 +328,7 @@ def render_fyers_settings():
                 technical_job["stop"].set()
             for key in ("fno_fyers_cash_snapshot", "fno_fyers_chain_snapshot"):
                 st.session_state.pop(key, None)
+            local_oauth.cancel(st.session_state.pop("_fyers_local_state", None))
             if windows:
                 forget_vault()
             elif vault:
