@@ -324,6 +324,36 @@ button:focus-visible,a:focus-visible { outline:2px solid var(--accent) !importan
  .st-key-ccs_refresh_ready button[kind="primary"] p {color:var(--surface) !important;}
 }
 
+
+/* Home-only spacing correction. Keep the shared palette, dock and data flow. */
+@media(max-width:760px) {
+ .block-container:has(.ccs-ios-summary) { padding-top:2.5rem !important; }
+ .block-container:has(.ccs-ios-summary) .ccs-ios-title {
+   min-height:0; padding:3px 0 2px; line-height:1.25 !important;
+ }
+ .block-container:has(.ccs-ios-summary) .ccs-ios-status {
+   line-height:1.4; min-height:18px; padding:2px 0 6px;
+ }
+ .ccs-ios-summary { box-sizing:border-box; margin-top:5px; padding:18px; }
+ .ccs-ios-count { display:flex; align-items:baseline; flex-wrap:wrap; gap:6px;
+   line-height:1.15; margin:12px 0 8px; }
+ .ccs-ios-count span { line-height:1.25; }
+ .ccs-ios-summarygrid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+ .ccs-ios-summarygrid strong { line-height:1.25; overflow-wrap:anywhere; }
+ .st-key-ccs_ios_connect {
+   box-sizing:border-box; background:var(--surface) !important;
+   border:1px solid var(--border) !important; padding:12px !important;
+   margin:8px 0 4px !important;
+ }
+ .st-key-ccs_ios_connect [data-testid="stVerticalBlock"] { gap:.35rem !important; }
+ .st-key-ccs_ios_connect [data-testid="stCaptionContainer"] p {
+   color:var(--settings-muted) !important; opacity:1 !important; line-height:1.4;
+ }
+ .st-key-ccs_ios_connect .stMarkdown p { margin:0; line-height:1.4; }
+ .st-key-ccs_ios_connect button { margin-top:4px; }
+ .ccs-ios-empty { padding:12px 8px 16px; line-height:1.45; }
+}
+
 """
 
 
