@@ -133,12 +133,13 @@ def main():
             cards=page.locator('[class*="st-key-ccs_ios_saved_card_"]')
             cards.first.wait_for()
             expect(cards).to_have_count(1)
+            cached_symbol=cards.first.locator(".ccs-ios-stockhead b").inner_text()
             before=cards.first.locator(".ccs-ios-stockhead").evaluate("(el)=>[el.outerHTML,el.nextElementSibling.outerHTML,el.nextElementSibling.nextElementSibling.outerHTML]")
             verify_theme(page,f"{w}-before-accept")
             page.get_by_role("button",name="Update now").click(timeout=30000)
             page.get_by_text("Showing 1–12 of 18",exact=True).wait_for(timeout=30000)
             expect(cards).to_have_count(12)
-            after=cards.first.locator(".ccs-ios-stockhead").evaluate("(el)=>el.parentElement.innerHTML")
+            after=cards.filter(has=page.locator(".ccs-ios-stockhead b",has_text=cached_symbol)).first.locator(".ccs-ios-stockhead").evaluate("(el)=>[el.outerHTML,el.nextElementSibling.outerHTML,el.nextElementSibling.nextElementSibling.outerHTML]")
             assert before==after, "cached and accepted card markup differs for unchanged stock"
             assert page.locator('[class*="st-key-ccs_ios_tiles_"]').count()==0
             verify_theme(page,f"{w}-after-accept")
