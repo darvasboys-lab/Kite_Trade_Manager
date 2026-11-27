@@ -753,10 +753,12 @@ def render_selective_home():
                                index=(3 if phone_layout() else snapshot["maximum"]-4 if snapshot else 3),
                                format_func=lambda value: f"₹{value}L", horizontal=True,
                                key="selective_contract_choice")
-            minimum = left.radio("5%+ OTM CE premium above", [2, 3, 4, 5, 6, 7, 8],
-                               index=(3 if phone_layout() else snapshot["minimum"]-2 if snapshot else 0),
-                               format_func=lambda value: f"{value}%", horizontal=True,
-                               key="selective_premium_choice")
+            premium_choices = list(range(9))
+            minimum = left.radio("Minimum CE premium (% of CMP)", premium_choices,
+                               index=(0 if phone_layout() else snapshot["minimum"] if snapshot else 2),
+                               format_func=lambda value: f"{value}%" if value else "Any quoted premium",
+                               horizontal=True, key="selective_premium_choice",
+                               help="Independent of strike selection. The CE strike is always at least 5% above CMP.")
             r1_filter = right.radio("Monthly R1 filter", [R1_ALL, R1_ABOVE],
                                  index=(0 if phone_layout() else int(bool(snapshot and snapshot.get("r1_filter") == R1_ABOVE))),
                                  horizontal=True, key="selective_r1_choice",
