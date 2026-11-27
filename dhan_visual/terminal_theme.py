@@ -95,24 +95,56 @@ button:focus-visible,a:focus-visible { outline:2px solid var(--accent) !importan
 @media(max-width:760px) {
  .block-container { padding:.9rem .8rem 1.2rem !important; }
  .ps-header { padding:12px; } .ps-brand h1 { font-size:19px; } .ps-sub { margin-left:0; }
+ /* Native radio retains its actual state, keyboard support and lazy routing. */
+ .st-key-ccs_selective_page {
+   position:fixed !important; left:0; right:0; bottom:0; z-index:999;
+   background:var(--surface); border-top:1px solid var(--border);
+   padding:6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
+   box-shadow:0 -5px 20px #0002;
+ }
+ .st-key-ccs_selective_page [data-testid="stWidgetLabel"] { display:none; }
  .st-key-ccs_selective_page [role="radiogroup"] {
-   display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; border:0;
+   display:grid !important; grid-template-columns:repeat(5,minmax(0,1fr)); gap:3px; border:0;
  }
  .st-key-ccs_selective_page [role="radiogroup"] > label {
-   min-height:44px; padding:8px; border:1px solid var(--border);
-   border-radius:8px; background:var(--surface); margin:0 !important;
+   display:flex !important; flex-direction:column; align-items:center; justify-content:center;
+   min-width:0; min-height:52px; padding:5px 1px; border:1px solid transparent;
+   border-radius:9px; margin:0 !important; gap:3px; position:relative;
+   color:var(--muted); cursor:pointer;
  }
+ .st-key-ccs_selective_page [role="radiogroup"] > label > div:first-child { position:absolute; opacity:0; width:1px; height:1px; overflow:hidden; }
+ .st-key-ccs_selective_page [role="radiogroup"] > label p { font-size:0 !important; line-height:0; margin:0; }
+ .st-key-ccs_selective_page [role="radiogroup"] > label::before { font-size:19px; line-height:22px; font-weight:650; }
+ .st-key-ccs_selective_page [role="radiogroup"] > label::after { font-size:10px; line-height:14px; font-weight:650; }
+ .st-key-ccs_selective_page [role="radiogroup"] > label:nth-child(1)::before { content:"⌂"; }
+ .st-key-ccs_selective_page [role="radiogroup"] > label:nth-child(2)::before { content:"⌕"; }
+ .st-key-ccs_selective_page [role="radiogroup"] > label:nth-child(3)::before { content:"◇"; }
+ .st-key-ccs_selective_page [role="radiogroup"] > label:nth-child(4)::before { content:"▥"; }
+ .st-key-ccs_selective_page [role="radiogroup"] > label:nth-child(5)::before { content:"⚙"; }
+ .st-key-ccs_selective_page [role="radiogroup"] > label:nth-child(1)::after { content:"Home"; }
+ .st-key-ccs_selective_page [role="radiogroup"] > label:nth-child(2)::after { content:"Screener"; }
+ .st-key-ccs_selective_page [role="radiogroup"] > label:nth-child(3)::after { content:"Strategy"; }
+ .st-key-ccs_selective_page [role="radiogroup"] > label:nth-child(4)::after { content:"Trades"; }
+ .st-key-ccs_selective_page [role="radiogroup"] > label:nth-child(5)::after { content:"Settings"; }
  .st-key-ccs_selective_page [role="radiogroup"] > label:has(input:checked) {
-   background:var(--tint); border-color:var(--accent);
+   background:var(--tint); border-color:var(--accent); color:var(--accent);
  }
- .st-key-ccs_selective_page [role="radiogroup"] > label:last-child {
-   grid-column:1 / -1;
- }
+ .st-key-ccs_selective_page [role="radiogroup"] > label:focus-within { outline:2px solid var(--accent); }
+ .block-container { padding-bottom:calc(94px + env(safe-area-inset-bottom, 0px)) !important; }
+ .ccs-card-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
+ .ccs-card-grid > div { background:var(--surface2); border:1px solid var(--border); padding:8px; border-radius:8px; min-width:0; }
+ .ccs-card-grid small { display:block; font-size:11px; color:var(--muted); }
+ .ccs-card-grid strong { display:block; font-size:15px; color:var(--text); overflow-wrap:anywhere; }
  [data-testid="stHorizontalBlock"] { flex-wrap:wrap; gap:.55rem; }
  [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
    flex:1 1 100% !important; width:100% !important; min-width:0 !important;
  }
- [data-testid="stWidgetLabel"] p, [data-testid="stCaptionContainer"] p { font-size:13px; }
+ [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] [data-testid="stMetric"]) > [data-testid="stColumn"] { flex:1 1 calc(50% - .55rem) !important; width:calc(50% - .55rem) !important; }
+ .st-key-ccs_phone_header [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] { flex:1 1 0 !important; width:auto !important; }
+ .st-key-ccs_phone_header .stButton button { min-height:38px; }
+ .ps-chips .ps-chip:not(.safe) { display:none; }
+ .ps-sub { display:none; }
+ [data-testid="stWidgetLabel"] p, [data-testid="stCaptionContainer"] p { font-size:12px; }
  [data-testid="stMetricValue"] > div { font-size:20px !important; }
  [data-testid="stMetric"] { min-height:58px; padding:8px 12px; }
  [data-testid="stForm"] { padding:10px !important; }
