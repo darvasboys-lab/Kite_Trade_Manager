@@ -15,10 +15,13 @@ def call_detail(call, *, symbol, expiry, premium_pct, lot=None):
             return None
         if (ltp * 100 / spot).quantize(Decimal("0.01")) != premium:
             return None
+    except (InvalidOperation, ValueError, TypeError, ArithmeticError):
+        return None
+    try:
         qty = Decimal(str(lot))
         lot_credit = ltp * qty if qty.is_finite() and qty > 0 and qty == qty.to_integral_value() else None
     except (InvalidOperation, ValueError, TypeError, ArithmeticError):
-        return None
+        lot_credit = None
     return {
         "symbol": symbol, "expiry": expiry, "strike": str(strike),
         "underlying_ltp": str(spot), "call_ltp": str(ltp),
