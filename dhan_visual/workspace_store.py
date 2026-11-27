@@ -27,7 +27,7 @@ def filters(data):
         raise ValueError("Invalid filters.")
     maximum, minimum, expiry, r1 = (data.get(k) for k in ("maximum","minimum","expiry","r1_filter"))
     if (type(maximum) is not int or maximum not in range(4,11)
-            or type(minimum) is not int or minimum not in range(2,9)
+            or type(minimum) is not int or minimum not in range(0,9)
             or not isinstance(expiry,str) or not MONTH.fullmatch(expiry)
             or r1 not in ("Include all stocks","Above R1 only")):
         raise ValueError("Invalid scan filters.")
