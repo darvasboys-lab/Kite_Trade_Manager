@@ -27,10 +27,10 @@ if not exist "%APP_PY%" (
 )
 if not exist "%APP_PY%" goto failed
 
-"%APP_PY%" -c "import streamlit, pandas, plotly, yfinance, requests; from packaging.version import Version; assert Version(streamlit.__version__) >= Version('1.50.0')" >nul 2>nul
+"%APP_PY%" -c "import streamlit, pandas, plotly, yfinance, requests, cryptography; from packaging.version import Version; assert Version(streamlit.__version__) >= Version('1.50.0')" >nul 2>nul
 if errorlevel 1 (
     echo [DHAN] Installing or updating read-only screener dependencies...
-    "%APP_PY%" -m pip install "streamlit>=1.50,<2" "pandas>=2,<3" "plotly>=5,<7" "yfinance>=0.2,<1" "requests>=2,<3"
+    "%APP_PY%" -m pip install "streamlit>=1.50,<2" "pandas>=2,<3" "plotly>=5,<7" "yfinance>=0.2,<1" "requests>=2,<3" "cryptography>=44,<49"
     if errorlevel 1 goto failed
 )
 
