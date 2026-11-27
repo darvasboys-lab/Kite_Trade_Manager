@@ -44,7 +44,7 @@ def startup_filters(expiries):
     """Defaults for each new mobile Home session, independent of the cache."""
     if not expiries:
         raise ValueError("No verified expiry is available.")
-    return dict(expiry=expiries[0], maximum=7, minimum=5,
+    return dict(expiry=expiries[0], maximum=7, minimum=0,
                 r1_filter="Include all stocks")
 
 
@@ -195,6 +195,11 @@ def render_mobile_refresh(access, universe, filters, apply):
             if not shown.get("complete"):
                 label += " · previous scan completeness unverified"
             st.caption(f"{label} · {timestamp:%d %b %H:%M IST} · {shown['filters']['expiry']}")
+            cutoff = shown["filters"]["minimum"]
+            premium_label = f"CE premium > {cutoff}%" if cutoff else "Any quoted CE premium"
+            st.caption(f"Strike ≥ 5% above CMP · {premium_label} · contract < ₹{shown['filters']['maximum']}L")
+            if active:
+                st.caption(f"{len(active['cash'])} stock prices loaded · {len(active['attempted'])} option chains checked · {len(frame)} matches")
         job = st.session_state.get(JOB)
         if not job and st.button("Retry refresh" if st.session_state.get(ERROR) else "Refresh data", key="ccs_mobile_refresh", use_container_width=True):
             st.session_state[AUTO] = token_scope
@@ -204,7 +209,5 @@ def render_mobile_refresh(access, universe, filters, apply):
             st.markdown(f"#### Opportunities · {len(frame)}")
             _display(frame, strategy_context=({item.entry.symbol:item.entry for item in available},
                        active["expiry"],active["key"],active["scan_day"]))
-            from .workspace_ui import save_scan_controls
-            save_scan_controls(active, frame, automatic=False)
         else:
             render_ios_saved_shortlist(saved)
