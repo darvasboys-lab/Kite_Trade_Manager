@@ -1,6 +1,5 @@
 """Mobile-only refresh and atomic publication of complete scans."""
 from datetime import datetime
-from html import escape
 import json
 import pandas as pd
 import streamlit as st
@@ -38,6 +37,50 @@ def payload_for(snapshot, frame):
                 rows=rows)
 
 
+
+def should_auto_start(previous_scope, token_scope, job, apply=False):
+    return not job and (apply or previous_scope != token_scope)
+
+
+def render_saved_summary(shown, filters, *, status=None):
+    """One summary for locked, loading and connected Home."""
+    rows = (shown or {}).get("rows", [])
+    vals = [r.get("5%+ OTM CE (%)") for r in rows]
+    vals = [v for v in vals if isinstance(v, (int, float))]
+    best = f"{max(vals):.2f}%" if vals else "—"
+    maximum = (shown or {}).get("filters", filters).get("maximum", 7)
+    count = str(len(rows)) if shown is not None else "—"
+    ratio = "100%" if shown and shown.get("complete") else "0%"
+    if status is None:
+        status = "Last accepted scan" if shown and shown.get("complete") else "Saved / awaiting verified scan"
+    st.markdown(
+        '<div class="ccs-ios-summary"><small>OTM COVERED CALL SCANNER</small>'
+        f'<div class="ccs-ios-count">{count} <span>opportunities</span></div>'
+        f'<div class="ccs-ios-progress"><i style="width:{ratio}"></i></div><small>{status}</small>'
+        '<div class="ccs-ios-summarygrid">'
+        f'<div><small>Highest CE premium</small><strong>{best}</strong></div>'
+        f'<div><small>Contract limit</small><strong>₹{int(maximum)} lakh</strong></div></div></div>',
+        unsafe_allow_html=True)
+
+
+def publish_candidate(candidate, universe, *, initial=False):
+    from .selective_scan import STATE, _universe_rows, qualified_rows
+    frame = qualified_rows(_universe_rows(universe, candidate["expiry"]), candidate)
+    payload = payload_for(candidate, frame)
+    def publish(data):
+        if initial and data.get("snapshot") is not None:
+            raise ValueError("Initial snapshot already exists.")
+        data["snapshot"] = payload
+        if data["remember"]:
+            data["preferences"]["filters"] = payload["filters"]
+    if not save_change(publish):
+        return False
+    st.session_state[STATE] = candidate
+    st.session_state.pop(JOB, None)
+    st.session_state.pop(ERROR, None)
+    return True
+
+
 def begin(access, universe, filters):
     from .selective_scan import _universe_rows
     old = st.session_state.get(JOB)
@@ -55,7 +98,6 @@ def begin(access, universe, filters):
 
 @st.fragment(run_every="2s")
 def refresh_panel(universe):
-    from .selective_scan import STATE, _universe_rows, qualified_rows
     job = st.session_state.get(JOB)
     access = connected_fyers()
     if not job:
@@ -89,20 +131,18 @@ def refresh_panel(universe):
         st.session_state.pop(JOB,None)
         st.rerun(scope="app")
         return
+    # Bootstrap exactly once: no previous dashboard exists to protect.
+    data = load_workspace()
+    if data is not None and data.get("snapshot") is None and not job.get("initial_save_attempted"):
+        job["initial_save_attempted"] = True
+        if publish_candidate(candidate, universe, initial=True):
+            st.rerun(scope="app")
+            return
     with st.container(key="ccs_refresh_ready", border=True):
         st.markdown("**✓ Fresh data available**")
         st.caption("100% · All scan stages finished. Apply together.")
         if st.button("Update now", key="ccs_apply_refresh", type="primary", use_container_width=True):
-            frame = qualified_rows(_universe_rows(universe,candidate["expiry"]),candidate)
-            payload = payload_for(candidate, frame)
-            def publish(data):
-                data["snapshot"] = payload
-                if data["remember"]:
-                    data["preferences"]["filters"] = payload["filters"]
-            if save_change(publish):
-                st.session_state[STATE] = candidate
-                st.session_state.pop(JOB,None)
-                st.session_state.pop(ERROR,None)
+            if publish_candidate(candidate, universe):
                 st.rerun(scope="app")
         if st.button("Keep old data", key="ccs_discard_refresh"):
             st.session_state.pop(JOB,None)
@@ -119,34 +159,18 @@ def render_mobile_refresh(access, universe, filters, apply):
         active = None
     # Only once per connected session/authorization, never on a timed rerun.
     token_scope = _scope(access, [], "")
-    if apply:
+    if should_auto_start(st.session_state.get(AUTO), token_scope, st.session_state.get(JOB), apply):
         st.session_state[AUTO] = token_scope
-        begin(access,universe,filters)
-    elif saved and st.session_state.get(AUTO) != token_scope:
-        st.session_state[AUTO] = token_scope
-        begin(access,universe,filters)
+        begin(access, universe, filters)
+    elif apply and st.session_state.get(JOB):
+        st.session_state[ERROR] = "Finish, accept or discard the current refresh first."
     if active:
         available = _universe_rows(universe,active["expiry"])
         frame = qualified_rows(available,active)
         shown = payload_for(active, frame)
     else:
         shown = saved
-    rows = (shown or {}).get("rows",[])
-    vals = [r.get("5%+ OTM CE (%)") for r in rows]
-    vals = [v for v in vals if isinstance(v,(int,float))]
-    best = f"{max(vals):.2f}%" if vals else "—"
-    maximum = (shown or {}).get("filters",filters)["maximum"]
-    count = str(len(rows)) if shown else "—"
-    ratio = "100%" if shown and shown.get("complete") else "0%"
-    status = "Last accepted scan" if shown and shown.get("complete") else "Saved / awaiting verified scan"
-    st.markdown(
-        '<div class="ccs-ios-summary"><small>OTM COVERED CALL SCANNER</small>'
-        f'<div class="ccs-ios-count">{count} <span>opportunities</span></div>'
-        f'<div class="ccs-ios-progress"><i style="width:{ratio}"></i></div><small>{status}</small>'
-        '<div class="ccs-ios-summarygrid">'
-        f'<div><small>Highest CE premium</small><strong>{best}</strong></div>'
-        f'<div><small>Contract limit</small><strong>₹{int(maximum)} lakh</strong></div></div></div>',
-        unsafe_allow_html=True)
+    render_saved_summary(shown, filters)
     with st.container(key="ccs_mobile_results"):
         if shown:
             timestamp = datetime.fromisoformat(shown["saved_at"]).astimezone(IST)
