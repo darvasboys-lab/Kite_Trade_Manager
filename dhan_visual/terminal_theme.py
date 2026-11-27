@@ -231,5 +231,4 @@ def apply_terminal_theme(dark: bool) -> None:
     palette = DARK if dark else LIGHT
     variables = ";".join(f"--{key}:{value}" for key, value in palette.items())
     # Only static trusted palette values and CSS are interpolated.
-    st.markdown(f"<style>:root{{{variables};color-scheme:{'dark' if dark else 'light'}}}{CSS}</style>",
-                unsafe_allow_html=True)
+    st.html(f"<style>:root{{{variables};color-scheme:{'dark' if dark else 'light'}}}{CSS}</style>")
