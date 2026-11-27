@@ -506,6 +506,114 @@ def render_futures_discount_request(access, universe, expiry):
     st.session_state[FUTURES_STATE] = state
 
 
+
+def render_home_fyers_unlock():
+    """Daily mobile authorization stays on Home; Settings is only for setup."""
+    import sys
+    from .mobile_fyers_vault import MobileVault, VaultError, exists
+    from .fyers_ui import _local_callback_allowed
+    from .fyers_readonly import (authorization_url, exchange_code, new_state,
+                                parse_authorization_return)
+    from . import fyers_local_oauth as oauth
+
+    state = st.session_state
+    if sys.platform == "win32" or not (exists() or state.get("_fyers_mobile_vault")):
+        st.button("Set up FYERS" if sys.platform != "win32" else "Connection settings",
+                  key="ccs_ios_connect_settings", use_container_width=True,
+                  on_click=lambda: state.update(ccs_selective_page="⚙ Settings"))
+        return
+    if not state.get("ccs_home_fyers_unlock"):
+        st.button("Unlock FYERS", key="ccs_home_fyers_start", type="primary",
+                  use_container_width=True,
+                  on_click=lambda: state.update(ccs_home_fyers_unlock=True))
+        return
+
+    def finish(access, note):
+        state["_fyers_access"] = access
+        state["fno_fyers_select_on_next_run"] = True
+        state["_fyers_session_note"] = note
+        state.pop("ccs_home_fyers_unlock", None)
+        state.pop("ccs_home_manual_state", None)
+        oauth.cancel(state.pop("_fyers_local_state", None))
+        st.rerun()
+
+    if st.button("Cancel", key="ccs_home_fyers_cancel"):
+        state.pop("ccs_home_fyers_unlock", None)
+        state.pop("ccs_home_manual_state", None)
+        oauth.cancel(state.pop("_fyers_local_state", None))
+        st.rerun()
+
+    vault = state.get("_fyers_mobile_vault")
+    if vault is None:
+        with st.form("ccs_home_fyers_passphrase", clear_on_submit=True):
+            password = st.text_input("Vault passphrase", type="password",
+                                     autocomplete="current-password")
+            submitted = st.form_submit_button("Unlock", type="primary",
+                                              use_container_width=True)
+        st.caption("Use your phone password manager for fingerprint-assisted autofill if available.")
+        if submitted:
+            try:
+                vault = MobileVault.unlock(password)
+                state["_fyers_mobile_vault"] = vault
+                state.pop("_fyers_access", None)
+                state.pop("_fyers_session_note", None)
+                oauth.cancel(state.pop("_fyers_local_state", None))
+                for key in ("_fyers_pending_app", "_fyers_pending_secret", "_fyers_oauth_state",
+                            "fyers_local_app_id", "fyers_local_app_secret", "ccs_home_manual_state"):
+                    state.pop(key, None)
+            except VaultError as exc:
+                st.error(str(exc))
+                return
+            access = vault.access()
+            if access:
+                finish(access, "Unexpired token restored from encrypted mobile vault.")
+            st.rerun()
+        return
+
+    access = vault.access()
+    if access:
+        finish(access, "Unexpired token restored from encrypted mobile vault.")
+    credentials = vault.credentials()
+    local = _local_callback_allowed()
+    if local:
+        try:
+            pending, url = oauth.prepare(credentials, vault, state.get("_fyers_local_state"))
+            state["_fyers_local_state"] = pending
+            st.link_button("Authorize FYERS", url, type="primary", use_container_width=True)
+            st.caption("Complete FYERS sign-in. Its local redirect opens CCS Home automatically.")
+        except FyersDataError as exc:
+            st.warning(str(exc))
+    with st.expander("Manual authorization fallback", expanded=not local):
+        if not local:
+            st.caption("Automatic return requires CCS at its configured local callback address.")
+        manual = state.get("ccs_home_manual_state")
+        if not manual:
+            manual = new_state()
+            state["ccs_home_manual_state"] = manual
+        st.link_button("Open FYERS login", authorization_url(credentials[0], manual),
+                       use_container_width=True)
+        with st.form("ccs_home_fyers_return", clear_on_submit=True):
+            redirected = st.text_input("Paste full FYERS redirect URL", type="password",
+                                       autocomplete="off")
+            connect = st.form_submit_button("Connect FYERS", type="primary",
+                                            use_container_width=True)
+        if connect:
+            try:
+                code = parse_authorization_return(redirected, manual)
+                state.pop("ccs_home_manual_state", None)
+                access = exchange_code(credentials[0], credentials[1], code)
+                if "TCS" not in fetch_cash_quotes(access, ["TCS"]):
+                    raise FyersDataError("FYERS market-data verification failed. Sign in again.")
+                try:
+                    vault.save_access(access, credentials[1])
+                    note = "FYERS verified and saved."
+                except (VaultError, FyersDataError):
+                    note = "FYERS verified for this session; secure storage unavailable."
+                finish(access, note)
+            except FyersDataError as exc:
+                st.error(str(exc))
+
+
 def render_ios_disconnected_home():
     """Local-only empty state; saved rows never become live strategy inputs."""
     from .workspace_ui import load_workspace
@@ -528,10 +636,12 @@ def render_ios_disconnected_home():
         else:
             st.markdown("**Connect FYERS**")
             st.caption("Renew your daily session" if active_broker() == "FYERS" else "Select FYERS in Settings")
-        st.button("Unlock FYERS" if active_broker() == "FYERS" else "Connection settings",
-                  key="ccs_ios_connect_settings", use_container_width=True,
-                  disabled=bool(st.session_state.get(PENDING_KEY)),
-                  on_click=lambda: st.session_state.update(ccs_selective_page="⚙ Settings"))
+        if active_broker() == "FYERS" and not st.session_state.get(PENDING_KEY):
+            render_home_fyers_unlock()
+        else:
+            st.button("Connection settings", key="ccs_ios_connect_settings",
+                      use_container_width=True, disabled=bool(st.session_state.get(PENDING_KEY)),
+                      on_click=lambda: st.session_state.update(ccs_selective_page="⚙ Settings"))
     render_ios_saved_shortlist(saved, disconnected=True)
 
 
@@ -585,6 +695,9 @@ def render_selective_home():
         render_stock_strategy()
         return
     access = connected_fyers()
+    if access:
+        st.session_state.pop("ccs_home_fyers_unlock", None)
+        st.session_state.pop("ccs_home_manual_state", None)
     if phone_layout() and not access:
         render_ios_disconnected_home()
         return
