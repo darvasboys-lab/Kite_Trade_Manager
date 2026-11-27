@@ -328,7 +328,7 @@ def parse_quotes(payload: dict, tickers: list[str], stamp: str) -> dict[str, Quo
 
 
 def fetch_cash_quotes(access: FyersAccess, tickers: list[str], *,
-                      get=None) -> dict[str, Quote]:
+                      get=None, progress=None) -> dict[str, Quote]:
     wanted = list(dict.fromkeys(t for t in tickers if SYMBOL_RE.fullmatch(t)))
     output = {}
     stamp = datetime.now(INDIA).isoformat(timespec="seconds")
@@ -338,6 +338,8 @@ def fetch_cash_quotes(access: FyersAccess, tickers: list[str], *,
                         {"symbols": ",".join(nse_equity_symbol(t) for t in batch)},
                         get=get)
         output.update(parse_quotes(response, batch, stamp))
+        if progress is not None:
+            progress(offset + len(batch), len(wanted), len(output))
     return output
 
 
