@@ -13,6 +13,38 @@ CURRENT = None
 JOB = "ccs_mobile_refresh_job"
 
 
+
+def fetch_cash_batch(access, batch, cancel, check, fetch, report):
+    """Retry only temporary transport/5xx failures or missing quotes, once.
+    All requests still pass through the shared FYERS rate gate.
+    """
+    result = {}
+    pending = list(batch)
+    for attempt in range(2):
+        check()
+        try:
+            result.update(fetch(access, pending))
+        except FyersDataError as exc:
+            message = str(exc)
+            temporary = (message == "FYERS market-data service is unreachable."
+                         or message in {f"FYERS market data HTTP {code}."
+                                        for code in (500, 502, 503, 504)})
+            if not temporary or attempt:
+                raise
+            report("Temporary connection error · retrying in 5 seconds")
+        else:
+            pending = [symbol for symbol in batch if symbol not in result]
+            if not pending:
+                return result
+            if attempt:
+                break
+            report(f"{len(pending)} missing stock prices · retrying only missing symbols")
+        if cancel.wait(5):
+            check()
+        check()
+    return result
+
+
 def collect(access, available, filters, key, cancel, report):
     from . import selective_scan as s
     from .fyers_readonly import fetch_cash_quotes
@@ -28,16 +60,22 @@ def collect(access, available, filters, key, cancel, report):
     symbols = list(dict.fromkeys(item.entry.symbol for item in available))
     if not symbols:
         raise FyersDataError("No verified instruments for this expiry.")
-    report(0, "Loading stock prices")
+    total_batches = (len(symbols) + 49) // 50
     for i in range(0, len(symbols), 50):
         check()
         batch = symbols[i:i+50]
-        snap["cash"].update(fetch_cash_quotes(access, batch))
-        report(20 * min(i+len(batch),len(symbols)) // len(symbols), "Loading stock prices")
+        number = i // 50 + 1
+        percent = 20 * i // len(symbols)
+        report(percent, f"Stock prices: batch {number}/{total_batches} · {len(snap['cash'])}/{len(symbols)} received")
+        snap["cash"].update(fetch_cash_batch(
+            access, batch, cancel, check, fetch_cash_quotes,
+            lambda stage: report(percent, f"Stock prices: batch {number}/{total_batches} · {stage}")))
+        report(20 * min(i+len(batch),len(symbols)) // len(symbols),
+               f"Stock prices: {len(snap['cash'])}/{len(symbols)} received")
     check()
-    missing = set(symbols) - set(snap["cash"])
+    missing = [symbol for symbol in symbols if symbol not in snap["cash"]]
     if missing:
-        raise FyersDataError(f"{len(missing)} stock prices unavailable. Previous data retained.")
+        raise FyersDataError(f"{len(missing)} stock prices unavailable: {', '.join(missing[:8])}. Previous data retained.")
     snap["cash_at"] = s._stamp()
     candidates = s.pending_option_symbols(available, snap)
     total = len(candidates)
