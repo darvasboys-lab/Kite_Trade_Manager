@@ -187,6 +187,7 @@ def render_fyers_settings():
                         changed = (validate_app_id(app_id), _valid_secret(app_secret)) != vault.credentials()
                         vault.save_credentials(app_id, app_secret)
                         if changed:
+                            local_oauth.cancel(st.session_state.pop("_fyers_local_state", None))
                             for key in ("_fyers_access", "_fyers_pending_app", "_fyers_pending_secret", "_fyers_oauth_state"):
                                 st.session_state.pop(key, None)
                         if changed:
@@ -198,6 +199,7 @@ def render_fyers_settings():
                 if st.checkbox("Confirm remove saved credentials", key="fyers_mobile_delete_confirm"):
                     if st.button("Delete encrypted FYERS vault", key="fyers_mobile_delete"):
                         try:
+                            local_oauth.cancel(st.session_state.pop("_fyers_local_state", None))
                             vault.forget()
                             for key in ("_fyers_mobile_vault", "_fyers_access", "_fyers_pending_app",
                                         "_fyers_pending_secret", "_fyers_oauth_state",
