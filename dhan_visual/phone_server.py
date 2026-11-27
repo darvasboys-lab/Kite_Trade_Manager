@@ -126,6 +126,8 @@ def report_scan_progress(s, available, stage, *, complete=False):
 def finish_scan_progress(s,available):
     complete = bool(s["cash_at"]) and not s["stopped"] and not automatic_work_pending(available,s)
     report_scan_progress(s,available,"stopped" if s["stopped"] else "complete" if complete else "waiting",complete=complete)
+    if complete and not s.get("completed_at"):
+        s["completed_at"] = datetime.now(IST).isoformat()
 
 
 def scan_result():
@@ -153,7 +155,8 @@ def scan_result():
         row["technical_asof"] = getattr(levels,"asof",None)
         row["otm_call_detail"] = call_detail(s["calls"].get(symbol),symbol=symbol,
             expiry=s["expiry"],premium_pct=row.get("5%+ OTM CE (%)"),lot=row.get("Lot size"))
-    return {"rows": rows, "expiry": s["expiry"],
+    return {"rows": rows, "expiry": s["expiry"], "scan_id":s.get("scan_id"),
+            "completed_at":s.get("completed_at"),"cash_asof":s["cash_at"],"scan_day":s["scan_day"],
             "checked": len(set(candidates["Stock"]) & s["attempted"]),
             "total": len(candidates), "cash": len(s["cash"]),
             "pending": not s["stopped"] and automatic_work_pending(available,s),
@@ -241,6 +244,7 @@ def dispatch(route,d):
         if LAST_BATCH and now-LAST_BATCH < 60:
             return {"rows":[],"pending":False,"cooldown":max(1,ceil(60-(now-LAST_BATCH)))}
         s = new_snapshot("phone",expiry,maximum,minimum,r1_filter)
+        s["scan_id"] = secrets.token_hex(16)
         STATE["scan"] = s
         available = _universe_rows(catalogue(),expiry)
         PROGRESS.reset(d.get("progress_id"))
@@ -294,6 +298,8 @@ def dispatch(route,d):
         s = STATE["scan"]
         if not s or s["stopped"]:
             raise PhoneInputError("No active scan.")
+        if not d.get("scan_id") or d["scan_id"] != s.get("scan_id") or result["pending"]:
+            raise PhoneInputError("Accept the completed fresh scan before checking intraday R1.")
         requested = d["symbols"]
         if not isinstance(requested,list) or len(requested)>10:
             raise PhoneInputError("Select at most ten symbols.")
