@@ -1,0 +1,28 @@
+name: CCS Smart Suggestions
+on:
+  pull_request:
+    paths:
+      - 'dhan_visual/smart_suggestions.py'
+      - 'dhan_visual/phone/**'
+      - 'dhan_visual/phone_server.py'
+      - 'tests/test_smart_suggestions*'
+      - '.github/workflows/ccs-smart-suggestions.yml'
+permissions:
+  contents: read
+jobs:
+  offline-ranking:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m unittest discover -s tests -p test_smart_suggestions.py
+      - run: node tests/test_smart_suggestions.cjs
+      - run: python -m py_compile dhan_visual/phone_server.py dhan_visual/smart_suggestions.py
+      - run: |
+          python -c 'import re,pathlib; s=pathlib.Path("dhan_visual/phone/index.html").read_text(); pathlib.Path("/tmp/ccs-inline.js").write_text(re.search(r"<script>\n(.*?)</script>",s,re.S).group(1))'
+          node --check /tmp/ccs-inline.js
