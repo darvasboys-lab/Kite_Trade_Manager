@@ -113,3 +113,33 @@ class MobileRefreshTests(unittest.TestCase):
                               r1_filter="Include all stocks"))
         with self.assertRaises(ValueError):
             startup_filters([])
+
+    def test_cash_retry_only_missing_symbols(self):
+        from unittest.mock import Mock
+        cancel = Mock()
+        cancel.wait.return_value = False
+        fetch = Mock(side_effect=[{"TCS": 1}, {"INFY": 2}])
+        result = refresh.fetch_cash_batch(access(), ["TCS", "INFY"], cancel,
+                                          lambda: None, fetch, lambda _: None)
+        self.assertEqual(result, {"TCS": 1, "INFY": 2})
+        self.assertEqual(fetch.call_args_list[1].args[1], ["INFY"])
+        cancel.wait.assert_called_once_with(5)
+
+    def test_cash_retry_transient_connection_once(self):
+        from unittest.mock import Mock
+        cancel = Mock()
+        cancel.wait.return_value = False
+        fetch = Mock(side_effect=[FyersDataError("FYERS market-data service is unreachable."), {"TCS": 1}])
+        self.assertEqual(refresh.fetch_cash_batch(access(), ["TCS"], cancel,
+                         lambda: None, fetch, lambda _: None), {"TCS": 1})
+        self.assertEqual(fetch.call_count, 2)
+
+    def test_cash_rate_limit_does_not_retry(self):
+        from unittest.mock import Mock
+        fetch = Mock(side_effect=FyersDataError("FYERS data rate limit (429). Stop and retry later."))
+        cancel = Mock()
+        with self.assertRaises(FyersDataError):
+            refresh.fetch_cash_batch(access(), ["TCS"], cancel,
+                                     lambda: None, fetch, lambda _: None)
+        fetch.assert_called_once()
+        cancel.wait.assert_not_called()
