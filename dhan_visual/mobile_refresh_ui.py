@@ -38,6 +38,14 @@ def payload_for(snapshot, frame):
 
 
 
+def startup_filters(expiries):
+    """Defaults for each new mobile Home session, independent of the cache."""
+    if not expiries:
+        raise ValueError("No verified expiry is available.")
+    return dict(expiry=expiries[0], maximum=7, minimum=5,
+                r1_filter="Include all stocks")
+
+
 def should_auto_start(previous_scope, token_scope, job, apply=False):
     return not job and (apply or previous_scope != token_scope)
 
@@ -131,16 +139,10 @@ def refresh_panel(universe):
         st.session_state.pop(JOB,None)
         st.rerun(scope="app")
         return
-    # Bootstrap exactly once: no previous dashboard exists to protect.
-    data = load_workspace()
-    if data is not None and data.get("snapshot") is None and not job.get("initial_save_attempted"):
-        job["initial_save_attempted"] = True
-        if publish_candidate(candidate, universe, initial=True):
-            st.rerun(scope="app")
-            return
+    # Every completed scan, including the first, awaits explicit acceptance.
     with st.container(key="ccs_refresh_ready", border=True):
         st.markdown("**✓ Fresh data available**")
-        st.caption("100% · All scan stages finished. Apply together.")
+        st.caption("100% · All scan stages finished. Tap Update now to display and save the complete results.")
         if st.button("Update now", key="ccs_apply_refresh", type="primary", use_container_width=True):
             if publish_candidate(candidate, universe):
                 st.rerun(scope="app")
