@@ -366,8 +366,7 @@ def _display_mobile_cards(frame, kind, strategy_context=None):
                     ):
                         with side:
                             val = card_value(row.get(col), col)
-                            st.markdown(f'<div class="ccs-ios-tile-label">{label}</div>', unsafe_allow_html=True)
-                            with st.popover(val, use_container_width=True, disabled=actual is None):
+                            with st.popover(f"{label} · {val}", use_container_width=True, disabled=actual is None):
                                 st.write(f"Strike: {actual.strike.normalize():f}" if actual is not None else "Strike unavailable")
                                 if actual is not None:
                                     if preset == "Covered call":
@@ -408,7 +407,7 @@ def _display_mobile_cards(frame, kind, strategy_context=None):
             with st.expander("View details"):
                 for col in frame.columns:
                     if col != "Stock":
-                        st.text(f"{col}: {card_value(row[col], col)}")
+                        st.write(f"{col}: {card_value(row[col], col)}")
                 if kind == "home" and current is not None:
                     levels = current["levels"].get(symbol)
                     price = pd.to_numeric(row.get("CMP (₹)"), errors="coerce")
@@ -423,14 +422,14 @@ def _display_mobile_cards(frame, kind, strategy_context=None):
                         for column in technical.columns:
                             if column not in ("Symbol", "Last price (₹)"):
                                 value = str(technical.iloc[0][column]).replace("✅", "✓").replace("❌", "×")
-                                st.text(f"{column}: {value}")
+                                st.write(f"{column}: {value}")
                     cross = current.get("crosses", {}).get(symbol)
                     st.caption(f"R1 crossed today: {cross.first_bar_time}" if cross is not None
                                else "R1 crossed today: not confirmed")
                 if quote is not None:
-                    st.text(f"Selected call: {quote.strike.normalize():f} CE")
+                    st.write(f"Selected call: {quote.strike.normalize():f} CE")
                 if atm is not None:
-                    st.text(f"ATM strike: {atm.strike.normalize():f} CE + PE")
+                    st.write(f"ATM strike: {atm.strike.normalize():f} CE + PE")
                 st.link_button("TradingView chart ↗", tradingview_chart_url(symbol))
     if phone_layout() and kind == "home" and end < len(frame):
         if st.button("Show more stocks", key="ccs_home_more", use_container_width=True):
@@ -742,33 +741,50 @@ def render_selective_home():
             st.session_state[FILTER_KEYS["expiry"]] = defaults["expiry"]
         default_expiry = defaults["expiry"]
     prepare_filters(expiries)
-    with st.expander("Filters", expanded=not bool(snapshot or saved)) if phone_layout() else st.container():
-        with st.form("selective_scan_filters"):
-            st.markdown("#### Quick Scan")
-            left, right = st.columns(2)
-            expiry = left.radio("Option month", expiries,
-                              index=expiries.index(default_expiry), horizontal=True,
-                              key="selective_expiry_choice")
-            maximum = right.radio("Contract size below", list(range(4, 11)),
-                               index=(3 if phone_layout() else snapshot["maximum"]-4 if snapshot else 3),
-                               format_func=lambda value: f"₹{value}L", horizontal=True,
-                               key="selective_contract_choice")
-            premium_choices = list(range(9))
-            minimum = left.radio("Minimum CE premium (% of CMP)", premium_choices,
-                               index=(0 if phone_layout() else snapshot["minimum"] if snapshot else 2),
-                               format_func=lambda value: f"{value}%" if value else "Any quoted premium",
-                               horizontal=True, key="selective_premium_choice",
-                               help="Independent of strike selection. The CE strike is always at least 5% above CMP.")
-            r1_filter = right.radio("Monthly R1 filter", [R1_ALL, R1_ABOVE],
-                                 index=(0 if phone_layout() else int(bool(snapshot and snapshot.get("r1_filter") == R1_ABOVE))),
-                                 horizontal=True, key="selective_r1_choice",
-                                 help="Above R1 only excludes both below/equal R1 and unknown R1. "
-                                      "History is requested only after contract and CE filters.")
-            note, action, future_action = st.columns([2, 1, 1])
-            note.caption("Startup scans automatically · change filters and apply for a different scan." if phone_layout() else "No market-data requests before Start scan.")
-            apply = action.form_submit_button("Apply filters / Start scan", type="primary",
-                                             use_container_width=True)
-            show_futures = future_action.form_submit_button("Show futures · < ₹7L", use_container_width=True)
+    if phone_layout():
+        # Native, single-column form; no desktop radio groups squeezed into a phone.
+        with st.expander("Filters · change scan settings", expanded=False):
+            with st.form("selective_scan_filters", border=False):
+                expiry = st.selectbox("Option expiry", expiries, key="selective_expiry_choice")
+                maximum = st.selectbox("Maximum contract size", list(range(4,11)),
+                                       format_func=lambda value: f"Below ₹{value} lakh",
+                                       key="selective_contract_choice")
+                minimum = st.selectbox("Minimum CE premium (% of CMP)", list(range(9)),
+                                       format_func=lambda value: f"Above {value}%" if value else "Any quoted premium",
+                                       key="selective_premium_choice")
+                r1_filter = st.selectbox("Monthly R1 filter", [R1_ALL, R1_ABOVE],
+                                         key="selective_r1_choice")
+                st.caption("Call strike ≥ 5% above CMP. Startup refresh is automatic.")
+                apply = st.form_submit_button("Apply filters / Start scan", type="primary", use_container_width=True)
+                show_futures = st.form_submit_button("Show futures · < ₹7L", use_container_width=True)
+    else:
+        with st.container():
+            with st.form("selective_scan_filters"):
+                st.markdown("#### Quick Scan")
+                left, right = st.columns(2)
+                expiry = left.radio("Option month", expiries,
+                                  index=expiries.index(default_expiry), horizontal=True,
+                                  key="selective_expiry_choice")
+                maximum = right.radio("Contract size below", list(range(4, 11)),
+                                   index=(snapshot["maximum"]-4 if snapshot else 3),
+                                   format_func=lambda value: f"₹{value}L", horizontal=True,
+                                   key="selective_contract_choice")
+                premium_choices = list(range(9))
+                minimum = left.radio("Minimum CE premium (% of CMP)", premium_choices,
+                                   index=(snapshot["minimum"] if snapshot else 2),
+                                   format_func=lambda value: f"{value}%" if value else "Any quoted premium",
+                                   horizontal=True, key="selective_premium_choice",
+                                   help="Independent of strike selection. The CE strike is always at least 5% above CMP.")
+                r1_filter = right.radio("Monthly R1 filter", [R1_ALL, R1_ABOVE],
+                                     index=int(bool(snapshot and snapshot.get("r1_filter") == R1_ABOVE)),
+                                     horizontal=True, key="selective_r1_choice",
+                                     help="Above R1 only excludes both below/equal R1 and unknown R1. "
+                                          "History is requested only after contract and CE filters.")
+                note, action, future_action = st.columns([2, 1, 1])
+                note.caption("No market-data requests before Start scan.")
+                apply = action.form_submit_button("Apply filters / Start scan", type="primary",
+                                                 use_container_width=True)
+                show_futures = future_action.form_submit_button("Show futures · < ₹7L", use_container_width=True)
     if show_futures:
         if phone_layout():
             from .mobile_refresh import JOB
