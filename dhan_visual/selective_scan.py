@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from hashlib import sha256
+from html import escape
 from decimal import Decimal, InvalidOperation
 import time
 import pandas as pd
@@ -20,7 +21,7 @@ from .screener_ui import _auto_universe
 from .technical_ui import attach_technical_columns
 from .r1_today import session_r1_cross
 from .tradingview_links import clickable_stock_frame, TRADINGVIEW_SYMBOL_DISPLAY, tradingview_chart_url
-from .mobile_cards import card_pages, card_value
+from .mobile_cards import card_pages, card_value, phone_layout
 from .table_layout import dataframe_key, autofit_column_config, autofit_enabled, click_autofit
 
 BATCH = 35
@@ -279,9 +280,9 @@ def _strategy_cell_callback(key, frame, entries, expiry, snapshot_key, scan_day)
 def _display(frame, *, market=False, futures=False, strategy_context=None):
     kind = "futures" if futures else "market" if market else "home"
     view = st.radio("Results layout", ["Full table", "Mobile cards"], horizontal=True,
-                    key=f"ccs_results_layout_{kind}")
+                    index=1 if phone_layout() else 0, key=f"ccs_results_layout_{kind}")
     if view == "Mobile cards":
-        _display_mobile_cards(frame, kind)
+        _display_mobile_cards(frame, kind, strategy_context=strategy_context)
         return
     config = {
         "CMP (₹)": st.column_config.NumberColumn("CMP (₹)", format="₹%.2f"),
@@ -318,8 +319,8 @@ def _display(frame, *, market=False, futures=False, strategy_context=None):
                  **selection)
 
 
-def _display_mobile_cards(frame, kind):
-    """Presentation only: page existing results without additional API calls."""
+def _display_mobile_cards(frame, kind, strategy_context=None):
+    """Render compact existing snapshots; no new data requests or sorting."""
     if frame.empty:
         st.info("No matching results yet.")
         return
@@ -328,24 +329,55 @@ def _display_mobile_cards(frame, kind):
                         format_func=lambda i: f"{i + 1} / {pages}",
                         key=f"ccs_cards_page_{kind}")
     start = page * 8
-    st.caption(f"Showing {start + 1}–{min(start + 8, len(frame))} of {len(frame)} results. Original scan order.")
+    st.caption(f"Showing {start + 1}–{min(start + 8, len(frame))} of {len(frame)} results · original scan order")
     primary = ("CMP (₹)", "5%+ OTM CE (%)", "ATM Straddle Total (₹)",
                "Straddle (%)", "Contract size (₹)", "Lot size",
                "Futures Price (₹)", "Futures vs CMP (%)", R1_COLUMN)
-    for _, row in frame.iloc[start:start + 8].iterrows():
+    labels = {"CMP (₹)": "Cash price", "5%+ OTM CE (%)": "CE ≥ +5%",
+              "ATM Straddle Total (₹)": "ATM straddle", "Straddle (%)": "Straddle yield",
+              "Contract size (₹)": "Contract size", "Lot size": "Lot size",
+              "Futures Price (₹)": "Futures price", "Futures vs CMP (%)": "Futures vs CMP",
+              R1_COLUMN: "Above R1"}
+    for offset, (_, row) in enumerate(frame.iloc[start:start + 8].iterrows()):
+        symbol = str(row["Stock"])
         with st.container(border=True):
-            st.markdown("**" + str(row["Stock"]) + "**")
-            st.link_button("TradingView chart", tradingview_chart_url(row["Stock"]))
+            st.markdown(f'<div class="ccs-card-symbol">{escape(symbol)}</div>', unsafe_allow_html=True)
+            cells = []
             for col in primary:
                 if col in row:
-                    st.text(f"{col}: {card_value(row[col], col)}")
+                    klass = ' class="ccs-premium"' if col == "5%+ OTM CE (%)" else ""
+                    cells.append(f'<div><small>{escape(labels[col])}</small><strong{klass}>'
+                                 f'{escape(card_value(row[col], col))}</strong></div>')
+            st.markdown('<div class="ccs-card-grid">' + ''.join(cells) + '</div>',
+                        unsafe_allow_html=True)
             extra = [col for col in frame.columns if col != "Stock" and col not in primary]
             if extra:
-                with st.expander("All additional indicators / details"):
+                with st.expander("Technical indicators & details"):
                     for col in extra:
                         st.text(f"{col}: {card_value(row[col], col)}")
+            st.link_button("TradingView chart", tradingview_chart_url(symbol))
+            if strategy_context is not None:
+                entries, expiry, snapshot_key, scan_day = strategy_context
+                if symbol in entries:
+                    from .stock_strategy_ui import launch_strategy
+                    for col, action, preset in (
+                        ("5%+ OTM CE (%)", "Build covered call", "Covered call"),
+                        ("ATM Straddle Total (₹)", "Build short straddle", "Short straddle"),
+                    ):
+                        quoted = pd.to_numeric(row.get(col), errors="coerce")
+                        enabled = bool(pd.notna(quoted) and quoted > 0)
+                        if st.button(action, key=f"ccs_card_{kind}_{start + offset}_{symbol}_{preset}",
+                                     disabled=not enabled, use_container_width=True):
+                            access = connected_fyers()
+                            current = _snapshot(access)
+                            if (current and current["key"] == snapshot_key
+                                    and current["expiry"] == expiry
+                                    and current.get("scan_day") == scan_day):
+                                launch_strategy(symbol, entries[symbol], expiry, preset)
+                            else:
+                                st.warning("Scan changed. Select an opportunity from the current results.")
     if kind == "home":
-        st.caption("Choose a stock in Build strategy below to open its covered call or straddle. Full table retains direct cell shortcuts.")
+        st.caption("Full table retains direct CE and straddle cell shortcuts. The original Build strategy controls are also available below.")
 
 
 def futures_discount_frame(available, cash, futures, expiry):
