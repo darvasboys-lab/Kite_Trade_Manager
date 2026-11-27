@@ -193,6 +193,7 @@ def run_automatic_batch(access, available, snapshot, *, now=None):
 def _automatic_scan_heartbeat():
     """Only mounted on Home; never continue after navigation or logout."""
     if (st.session_state.get(FUTURES_STATE)
+            or st.session_state.get("ccs_stock_search_open")
             or st.session_state.get("ccs_stock_strategy_active")
             or st.session_state.get("ccs_legacy_full_scan")
             or st.session_state.get("ccs_selective_page") != "◎ OTM CE Home"):
@@ -378,6 +379,16 @@ def render_selective_home():
     universe = _auto_universe()
     if not universe:
         return
+    from .stock_search_ui import OPEN as SEARCH_OPEN, render_stock_search
+    if st.session_state.get(SEARCH_OPEN):
+        render_stock_search(access, universe)
+        return
+    if st.button("⌕ Search stock", key="ccs_open_stock_search", use_container_width=True):
+        previous = _snapshot(access)
+        if previous:
+            previous["auto_scan"] = False
+        st.session_state[SEARCH_OPEN] = True
+        st.rerun()
     entries = [item.entry for item in universe]
     expiries = expiry_options(entries)
     if not expiries:
