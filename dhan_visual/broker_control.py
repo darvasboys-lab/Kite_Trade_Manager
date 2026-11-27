@@ -144,12 +144,13 @@ def initialize_broker_selection() -> None:
             _apply_source_selection("FYERS")
 
 
-def render_single_broker_selector() -> None:
+def render_single_broker_selector(*, show_pending=True) -> None:
     initialize_broker_selection()
     st.session_state.setdefault(SELECTION_KEY, st.session_state.get(PENDING_KEY) or active_broker())
     # A pending switch updates ACTIVE_KEY, which is *not* widget-owned.
     # It can safely complete in a fragment rerun after previous jobs finish.
-    _pending_status()
+    if show_pending:
+        _pending_status()
     st.radio(
         "Active broker connection · only one at a time",
         OPTIONS,
