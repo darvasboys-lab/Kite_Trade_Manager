@@ -12,8 +12,8 @@ function read(storage){try{const r=JSON.parse(storage.getItem(key)||"null");retu
 function save(storage,s){try{const r=record(s);if(!r)return false;const old=read(storage);if(old&&Date.parse(old.completed_at)>Date.parse(s.completed_at))return false;storage.setItem(key,JSON.stringify(r));return true}catch(e){return false}}
 function forget(storage){try{storage.removeItem(key)}catch(e){}}
 function decision(display,incoming){
- if(!complete(incoming))return display?.scan_id&&display.scan_id!==incoming?.scan_id?"hold":"partial";
- return display?.scan_id&&display.scan_id!==incoming.scan_id?"offer":"show";
+ if(!complete(incoming))return complete(display)&&display.scan_id!==incoming?.scan_id?"hold":"partial";
+ return complete(display)&&display.scan_id!==incoming.scan_id?"offer":"show";
 }
 const api={complete,read,save,forget,decision};
 if(typeof module!=="undefined"&&module.exports)module.exports=api;else root.CCSCache=api;
