@@ -375,6 +375,94 @@ button:focus-visible,a:focus-visible { outline:2px solid var(--accent) !importan
  .block-container .st-key-ccs_ios_dock button [data-testid="stIconMaterial"] { font-size:21px !important; }
 }
 
+
+/* CCS appearance is authoritative for native controls, including portal menus.
+   Pair foreground and background on the actual inner surfaces, not just wrappers. */
+[data-testid="stExpander"] details,
+[data-testid="stExpander"] summary,
+[data-testid="stExpanderDetails"],
+[data-testid="stExpander"] details > div,
+[data-testid="stPopoverBody"],
+[data-testid="stDialog"] [role="dialog"],
+[data-baseweb="popover"] > div,
+[data-baseweb="menu"],
+[role="listbox"],
+[data-testid="stFileUploaderDropzone"] {
+  background:var(--surface) !important;
+  color:var(--text) !important;
+  border-color:var(--border) !important;
+}
+[data-testid="stExpander"] summary :is(p,span,svg),
+[data-testid="stExpanderDetails"] > div,
+[data-testid="stPopoverBody"] :is(h1,h2,h3,h4,label),
+[data-testid="stDialog"] :is(h1,h2,h3,h4,label),
+[data-testid="stFileUploaderDropzone"] :is(p,small,span) {
+  color:var(--text) !important;
+}
+:is([data-testid="stExpanderDetails"],[data-testid="stPopoverBody"],[data-testid="stDialog"])
+ [data-testid="stMarkdownContainer"] :is(p,li,strong,em) {
+  color:var(--text) !important;
+}
+:is([data-testid="stExpanderDetails"],[data-testid="stPopoverBody"],[data-testid="stDialog"])
+ [data-testid="stCaptionContainer"] :is(p,span) { color:var(--settings-muted) !important; }
+[data-testid="stText"],[data-testid="stText"] pre,
+[data-testid="stText"] p { color:var(--text) !important; }
+.stApp :is([data-testid="stTextInput"],[data-testid="stNumberInput"],[data-testid="stTextArea"]) :is(input,textarea),
+.stApp [data-baseweb="select"] :is(input,[role="combobox"]) {
+  background:transparent !important; color:var(--text) !important;
+  caret-color:var(--text) !important; -webkit-text-fill-color:var(--text);
+}
+.stApp :is(input,textarea)::placeholder { color:var(--settings-muted) !important; opacity:1; -webkit-text-fill-color:var(--settings-muted); }
+[data-baseweb="select"] > div,
+[data-baseweb="select"] [data-baseweb="tag"],
+[data-testid="stNumberInput"] button,
+[data-testid="stTextInput"] button {
+  background:var(--surface2) !important; color:var(--text) !important;
+  border-color:var(--border) !important;
+}
+[data-baseweb="select"] :is(span,svg),[data-baseweb="tag"] :is(span,svg),
+[data-testid="stNumberInput"] button svg,[data-testid="stTextInput"] button svg {
+  color:var(--text) !important;
+}
+[role="option"],[data-baseweb="menu"] li {
+  background:var(--surface) !important; color:var(--text) !important;
+}
+[role="option"] :is(div,span,p),[data-baseweb="menu"] li :is(div,span,p) {
+  color:var(--text) !important;
+}
+[role="option"]:hover,[role="option"][aria-selected="true"],
+[data-baseweb="menu"] li:hover,[role="option"]:focus-visible {
+  background:var(--tint) !important; color:var(--text) !important;
+}
+.stApp :is([data-testid="stRadio"],[data-testid="stCheckbox"],[data-testid="stToggle"]) label p {
+  color:var(--text) !important;
+}
+.stApp [data-testid="stCaptionContainer"] p { color:var(--settings-muted) !important; opacity:1; }
+.stApp :is([data-testid="stAlert"],[data-testid="stAlertContainer"],[data-testid="stAlert"] [role="alert"]) {
+  background:var(--surface2) !important; color:var(--text) !important;
+}
+.stApp [data-testid="stAlert"] :is(p,li,strong,span) { color:var(--text) !important; }
+.stApp [data-testid="stMarkdownContainer"] a { color:var(--blue) !important; }
+.stApp [data-testid="stLinkButton"] a {
+  background:var(--surface2) !important; color:var(--text) !important; border-color:var(--border) !important;
+}
+.stApp :is([data-testid="stButton"],[data-testid="stFormSubmitButton"],[data-testid="stDownloadButton"],[data-testid="stLinkButton"],[data-testid="stPopover"])
+ :is(button,a) :is(p,span) { color:inherit !important; }
+.stApp [data-testid="stMarkdownContainer"] :is(table,th,td) {
+  background:var(--surface) !important; color:var(--text) !important; border-color:var(--border) !important;
+}
+.stApp [data-testid="stMarkdownContainer"] :is(code,pre),
+.stApp [data-testid="stCode"] pre {
+  background:var(--surface2) !important; color:var(--text) !important;
+}
+.stApp [data-testid="stMetricLabel"] p { color:var(--settings-muted) !important; }
+.stApp [data-testid="stMetricValue"] { color:var(--text) !important; }
+.stApp .ccs-ios-logo { background:var(--tint); color:var(--accent); }
+/* Preserve the intentionally green hero, and the two distinct premium tiles. */
+.stApp .ccs-ios-summary { color:#fff !important; }
+.stApp .ccs-ios-summary small { color:#cce9dc !important; }
+.stApp [class*="st-key-ccs_ios_tiles_"] [data-testid="stColumn"]:nth-child(2) [data-testid="stPopover"] button { color:var(--blue) !important; }
+
 """
 
 
