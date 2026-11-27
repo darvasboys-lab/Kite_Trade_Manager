@@ -20,7 +20,7 @@ from typing import Mapping
 NSE_LOTS_URL = "https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv"
 INDEX_SYMBOLS = frozenset({
     "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50",
-    "NIFTYINDIAFPI150", "SENSEX", "BANKEX",
+    "NIFTYFPI", "NIFTYINDIAFPI150", "SENSEX", "BANKEX",
 })
 MONTHS = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
 MONTH_PATTERN = re.compile(r"^(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[- ]?(\d{2}|\d{4})$")
