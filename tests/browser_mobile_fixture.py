@@ -7,6 +7,7 @@ from threading import Event
 from dataclasses import replace
 from unittest.mock import patch
 import runpy
+import os
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,7 +21,11 @@ from dhan_visual.fyers_ui import _scope
 from dhan_visual.screener import Underlying
 from dhan_visual.dhan_market import DhanUnderlying
 from dhan_visual.ce_eod_remote import IST
+from dhan_visual import workspace_store
 from test_selective_scan import access, quotes, call, straddle, levels
+
+if not os.environ.get("CCS_DATA_DIR"):
+    raise RuntimeError("Set CCS_DATA_DIR to a disposable fixture directory.")
 
 if not st.session_state.get("layout_fixture_initialized"):
     mode = st.query_params.get("layout_case", "accepted")
@@ -40,6 +45,10 @@ if not st.session_state.get("layout_fixture_initialized"):
                     levels_day=now.date().isoformat(), scan_day=now.date().isoformat(),
                     cash_at="offline", options_at="offline", complete=True,
                     completed_at=now.isoformat())
+    if not workspace_store.location().exists():
+        data = workspace_store.read()
+        data["snapshot"] = refresh.payload_for(snapshot, scan.qualified_rows(items, snapshot))
+        workspace_store.write(data)
     st.session_state.update(layout_fixture_initialized=True, ccs_active_broker="FYERS",
                             fno_universe_data=(items,"Offline browser fixture"),
                             ccs_workspace_initialized=True, ccs_dark_mode=False)
