@@ -71,6 +71,13 @@ class PhoneCandidateTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             phone.dispatch("/orders",{})
 
+    def test_localhost_alias_remains_loopback_only(self):
+        self.assertTrue(phone.allowed_host("localhost:8502"))
+        self.assertTrue(phone.allowed_host("127.0.0.1:8502"))
+        self.assertFalse(phone.allowed_host("localhost.example.com:8502"))
+        self.assertFalse(phone.allowed_host("192.168.1.10:8502"))
+        self.assertFalse(phone.allowed_host(None))
+
     def test_static_root_and_cross_origin_rejection(self):
         server=ThreadingHTTPServer(("127.0.0.1",0),phone.Handler)
         thread=threading.Thread(target=server.serve_forever,daemon=True)
@@ -88,6 +95,10 @@ class PhoneCandidateTests(unittest.TestCase):
                     self.assertNotIn("__CCS_TOKEN__",html)
                     self.assertIn("no-store",r.getheader("Cache-Control"))
                     conn.request("POST","/status","{}",{"Origin":"https://example.com","Content-Type":"application/json","X-CCS-Token":phone.TOKEN})
+                    r=conn.getresponse()
+                    self.assertEqual(r.status,403)
+                    r.read()
+                    conn.request("POST","/status","{}",{"Host":f"127.0.0.1:{port}","Origin":f"http://localhost:{port}","Content-Type":"application/json","X-CCS-Token":phone.TOKEN})
                     r=conn.getresponse()
                     self.assertEqual(r.status,403)
                     r.read()
