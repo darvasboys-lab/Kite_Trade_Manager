@@ -16,7 +16,7 @@ from .fyers_readonly import (
     fetch_daily_levels, fetch_r1_intraday_bars, fetch_futures_quotes,
 )
 from .otm_home import otm_home_dataframe, filter_home_contracts, attach_futures_columns
-from .screener import choose_expiry, expiry_options
+from .screener import INDEX_SYMBOLS, choose_expiry, expiry_options
 from .screener_ui import _auto_universe
 from .technical_ui import attach_technical_columns
 from .r1_today import session_r1_cross
@@ -222,7 +222,8 @@ def _snapshot(access):
 
 
 def _universe_rows(universe, expiry):
-    return [item for item in universe if expiry in item.entry.lots]
+    return [item for item in universe
+            if item.entry.symbol not in INDEX_SYMBOLS and expiry in item.entry.lots]
 
 
 STRATEGY_COLUMNS = {
