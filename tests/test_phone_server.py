@@ -4,7 +4,9 @@ import unittest
 from decimal import Decimal
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
-from unittest.mock import patch
+from unittest.mock import patch, Mock
+from datetime import datetime
+from types import SimpleNamespace
 
 from dhan_visual import phone_server as phone
 
@@ -31,6 +33,38 @@ class PhoneCandidateTests(unittest.TestCase):
     def test_scan_requires_connection(self):
         with patch.dict(phone.STATE,{"vault":None}):
             with self.assertRaises(ValueError):
+                phone.dispatch("/scan",{})
+
+    def test_default_scan_filters_and_cooldown(self):
+        with patch.object(phone,"access",return_value=object()), patch.object(phone,"months",return_value=["DEC-26"]), patch.object(phone,"LAST_BATCH",100), patch.object(phone.time,"monotonic",return_value=110), patch.dict(phone.STATE,{"scan":None}):
+            result=phone.dispatch("/scan",{})
+            self.assertEqual(result["cooldown"],50)
+            self.assertFalse(result["pending"])
+
+    def test_reuse_matching_snapshot_without_new_broker_requests(self):
+        day=datetime.now(phone.IST).date().isoformat()
+        snap=phone.new_snapshot("phone","DEC-26",7,2,"Include all stocks")
+        snap["scan_day"]=day
+        with patch.object(phone,"access",return_value=object()), patch.object(phone,"months",return_value=["DEC-26"]), patch.dict(phone.STATE,{"scan":snap}), patch.object(phone,"scan_result",return_value={"rows":[],"pending":True}) as result, patch.object(phone,"fetch_cash_quotes") as quotes:
+            self.assertTrue(phone.dispatch("/scan",{})["pending"])
+            result.assert_called_once()
+            quotes.assert_not_called()
+
+    def test_expiry_defaults_skip_older_months_and_expired_fyers_month(self):
+        today=datetime(2026,11,27,tzinfo=phone.IST)
+        entries=[SimpleNamespace(entry=SimpleNamespace(symbol="SBIN",lots={"OCT-26":500,"NOV-26":500,"DEC-26":500,"JAN-27":500}))]
+        vault=Mock()
+        vault.access.return_value=SimpleNamespace(app_id="test",expires_at=today)
+        with patch.object(phone,"datetime") as clock, patch.dict(phone.STATE,{"vault":vault,"catalogue_day":today.date(),"verified_months":None}), patch.object(phone,"catalogue",return_value=entries), patch.object(phone,"fetch_strategy_expiries",return_value={"DEC-26":("1","2026-12-29"),"JAN-27":("2","2027-01-26")}) as verify:
+            clock.now.return_value=today
+            result=phone.dispatch("/months",{})
+            self.assertEqual(result,{"months":["DEC-26","JAN-27"],"default":"DEC-26"})
+            phone.dispatch("/months",{})
+            verify.assert_called_once()
+
+    def test_connection_error_is_specific(self):
+        with patch.dict(phone.STATE,{"vault":None}):
+            with self.assertRaisesRegex(phone.PhoneInputError,"Unlock and authorize FYERS"):
                 phone.dispatch("/scan",{})
 
     def test_unknown_order_route(self):
