@@ -84,7 +84,7 @@ if legacy:
     
     with settings:
         if phone:
-            render_single_broker_selector()
+            render_single_broker_selector(show_pending=False)
             render_theme_control()
         from dhan_visual.screener_ui import render_dhan_settings
         render_dhan_settings()
@@ -133,7 +133,7 @@ else:
         render_independent_strategy()
     elif page == "⚙ Settings":
         if phone:
-            render_single_broker_selector()
+            render_single_broker_selector(show_pending=False)
             render_theme_control()
         from dhan_visual.screener_ui import render_dhan_settings
         render_dhan_settings()
