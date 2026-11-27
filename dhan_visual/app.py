@@ -115,10 +115,27 @@ else:
         st.button("Unlock / renew FYERS", key="ccs_mobile_quick_login",
                   type="primary", use_container_width=True,
                   on_click=lambda: st.session_state.update(ccs_selective_page="⚙ Settings"))
-    page = st.radio(
-        "Workspace", ["◎ OTM CE Home", "⌕ Market Screener", "◇ Strategy Builder", "▥ Manage Trade", "⚙ Settings"],
-        horizontal=True, key="ccs_selective_page", label_visibility="collapsed",
-    )
+    pages = ["◎ OTM CE Home", "⌕ Market Screener", "◇ Strategy Builder", "▥ Manage Trade", "⚙ Settings"]
+    if phone:
+        # Use actual buttons, not DOM-dependent styling of BaseWeb radio controls.
+        page = st.session_state.get("ccs_selective_page", pages[0])
+        if page not in pages:
+            page = pages[0]
+        with st.container(key="ccs_phone_nav"):
+            for col, target, label, glyph in zip(
+                st.columns(5, gap="small"), pages,
+                ("Home", "Scan", "Strategy", "Trades", "Settings"),
+                (":material/home:", ":material/search:", ":material/monitoring:",
+                 ":material/work:", ":material/settings:"),
+            ):
+                with col:
+                    st.button(label, icon=glyph, key="ccs_nav_" + label,
+                              type="primary" if page == target else "secondary",
+                              use_container_width=True,
+                              on_click=lambda dest=target: st.session_state.update(ccs_selective_page=dest))
+    else:
+        page = st.radio("Workspace", pages, horizontal=True,
+                        key="ccs_selective_page", label_visibility="collapsed")
     if page == "◎ OTM CE Home":
         render_selective_home()
     elif page == "⌕ Market Screener":

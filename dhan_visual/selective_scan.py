@@ -443,6 +443,8 @@ def render_selective_home():
     render_historical_shortlist()
     access = connected_fyers()
     if not access:
+        st.button("⌕ Search stock", key="ccs_search_requires_fyers", disabled=True,
+                  use_container_width=True, help="Connect FYERS to search live stock details.")
         st.info("Connect and select FYERS in Settings to use the data-saving scan.")
         return
     universe = _auto_universe()
