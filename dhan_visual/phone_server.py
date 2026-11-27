@@ -23,11 +23,12 @@ from .fast_universe import load_fast_catalogue
 from .screener import expiry_options, expiry_sort_key
 from .ce_eod_remote import IST
 from .selective_scan import (new_snapshot, _universe_rows, contract_candidates,
-    qualified_rows, pending_r1_symbols, load_shortlist_history, run_automatic_batch,
+    qualified_rows, premium_rows, pending_r1_symbols, load_shortlist_history, run_automatic_batch,
     automatic_work_pending, load_futures_discount)
 from .technical_ui import attach_technical_columns
 from .r1_today import session_r1_cross
 from .smart_suggestions import bullish_checks
+from .phone_progress import ScanProgress
 
 PORT = 8502
 HOST = f"127.0.0.1:{PORT}"
@@ -41,6 +42,7 @@ ROOT = Path(__file__).parent / "phone"
 LOCK = Lock()
 STATE = {"vault": None, "oauth": None, "universe": None, "scan": None}
 LAST_BATCH = 0.0
+PROGRESS = ScanProgress()
 
 class PhoneInputError(ValueError):
     """Explicit, safe user-facing error; never include request secrets."""
@@ -55,6 +57,7 @@ def access():
 
 def clear_scan():
     STATE["scan"] = None
+    PROGRESS.reset()
     STATE.pop("verified_months",None)
 
 def catalogue():
@@ -104,6 +107,26 @@ def status():
 def frame_rows(frame):
     return json.loads(frame.to_json(orient="records", date_format="iso"))
 
+def report_scan_progress(s, available, stage, *, complete=False):
+    symbols = set(contract_candidates(available,s)["Stock"])
+    shortlist = set(premium_rows(available,s)["Stock"])
+    history_done = len(shortlist & set(s["levels"]))
+    options_done = len(symbols & s["attempted"])
+    PROGRESS.update(stage=stage,cash_ready=bool(s["cash_at"]),
+                    options_done=options_done,options_total=len(symbols),
+                    history_done=history_done,history_total=len(shortlist),
+                    missing_options=max(0,options_done-len(symbols & set(s["calls"]))),
+                    missing_history=sum(any(v is None for v in bullish_checks(
+                        getattr(s["cash"].get(symbol),"price",None),s["levels"].get(symbol)).values())
+                        for symbol in shortlist),
+                    stopped=bool(s["stopped"]),complete=complete and not s["stopped"])
+
+
+def finish_scan_progress(s,available):
+    complete = bool(s["cash_at"]) and not s["stopped"] and not automatic_work_pending(available,s)
+    report_scan_progress(s,available,"stopped" if s["stopped"] else "complete" if complete else "waiting",complete=complete)
+
+
 def scan_result():
     s = STATE["scan"]
     if not s:
@@ -132,7 +155,7 @@ def scan_result():
             "total": len(candidates), "cash": len(s["cash"]),
             "pending": not s["stopped"] and automatic_work_pending(available,s),
             "error": s["error"], "asof": s["options_at"], "filters":{"expiry":s["expiry"],"maximum":s["maximum"],"minimum":s["minimum"],"r1":s["r1_filter"]=="Above R1 only"},
-            "retry_after": max(0, ceil(60 - (time.monotonic()-LAST_BATCH)))}
+            "retry_after": max(0, ceil(60 - (time.monotonic()-LAST_BATCH))), "progress": PROGRESS.snapshot()}
 
 def strategy(d):
     def dec(k):
@@ -217,15 +240,19 @@ def dispatch(route,d):
         s = new_snapshot("phone",expiry,maximum,minimum,r1_filter)
         STATE["scan"] = s
         available = _universe_rows(catalogue(),expiry)
+        PROGRESS.reset(d.get("progress_id"))
+        PROGRESS.update(stage="cash",cash_total=len(available))
         LAST_BATCH = now
         s["scan_day"] = datetime.now(IST).date().isoformat()
         try:
-            s["cash"] = fetch_cash_quotes(a,[item.entry.symbol for item in available])
+            s["cash"] = fetch_cash_quotes(a,[item.entry.symbol for item in available],
+                progress=lambda done,total,received: PROGRESS.update(stage="cash",cash_done=done,cash_total=total,cash_received=received))
             if not s["cash"]:
                 raise FyersDataError("FYERS returned no usable stock quotes. Scan stopped; check broker data access.")
             s["cash_at"] = datetime.now(IST).isoformat()
             s["auto_scan"] = True
-            run_automatic_batch(a,available,s)
+            report_scan_progress(s,available,"options")
+            run_automatic_batch(a,available,s,progress=lambda stage: report_scan_progress(s,available,stage))
         except FyersDataError as exc:
             s["error"],s["stopped"] = str(exc),True
         except Exception as exc:
@@ -233,6 +260,7 @@ def dispatch(route,d):
             s["error"],s["stopped"] = "Initial scan failed ("+type(exc).__name__+"). Apply filters to retry manually.",True
         finally:
             LAST_BATCH = time.monotonic()
+            finish_scan_progress(s,available)
         return scan_result()
     if route == "/next":
         a = access()
@@ -244,10 +272,13 @@ def dispatch(route,d):
         s = STATE["scan"]
         LAST_BATCH = time.monotonic()
         s["auto_scan"] = True
+        available = _universe_rows(catalogue(),s["expiry"])
+        PROGRESS.update(request_id=d.get("progress_id"),stage="options")
         try:
-            run_automatic_batch(a,_universe_rows(catalogue(),s["expiry"]),s)
+            run_automatic_batch(a,available,s,progress=lambda stage: report_scan_progress(s,available,stage))
         finally:
             LAST_BATCH = time.monotonic()
+            finish_scan_progress(s,available)
         return scan_result()
     if route == "/snapshot":
         access()
@@ -344,6 +375,9 @@ class Handler(BaseHTTPRequestHandler):
             d=json.loads(self.rfile.read(size))
             if not isinstance(d,dict):
                 raise PhoneInputError("Invalid request.")
+            if self.path == "/progress":
+                # Read only a copy of the published counters, never mutable scan state.
+                return self.response(200,PROGRESS.snapshot())
             if not LOCK.acquire(blocking=False):
                 return self.response(409,{"error":"Another operation is running. Try again after it finishes."})
             try:
