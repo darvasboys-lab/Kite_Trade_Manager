@@ -42,11 +42,28 @@ CHECK = r"""() => {
    const r=bounds(e);
    if(r.left< -2||r.right>w+2)issues.push('content outside viewport: '+(e.className||e.dataset.testid));
  }
+ const tiles=[...document.querySelectorAll('[class*="st-key-ccs_ios_tiles_"] [data-testid="stPopover"] button')].filter(visible);
+ for(const e of tiles){
+   const r=bounds(e);
+   if(r.height<44)issues.push('premium tile smaller than touch target');
+   for(const p of e.querySelectorAll('p')){
+     if(!visible(p))continue;
+     const b=bounds(p);
+     if(b.left<r.left-2||b.right>r.right+2||b.bottom>r.bottom+2)
+       issues.push('premium text overflows its tile');
+   }
+ }
+ if(dock && main){
+   const container=document.querySelector('.block-container');
+   if(container && parseFloat(getComputedStyle(container).paddingBottom)<bounds(dock).height)
+     issues.push('insufficient space reserved for dock');
+ }
  return issues;
 }"""
 
 def verify(page, name):
-    page.wait_for_timeout(400)
+    page.wait_for_timeout(500)
+    page.evaluate("document.fonts.ready")
     page.screenshot(path=str(OUT / (name + ".png")))
     errors = page.locator('[data-testid="stException"]')
     assert not errors.count(), f"{name}: {errors.all_text_contents()}"
@@ -60,7 +77,7 @@ def navigate(page, index, marker):
 
 def open_case(browser, width, height, mode):
     context = browser.new_context(viewport={"width":width,"height":height},
-        device_scale_factor=1, is_mobile=True, has_touch=True,
+        device_scale_factor=3, is_mobile=True, has_touch=True,
         user_agent="Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0 Mobile Safari/537.36")
     page = context.new_page()
     page.goto(BASE+"?layout_case="+mode,wait_until="domcontentloaded")
@@ -75,6 +92,13 @@ def main():
             prefix=f"{w}x{h}"
             page.locator(".ccs-ios-summary").wait_for()
             verify(page,prefix+"-home")
+            page.get_by_text("Filters · change scan settings", exact=True).click()
+            page.get_by_text("Maximum contract size", exact=True).wait_for()
+            verify(page,prefix+"-filters-expanded")
+            page.get_by_text("Filters · change scan settings", exact=True).click()
+            page.get_by_text("View details", exact=True).first.click()
+            verify(page,prefix+"-stock-details-expanded")
+            page.get_by_text("View details", exact=True).first.click()
             navigate(page,1,"Market Screener · Shortlisted stocks only")
             verify(page,prefix+"-screener")
             navigate(page,2,"Strategy Builder")
