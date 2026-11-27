@@ -58,3 +58,50 @@ class MobileRefreshTests(unittest.TestCase):
         self.assertEqual(seen[-1][0],100)
         self.assertEqual(snap["attempted"],{"TCS"})
         self.assertEqual(set(snap["levels"]),{"TCS"})
+
+    def test_auto_start_without_any_saved_snapshot(self):
+        from dhan_visual.mobile_refresh_ui import should_auto_start
+        self.assertTrue(should_auto_start(None, "token", None))
+        self.assertFalse(should_auto_start("token", "token", None))
+        self.assertFalse(should_auto_start(None, "token", {"future": object()}))
+        self.assertTrue(should_auto_start("token", "token", None, apply=True))
+
+    def test_locked_summary_uses_saved_count_and_premium(self):
+        from dhan_visual.mobile_refresh_ui import render_saved_summary
+        saved = dict(complete=True, filters=self.filters,
+                     rows=[{"Stock":"TCS","5%+ OTM CE (%)":3.5}])
+        with patch("dhan_visual.mobile_refresh_ui.st.markdown") as markup:
+            render_saved_summary(saved, {}, status="Cached data")
+        html = markup.call_args.args[0]
+        self.assertIn('1 <span>opportunities', html)
+        self.assertIn("3.50%", html)
+        self.assertIn("Cached data", html)
+
+    def test_publication_replaces_not_appends_and_preserves_on_write_failure(self):
+        from dhan_visual import mobile_refresh_ui as ui
+        from dhan_visual.selective_scan import STATE
+        candidate = new_snapshot("key","DEC-26",7,2)
+        candidate.update(complete=True, completed_at="2026-11-27T15:00:00+05:30")
+        frame = pd.DataFrame([{"Stock":"TCS","CMP (₹)":1000}])
+        old = {"rows":[{"Stock":"INFY"}]}
+        stored = {"snapshot":old, "remember":False}
+        state = {ui.JOB:{"future":object()}, STATE:"previous"}
+        def save(fn):
+            fn(stored)
+            return True
+        with patch("dhan_visual.selective_scan._universe_rows", return_value=[]), \
+             patch("dhan_visual.selective_scan.qualified_rows", return_value=frame), \
+             patch.object(ui.st,"session_state",state), \
+             patch.object(ui,"save_change",return_value=False):
+            self.assertFalse(ui.publish_candidate(candidate, []))
+            self.assertIs(stored["snapshot"],old)
+            self.assertEqual(state[STATE],"previous")
+            self.assertIn(ui.JOB,state)
+        with patch("dhan_visual.selective_scan._universe_rows", return_value=[]), \
+             patch("dhan_visual.selective_scan.qualified_rows", return_value=frame), \
+             patch.object(ui.st,"session_state",state), \
+             patch.object(ui,"save_change",side_effect=save):
+            self.assertTrue(ui.publish_candidate(candidate, []))
+        self.assertEqual([r["Stock"] for r in stored["snapshot"]["rows"]],["TCS"])
+        self.assertIs(state[STATE],candidate)
+        self.assertNotIn(ui.JOB,state)
