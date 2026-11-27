@@ -209,11 +209,16 @@ def dispatch(route,d):
         s["scan_day"] = datetime.now(IST).date().isoformat()
         try:
             s["cash"] = fetch_cash_quotes(a,[item.entry.symbol for item in available])
+            if not s["cash"]:
+                raise FyersDataError("FYERS returned no usable stock quotes. Scan stopped; check broker data access.")
             s["cash_at"] = datetime.now(IST).isoformat()
             s["auto_scan"] = True
             run_automatic_batch(a,available,s)
         except FyersDataError as exc:
             s["error"],s["stopped"] = str(exc),True
+        except Exception as exc:
+            print("CCS initial scan failed:",type(exc).__name__,flush=True)
+            s["error"],s["stopped"] = "Initial scan failed ("+type(exc).__name__+"). Apply filters to retry manually.",True
         finally:
             LAST_BATCH = time.monotonic()
         return scan_result()
