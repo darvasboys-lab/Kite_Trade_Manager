@@ -83,12 +83,13 @@ if legacy:
         render_screener()
     
     with settings:
-        if phone:
-            render_single_broker_selector(show_pending=False)
-            render_theme_control()
-        from dhan_visual.screener_ui import render_dhan_settings
-        render_dhan_settings()
-        render_settings()
+        with st.container(key="ccs_legacy_settings_panel"):
+            if phone:
+                render_single_broker_selector(show_pending=False)
+                render_theme_control()
+            from dhan_visual.screener_ui import render_dhan_settings
+            render_dhan_settings()
+            render_settings()
 else:
     from dhan_visual.selective_scan import render_selective_home, render_selective_market
     from dhan_visual.broker_control import broker_allowed
@@ -132,12 +133,13 @@ else:
         from dhan_visual.stock_strategy_ui import render_independent_strategy
         render_independent_strategy()
     elif page == "⚙ Settings":
-        if phone:
-            render_single_broker_selector(show_pending=False)
-            render_theme_control()
-        from dhan_visual.screener_ui import render_dhan_settings
-        render_dhan_settings()
-        render_settings()
+        with st.container(key="ccs_settings_panel"):
+            if phone:
+                render_single_broker_selector(show_pending=False)
+                render_theme_control()
+            from dhan_visual.screener_ui import render_dhan_settings
+            render_dhan_settings()
+            render_settings()
     else:
         manage = st.container()
 
