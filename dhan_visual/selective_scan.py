@@ -524,7 +524,7 @@ def render_ios_saved_shortlist(saved, *, disconnected=False):
     st.markdown("### Opportunities")
     if not saved:
         message = "Connect FYERS to load opportunities" if disconnected else "Apply filters to load opportunities"
-        st.markdown(f\'<div class="ccs-ios-empty">{message}</div>\', unsafe_allow_html=True)
+        st.markdown(f'<div class="ccs-ios-empty">{message}</div>', unsafe_allow_html=True)
         return
     st.caption("Saved shortlist · Historical only · " + saved["saved_at"])
     st.caption("Scan for current quotes. Saved results cannot launch a strategy.")
