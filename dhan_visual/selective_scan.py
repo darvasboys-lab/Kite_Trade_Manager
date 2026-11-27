@@ -330,54 +330,78 @@ def _display_mobile_cards(frame, kind, strategy_context=None):
                         key=f"ccs_cards_page_{kind}")
     start = page * 8
     st.caption(f"Showing {start + 1}–{min(start + 8, len(frame))} of {len(frame)} results · original scan order")
-    primary = ("CMP (₹)", "5%+ OTM CE (%)", "ATM Straddle Total (₹)",
-               "Straddle (%)", "Contract size (₹)", "Lot size",
-               "Futures Price (₹)", "Futures vs CMP (%)", R1_COLUMN)
-    labels = {"CMP (₹)": "Cash price", "5%+ OTM CE (%)": "CE ≥ +5%",
-              "ATM Straddle Total (₹)": "ATM straddle", "Straddle (%)": "Straddle yield",
-              "Contract size (₹)": "Contract size", "Lot size": "Lot size",
-              "Futures Price (₹)": "Futures price", "Futures vs CMP (%)": "Futures vs CMP",
-              R1_COLUMN: "Above R1"}
     for offset, (_, row) in enumerate(frame.iloc[start:start + 8].iterrows()):
         symbol = str(row["Stock"])
-        with st.container(border=True):
-            st.markdown(f'<div class="ccs-card-symbol">{escape(symbol)}</div>', unsafe_allow_html=True)
-            cells = []
-            for col in primary:
-                if col in row:
-                    klass = ' class="ccs-premium"' if col == "5%+ OTM CE (%)" else ""
-                    cells.append(f'<div><small>{escape(labels[col])}</small><strong{klass}>'
-                                 f'{escape(card_value(row[col], col))}</strong></div>')
-            st.markdown('<div class="ccs-card-grid">' + ''.join(cells) + '</div>',
-                        unsafe_allow_html=True)
-            extra = [col for col in frame.columns if col != "Stock" and col not in primary]
-            if extra:
-                with st.expander("Technical indicators & details"):
-                    for col in extra:
-                        st.text(f"{col}: {card_value(row[col], col)}")
-            st.link_button("TradingView chart", tradingview_chart_url(symbol))
-            if strategy_context is not None:
+        ident = f"{kind}_{start + offset}"
+        current = _snapshot(connected_fyers()) if strategy_context is not None else None
+        quote = current["calls"].get(symbol) if current else None
+        atm = current["straddles"].get(symbol) if current else None
+        with st.container(border=True, key=f"ccs_ios_card_{ident}"):
+            if kind == "home" and strategy_context is not None:
+                strike = f"{quote.strike:f} CE" if quote is not None else "—"
+                cmp = card_value(row.get("CMP (₹)"), "CMP (₹)")
+                st.markdown(
+                    f'<div class="ccs-ios-stockhead"><span class="ccs-ios-logo">{escape(symbol[:1])}</span>'
+                    f'<div><b>{escape(symbol)}</b><small>{escape(strike)}</small></div>'
+                    f'<strong>{escape(cmp)}</strong></div>', unsafe_allow_html=True)
                 entries, expiry, snapshot_key, scan_day = strategy_context
-                if symbol in entries:
-                    from .stock_strategy_ui import launch_strategy
-                    for col, action, preset in (
-                        ("5%+ OTM CE (%)", "Build covered call", "Covered call"),
-                        ("ATM Straddle Total (₹)", "Build short straddle", "Short straddle"),
+                with st.container(key=f"ccs_ios_tiles_{ident}"):
+                    left, right = st.columns(2, gap="small")
+                    for col, side, label, preset, actual in (
+                        ("5%+ OTM CE (%)", left, "1.05 CE", "Covered call", quote),
+                        ("Straddle (%)", right, "STRADDLE", "Short straddle", atm),
                     ):
-                        quoted = pd.to_numeric(row.get(col), errors="coerce")
-                        enabled = bool(pd.notna(quoted) and quoted > 0)
-                        if st.button(action, key=f"ccs_card_{kind}_{start + offset}_{symbol}_{preset}",
-                                     disabled=not enabled, use_container_width=True):
-                            access = connected_fyers()
-                            current = _snapshot(access)
-                            if (current and current["key"] == snapshot_key
-                                    and current["expiry"] == expiry
-                                    and current.get("scan_day") == scan_day):
-                                launch_strategy(symbol, entries[symbol], expiry, preset)
-                            else:
-                                st.warning("Scan changed. Select an opportunity from the current results.")
-    if kind == "home":
-        st.caption("Full table retains direct CE and straddle cell shortcuts. The original Build strategy controls are also available below.")
+                        with side:
+                            val = card_value(row.get(col), col)
+                            st.markdown(f'<div class="ccs-ios-tile-label">{label}</div>', unsafe_allow_html=True)
+                            with st.popover(val, use_container_width=True, disabled=actual is None):
+                                st.write(f"Strike: {actual.strike:f}" if actual is not None else "Strike unavailable")
+                                if actual is not None:
+                                    if preset == "Covered call":
+                                        st.write(f"Call premium: ₹{actual.call_ltp:f}")
+                                    else:
+                                        st.write(f"CE + PE premium: ₹{actual.call_ltp + actual.put_ltp:f}")
+                                    st.caption(f"Expiry: {expiry} · Snapshot quote")
+                                if st.button("Open strategy builder", key=f"ccs_ios_launch_{ident}_{preset}",
+                                             disabled=actual is None or symbol not in entries, use_container_width=True):
+                                    fresh = _snapshot(connected_fyers())
+                                    if (fresh and fresh["key"] == snapshot_key and fresh["expiry"] == expiry
+                                            and fresh.get("scan_day") == scan_day):
+                                        from .stock_strategy_ui import launch_strategy
+                                        launch_strategy(symbol, entries[symbol], expiry, preset)
+                                    else:
+                                        st.warning("Scan changed. Select a current opportunity.")
+                size = pd.to_numeric(row.get("Contract size (₹)"), errors="coerce")
+                size_text = f"₹{size / 100000:.2f}L" if pd.notna(size) else "—"
+                lot = card_value(row.get("Lot size"), "Lot size")
+                st.markdown(f'<div class="ccs-ios-foot"><span>{escape(size_text)}</span><span>Lot {escape(lot)}</span></div>',
+                            unsafe_allow_html=True)
+                if st.button("Build strategy ↗", key=f"ccs_ios_build_{ident}",
+                             disabled=quote is None or symbol not in entries, use_container_width=True):
+                    fresh = _snapshot(connected_fyers())
+                    if (fresh and fresh["key"] == snapshot_key and fresh["expiry"] == expiry
+                            and fresh.get("scan_day") == scan_day):
+                        from .stock_strategy_ui import launch_strategy
+                        launch_strategy(symbol, entries[symbol], expiry, "Covered call")
+                    else:
+                        st.warning("Scan changed. Select a current opportunity.")
+            else:
+                st.markdown(f'<div class="ccs-card-symbol">{escape(symbol)}</div>', unsafe_allow_html=True)
+                primary = ("CMP (₹)", "Futures Price (₹)", "Futures vs CMP (%)",
+                           "Contract size (₹)", "Lot size")
+                cells = [f'<div><small>{escape(col)}</small><strong>{escape(card_value(row[col], col))}</strong></div>'
+                         for col in primary if col in row]
+                st.markdown('<div class="ccs-card-grid">' + ''.join(cells) + '</div>', unsafe_allow_html=True)
+            with st.expander("View details"):
+                for col in frame.columns:
+                    if col != "Stock":
+                        st.text(f"{col}: {card_value(row[col], col)}")
+                if quote is not None:
+                    st.text(f"Selected call: {quote.strike:f} CE")
+                if atm is not None:
+                    st.text(f"ATM strike: {atm.strike:f} CE + PE")
+                st.link_button("TradingView chart ↗", tradingview_chart_url(symbol))
+
 
 
 def futures_discount_frame(available, cash, futures, expiry):
@@ -473,30 +497,31 @@ def render_selective_home():
     snapshot = _snapshot(access)
     default_expiry = snapshot["expiry"] if snapshot and snapshot["expiry"] in expiries else choose_expiry(entries)
     prepare_filters(expiries)
-    with st.form("selective_scan_filters"):
-        st.markdown("#### Quick Scan")
-        left, right = st.columns(2)
-        expiry = left.radio("Option month", expiries,
-                          index=expiries.index(default_expiry), horizontal=True,
-                          key="selective_expiry_choice")
-        maximum = right.radio("Contract size below", list(range(4, 11)),
-                           index=(snapshot["maximum"]-4 if snapshot else 3),
-                           format_func=lambda value: f"₹{value}L", horizontal=True,
-                           key="selective_contract_choice")
-        minimum = left.radio("5%+ OTM CE premium above", [2, 3, 4, 5, 6, 7, 8],
-                           index=(snapshot["minimum"]-2 if snapshot else 0),
-                           format_func=lambda value: f"{value}%", horizontal=True,
-                           key="selective_premium_choice")
-        r1_filter = right.radio("Monthly R1 filter", [R1_ALL, R1_ABOVE],
-                             index=int(bool(snapshot and snapshot.get("r1_filter") == R1_ABOVE)),
-                             horizontal=True, key="selective_r1_choice",
-                             help="Above R1 only excludes both below/equal R1 and unknown R1. "
-                                  "History is requested only after contract and CE filters.")
-        note, action, future_action = st.columns([2, 1, 1])
-        note.caption("Read-only · no market-data requests before Start scan.")
-        apply = action.form_submit_button("Apply filters / Start scan", type="primary",
-                                         use_container_width=True)
-        show_futures = future_action.form_submit_button("Show futures · < ₹7L", use_container_width=True)
+    with st.expander("Filters", expanded=not bool(snapshot)) if phone_layout() else st.container():
+        with st.form("selective_scan_filters"):
+            st.markdown("#### Quick Scan")
+            left, right = st.columns(2)
+            expiry = left.radio("Option month", expiries,
+                              index=expiries.index(default_expiry), horizontal=True,
+                              key="selective_expiry_choice")
+            maximum = right.radio("Contract size below", list(range(4, 11)),
+                               index=(snapshot["maximum"]-4 if snapshot else 3),
+                               format_func=lambda value: f"₹{value}L", horizontal=True,
+                               key="selective_contract_choice")
+            minimum = left.radio("5%+ OTM CE premium above", [2, 3, 4, 5, 6, 7, 8],
+                               index=(snapshot["minimum"]-2 if snapshot else 0),
+                               format_func=lambda value: f"{value}%", horizontal=True,
+                               key="selective_premium_choice")
+            r1_filter = right.radio("Monthly R1 filter", [R1_ALL, R1_ABOVE],
+                                 index=int(bool(snapshot and snapshot.get("r1_filter") == R1_ABOVE)),
+                                 horizontal=True, key="selective_r1_choice",
+                                 help="Above R1 only excludes both below/equal R1 and unknown R1. "
+                                      "History is requested only after contract and CE filters.")
+            note, action, future_action = st.columns([2, 1, 1])
+            note.caption("No market-data requests before Start scan.")
+            apply = action.form_submit_button("Apply filters / Start scan", type="primary",
+                                             use_container_width=True)
+            show_futures = future_action.form_submit_button("Show futures · < ₹7L", use_container_width=True)
     if show_futures:
         if snapshot:
             snapshot["auto_scan"] = False
@@ -539,14 +564,31 @@ def render_selective_home():
     pending = set(candidates["Stock"]) - snapshot["attempted"]
     checked = len(set(candidates["Stock"]) & snapshot["attempted"])
     frame = qualified_rows(available, snapshot)
-    a, b, c, d = st.columns(4)
-    a.metric("Cash quotes", len(snapshot["cash"]))
-    b.metric("Contract-qualified", len(candidates))
-    c.metric("Option chains checked", f"{checked} / {len(candidates)}")
-    d.metric("Qualifying opportunities", len(frame))
+    if phone_layout():
+        best = pd.to_numeric(frame["5%+ OTM CE (%)"], errors="coerce").max()
+        best_text = f"{best:.2f}%" if pd.notna(best) else "—"
+        ratio = checked / len(candidates) if len(candidates) else 0
+        st.markdown(
+            '<div class="ccs-ios-summary"><small>OTM COVERED CALL SCANNER</small>'
+            f'<div class="ccs-ios-count">{len(frame)} <span>opportunities</span></div>'
+            f'<div class="ccs-ios-progress"><i style="width:{ratio:.2%}"></i></div>'
+            f'<small>{checked} / {len(candidates)} option chains checked</small>'
+            '<div class="ccs-ios-summarygrid">'
+            f'<div><small>Highest CE premium</small><strong>{best_text}</strong></div>'
+            f'<div><small>Contract limit</small><strong>₹{int(snapshot["maximum"])} lakh</strong></div>'
+            '</div></div>', unsafe_allow_html=True)
+        with st.expander("Scan statistics"):
+            st.write(f'Cash quotes: {len(snapshot["cash"])} · Contract-qualified: {len(candidates)}')
+    else:
+        a, b, c, d = st.columns(4)
+        a.metric("Cash quotes", len(snapshot["cash"]))
+        b.metric("Contract-qualified", len(candidates))
+        c.metric("Option chains checked", f"{checked} / {len(candidates)}")
+        d.metric("Qualifying opportunities", len(frame))
     st.caption(f"Applied: below ₹{snapshot['maximum']} lakh · CE > {snapshot['minimum']}% · {snapshot['expiry']} · {snapshot.get('r1_filter', R1_ALL)} · CMP snapshot {snapshot['cash_at'] or 'not loaded'}")
-    st.progress(checked / len(candidates) if len(candidates) else 0.0,
-                text=f"{checked} of {len(candidates)} option chains checked")
+    if not phone_layout():
+        st.progress(checked / len(candidates) if len(candidates) else 0.0,
+                    text=f"{checked} of {len(candidates)} option chains checked")
     x, y = st.columns(2)
     work_pending = automatic_work_pending(available, snapshot)
     today = datetime.now(IST).date().isoformat()
