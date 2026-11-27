@@ -20,6 +20,7 @@ from .fyers_readonly import (
 )
 from .ce_eod_remote import IST
 from .broker_control import broker_allowed
+from .mobile_fyers_vault import MobileVault, VaultError, exists as mobile_vault_exists
 
 
 @st.cache_resource
@@ -63,22 +64,88 @@ def render_fyers_settings():
         "Redirect URL: `https://trade.fyers.in/api-login/redirect-uri/index.html`"
     )
     windows = sys.platform == "win32"
-    existing = read_app_from_vault()
+    vault = st.session_state.get("_fyers_mobile_vault") if not windows else None
+    existing = read_app_from_vault() if windows else (vault.credentials() if vault else None)
     if not windows:
-        st.info("Android / Linux: connect for this browser session. Windows secure storage is unavailable here; no secret or token is written to disk.")
+        if vault:
+            st.success("Mobile credential vault unlocked · saved App ID and Secret available.")
+        elif mobile_vault_exists():
+            st.info("Saved FYERS credentials found. Unlock once in this CCS session.")
+            with st.form("fyers_mobile_unlock", clear_on_submit=True):
+                password = st.text_input("Vault passphrase", type="password")
+                unlock = st.form_submit_button("Unlock saved FYERS", type="primary")
+            if unlock:
+                try:
+                    vault = MobileVault.unlock(password)
+                    st.session_state["_fyers_mobile_vault"] = vault
+                    for key in ("fyers_local_app_id", "fyers_local_app_secret",
+                                "_fyers_pending_app", "_fyers_pending_secret", "_fyers_oauth_state"):
+                        st.session_state.pop(key, None)
+                    access = vault.access()
+                    if access:
+                        st.session_state["_fyers_access"] = access
+                        st.session_state["fno_fyers_select_on_next_run"] = True
+                        st.session_state["_fyers_session_note"] = "Unexpired token restored from encrypted mobile vault."
+                    st.rerun()
+                except VaultError as exc:
+                    st.error(str(exc))
+            st.caption("You can also use a temporary session without unlocking.")
+        else:
+            st.caption("Save your FYERS App ID and Secret once in an encrypted vault. No Windows credential manager needed.")
     app_id = st.text_input(
         "FYERS App ID (ends in -100)",
         value=existing[0] if existing else "",
         key="fyers_local_app_id", max_chars=50,
     ).strip()
     entered_secret = st.text_input(
-        "FYERS App Secret · blank uses your secure saved secret" if windows else "FYERS App Secret",
+        "FYERS App Secret · blank uses your secure saved secret" if (windows or existing) else "FYERS App Secret",
         value="", type="password", key="fyers_local_app_secret",
         help="Stored secrets are never re-sent to the browser. "
              "Type only once for first-time setup or replacement.",
     )
     app_secret = (entered_secret or
                   (existing[1] if existing and existing[0] == app_id else ""))
+    if not windows:
+        if vault:
+            with st.expander("Manage saved FYERS credentials"):
+                if st.button("Update saved App ID / Secret", key="fyers_mobile_update"):
+                    try:
+                        changed = (validate_app_id(app_id), _valid_secret(app_secret)) != vault.credentials()
+                        vault.save_credentials(app_id, app_secret)
+                        if changed:
+                            for key in ("_fyers_access", "_fyers_pending_app", "_fyers_pending_secret", "_fyers_oauth_state"):
+                                st.session_state.pop(key, None)
+                        st.success("Encrypted credentials saved. Reauthorize if changed.")
+                    except (VaultError, FyersDataError) as exc:
+                        st.error(str(exc))
+                if st.checkbox("Confirm remove saved credentials", key="fyers_mobile_delete_confirm"):
+                    if st.button("Delete encrypted FYERS vault", key="fyers_mobile_delete"):
+                        try:
+                            vault.forget()
+                            for key in ("_fyers_mobile_vault", "_fyers_access", "_fyers_pending_app",
+                                        "_fyers_pending_secret", "_fyers_oauth_state",
+                                        "fyers_local_app_id", "fyers_local_app_secret"):
+                                st.session_state.pop(key, None)
+                            st.rerun()
+                        except VaultError as exc:
+                            st.error(str(exc))
+        elif not mobile_vault_exists():
+            with st.expander("Save FYERS credentials on this phone", expanded=True):
+                st.caption("Choose a strong passphrase (at least 10 characters). Enter it once after a new CCS session. It is not saved; forgetting it means recreating the vault.")
+                with st.form("fyers_mobile_create", clear_on_submit=True):
+                    password = st.text_input("Create vault passphrase", type="password")
+                    confirmation = st.text_input("Confirm vault passphrase", type="password")
+                    save = st.form_submit_button("Save encrypted FYERS credentials")
+                if save:
+                    try:
+                        if password != confirmation:
+                            raise VaultError("Passphrases do not match.")
+                        vault = MobileVault.create(password, app_id, app_secret)
+                        st.session_state["_fyers_mobile_vault"] = vault
+                        st.session_state.pop("fyers_local_app_secret", None)
+                        st.rerun()
+                    except (VaultError, FyersDataError) as exc:
+                        st.error(str(exc))
     col1, col2 = st.columns([1, 1]) if windows else (st.container(), st.container())
     with col1:
         if windows and st.button("Save in Windows Credential Manager", key="fyers_save_keys",
@@ -130,19 +197,22 @@ def render_fyers_settings():
                 st.session_state["_fyers_access"] = access
                 st.session_state["fno_fyers_select_on_next_run"] = True
                 try:
-                    if not windows:
-                        raise FyersDataError("No supported mobile secure vault")
-                    save_access_to_vault(access)
-                    st.session_state["_fyers_session_note"] = (
-                        "Connected and token safely stored in Windows Credential Manager."
-                    )
-                except FyersDataError:
+                    if windows:
+                        save_access_to_vault(access)
+                        note = "Connected and token stored in Windows Credential Manager."
+                    elif vault:
+                        vault.save_access(access, st.session_state["_fyers_pending_secret"])
+                        note = "Connected and token stored in encrypted mobile vault."
+                    else:
+                        raise VaultError("Mobile vault is not unlocked.")
+                    st.session_state["_fyers_session_note"] = note
+                except (FyersDataError, VaultError):
                     st.session_state["_fyers_session_note"] = (
                         "Connected for this browser session only. Secure storage unavailable."
                     )
                 for key in (
                     "_fyers_pending_app", "_fyers_pending_secret",
-                    "_fyers_oauth_state", "fyers_redirect_return",
+                    "_fyers_oauth_state", "fyers_redirect_return", "fyers_local_app_secret",
                 ):
                     st.session_state.pop(key, None)
                 st.rerun()
@@ -166,7 +236,8 @@ def render_fyers_settings():
                     st.warning("FYERS authorized; TCS stock quote not returned.")
             except FyersDataError as exc:
                 st.warning(str(exc))
-        if st.button("Disconnect and forget FYERS credentials on this device",
+        disconnect_label = "Disconnect and forget FYERS credentials on this device" if (windows or vault) else "Disconnect this FYERS session"
+        if st.button(disconnect_label,
                      key="fyers_remove_connection",
                      help="Stops local FYERS scanning and forgets the saved "
                           "credentials. Existing broker-issued tokens are not revoked."):
@@ -178,7 +249,15 @@ def render_fyers_settings():
                 technical_job["stop"].set()
             for key in ("fno_fyers_cash_snapshot", "fno_fyers_chain_snapshot"):
                 st.session_state.pop(key, None)
-            forget_vault()
+            if windows:
+                forget_vault()
+            elif vault:
+                try:
+                    vault.forget()
+                except VaultError as exc:
+                    st.error(str(exc))
+                    return
+                st.session_state.pop("_fyers_mobile_vault", None)
             st.session_state.pop("_fyers_access", None)
             st.session_state.pop("_fyers_session_note", None)
             st.session_state.pop("fyers_local_app_id", None)

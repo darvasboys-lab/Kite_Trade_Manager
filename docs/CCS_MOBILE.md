@@ -18,3 +18,18 @@
   workspace, FYERS login link and state rejection, scrollable full tables, cards,
   filters, strategy actions, charts, CSV export and no offscreen scan requests.
   Android hardware/browser behavior requires on-device verification.
+
+## Mobile FYERS credential vault
+
+On Android/Linux, select FYERS in Settings, enter your own App ID and Secret,
+and choose Save FYERS credentials on this phone. Set a strong passphrase.
+After each new CCS browser session, unlock once; credentials are prefilled
+without showing the secret and a matching unexpired access token is reused.
+Daily FYERS authorization still applies. The encrypted file is located under
+~/.ccs-private/fyers.vault (private directory 0700, file 0600), not in Git,
+workspace exports or shared Android storage. PBKDF2-HMAC-SHA256 (600,000
+iterations, random salt) and authenticated Fernet encryption are used. The
+passphrase/key is never persisted; this is not an Android hardware-backed
+Keystore. Keep CCS bound to localhost. Windows Credential Manager is unchanged.
+Forgetting the passphrase requires removing/recreating the local vault; no
+password recovery. Dhan PIN/TOTP storage remains Windows-only.
