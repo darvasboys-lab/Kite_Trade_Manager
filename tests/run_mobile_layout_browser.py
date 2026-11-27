@@ -71,6 +71,47 @@ def verify(page, name):
     assert not issues, f"{name}: {issues}"
     print("PASS", name, flush=True)
 
+
+THEME_CHECK = r"""() => {
+ const rgb = s => (s.match(/[\d.]+/g)||[]).map(Number);
+ const lum = rgb => rgb.slice(0,3).map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4)
+    .reduce((a,v,i)=>a+v*[.2126,.7152,.0722][i],0);
+ const contrast = (a,b) => (Math.max(lum(a),lum(b))+.05)/(Math.min(lum(a),lum(b))+.05);
+ const visible = e=>e.getClientRects().length && getComputedStyle(e).visibility!=='hidden';
+ const bg = e=>{
+   for(let n=e;n;n=n.parentElement){
+     const c=rgb(getComputedStyle(n).backgroundColor);
+     if(c.length===3 || (c.length===4 && c[3]>=.99))return c;
+   }
+   return rgb(getComputedStyle(document.querySelector('.stApp')).backgroundColor);
+ };
+ const root=getComputedStyle(document.documentElement);
+ const expected=rgb(root.getPropertyValue('--surface').trim().startsWith('#')
+   ? getComputedStyle(document.querySelector('.st-key-ccs_ios_dock')).backgroundColor : root.getPropertyValue('--surface'));
+ const issues=[];
+ const surfaces=document.querySelectorAll('[data-testid="stExpander"] details,[data-testid="stExpanderDetails"],[data-testid="stPopoverBody"],[role="listbox"]');
+ for(const e of surfaces){
+   if(!visible(e))continue;
+   const actual=rgb(getComputedStyle(e).backgroundColor);
+   if(actual.slice(0,3).join(',')!==expected.slice(0,3).join(','))
+     issues.push('native surface does not match CCS theme: '+e.dataset.testid);
+ }
+ const leaves=document.querySelectorAll('[data-testid="stExpander"] p,[data-testid="stExpander"] pre,[data-testid="stPopoverBody"] p,[role="option"] span,[data-testid="stWidgetLabel"] p');
+ for(const e of leaves){
+   if(!visible(e)||!e.textContent.trim()||e.closest('.ccs-ios-summary')||e.closest('button:disabled'))continue;
+   const fg=rgb(getComputedStyle(e).color),back=bg(e);
+   if(fg.length>=3 && back.length>=3 && contrast(fg,back)<4.5)
+      issues.push('low contrast: '+e.textContent.trim().slice(0,50));
+ }
+ return issues;
+}"""
+
+def verify_theme(page, name):
+    verify(page, name)
+    issues=page.evaluate(THEME_CHECK)
+    assert not issues, f"{name}: {issues}"
+
+
 def navigate(page, index, marker):
     page.locator(".st-key-ccs_ios_dock button").nth(index).click()
     page.get_by_text(marker, exact=True).first.wait_for(timeout=30000)
@@ -94,10 +135,10 @@ def main():
             verify(page,prefix+"-home")
             page.get_by_text("Filters · change scan settings", exact=True).click()
             page.get_by_text("Maximum contract size", exact=True).wait_for()
-            verify(page,prefix+"-filters-expanded")
+            verify_theme(page,prefix+"-filters-expanded")
             page.get_by_text("Filters · change scan settings", exact=True).click()
             page.get_by_text("View details", exact=True).first.click()
-            verify(page,prefix+"-stock-details-expanded")
+            verify_theme(page,prefix+"-stock-details-expanded")
             page.get_by_text("View details", exact=True).first.click()
             navigate(page,1,"Market Screener · Shortlisted stocks only")
             verify(page,prefix+"-screener")
@@ -118,7 +159,28 @@ def main():
             verify(page,prefix+"-settings")
             if w==390:
                 page.get_by_role("button",name="Dark mode",exact=True).click()
-                verify(page,prefix+"-settings-dark")
+                verify_theme(page,prefix+"-settings-dark")
+                navigate(page,0,"Filters · change scan settings")
+                page.get_by_text("View details", exact=True).first.click()
+                verify_theme(page,prefix+"-dark-details")
+                page.get_by_text("View details", exact=True).first.click()
+                page.get_by_text("Filters · change scan settings", exact=True).click()
+                verify_theme(page,prefix+"-dark-filters")
+                page.locator('[data-testid="stSelectbox"]').first.click()
+                page.locator('[role="listbox"]').wait_for()
+                verify_theme(page,prefix+"-dark-dropdown")
+                page.keyboard.press("Escape")
+                page.get_by_text("Filters · change scan settings", exact=True).click()
+                page.locator('[class*="st-key-ccs_ios_tiles_"] [data-testid="stPopover"] button').first.click()
+                page.locator('[data-testid="stPopoverBody"]').wait_for()
+                verify_theme(page,prefix+"-dark-premium-popover")
+                page.keyboard.press("Escape")
+                navigate(page,1,"Market Screener · Shortlisted stocks only")
+                verify_theme(page,prefix+"-dark-screener")
+                navigate(page,2,"Strategy Builder")
+                verify_theme(page,prefix+"-dark-strategy")
+                navigate(page,3,"Profit / loss at expiry")
+                verify_theme(page,prefix+"-dark-trades")
             context.close()
         for mode in ("locked","loading","ready"):
             context,page=open_case(browser,390,844,mode)
