@@ -55,6 +55,8 @@ with theme_action:
 # Switching preserves saved Dhan/FYERS credentials without simultaneous logins.
 from dhan_visual.broker_control import render_single_broker_selector
 render_single_broker_selector()
+from dhan_visual.fyers_ui import handle_fyers_local_return
+handle_fyers_local_return()
 
 # Default is a genuine lazy workspace: only the selected page executes.
 # Legacy full-market tabs are available only by explicit opt-in for existing
@@ -92,8 +94,10 @@ else:
     from dhan_visual.broker_control import broker_allowed
     from dhan_visual.fyers_ui import connected_fyers
     from dhan_visual.mobile_fyers_vault import exists as mobile_vault_exists
-    if (sys.platform != "win32" and broker_allowed("FYERS")
-            and mobile_vault_exists() and not connected_fyers()
+    from dhan_visual.fyers_readonly import read_app_from_vault
+    if (broker_allowed("FYERS")
+            and (read_app_from_vault() if sys.platform == "win32" else mobile_vault_exists())
+            and not connected_fyers()
             and st.session_state.get("ccs_selective_page") != "⚙ Settings"):
         st.button("Unlock / renew FYERS", key="ccs_mobile_quick_login",
                   type="primary", use_container_width=True,
