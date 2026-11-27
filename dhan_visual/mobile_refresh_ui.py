@@ -114,7 +114,6 @@ def begin(access, universe, filters):
     st.session_state.pop(ERROR,None)
 
 
-@st.fragment(run_every="2s")
 def refresh_panel(universe, shown, filters):
     job = st.session_state.get(JOB)
     access = connected_fyers()
@@ -165,8 +164,13 @@ def refresh_panel(universe, shown, filters):
             st.rerun(scope="app")
 
 
+@st.fragment(run_every="2s")
+def _poll_refresh_panel(universe, shown, filters):
+    refresh_panel(universe, shown, filters)
+
+
 def render_mobile_refresh(access, universe, filters, apply):
-    from .selective_scan import (_snapshot, _universe_rows, qualified_rows, _display,
+    from .selective_scan import (_snapshot, _universe_rows, qualified_rows,
                                  render_ios_saved_shortlist)
     data = load_workspace() or {}
     saved = data.get("snapshot")
@@ -187,7 +191,10 @@ def render_mobile_refresh(access, universe, filters, apply):
     else:
         shown = saved
     with st.container(key="ccs_mobile_refresh_panel"):
-        refresh_panel(universe, shown, filters)
+        if st.session_state.get(JOB):
+            _poll_refresh_panel(universe, shown, filters)
+        else:
+            refresh_panel(universe, shown, filters)
     with st.container(key="ccs_mobile_results"):
         if shown:
             timestamp = datetime.fromisoformat(shown["saved_at"]).astimezone(IST)
@@ -205,9 +212,6 @@ def render_mobile_refresh(access, universe, filters, apply):
             st.session_state[AUTO] = token_scope
             begin(access,universe,filters)
             st.rerun()
-        if active:
-            st.markdown(f"#### Opportunities · {len(frame)}")
-            _display(frame, strategy_context=({item.entry.symbol:item.entry for item in available},
-                       active["expiry"],active["key"],active["scan_day"]))
-        else:
-            render_ios_saved_shortlist(saved)
+        context = (({item.entry.symbol:item.entry for item in available},
+                    active["expiry"],active["key"],active["scan_day"]) if active else None)
+        render_ios_saved_shortlist(shown, strategy_context=context)
