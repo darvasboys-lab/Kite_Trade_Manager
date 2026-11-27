@@ -80,5 +80,33 @@ class StockStrategyTests(unittest.TestCase):
             full.assert_called_once()
 
 
+    def test_phone_cards_open_selected_stock_strategy_without_extra_scan(self):
+        app=app_with_catalogue(legacy=False)
+        app.session_state["ccs_active_broker"]="FYERS"
+        app.session_state["_fyers_access"]=access()
+        app.session_state["ccs_phone_layout"]=True
+        with patch("dhan_visual.selective_scan.fetch_cash_quotes",return_value=quotes()), \
+             patch("dhan_visual.selective_scan.resolve_expiry_timestamp",return_value=("123","2026-12-29")), \
+             patch("dhan_visual.selective_scan.fetch_chain",return_value=(call(),straddle())) as scan, \
+             patch("dhan_visual.selective_scan.fetch_daily_levels",return_value=levels()), \
+             patch("dhan_visual.stock_strategy_ui.fetch_strategy_expiries",return_value={"DEC-26":("123","2026-12-29")}), \
+             patch("dhan_visual.stock_strategy_ui.fetch_strategy_quotes",return_value={"SPOT":quotes()["TCS"]}), \
+             patch("dhan_visual.stock_strategy_ui.fetch_strategy_chain",return_value=chain()) as full:
+            app.run()
+            app.radio(key="selective_expiry_choice").set_value("DEC-26")
+            app.radio(key="selective_contract_choice").set_value(4)
+            next(x for x in app.button if x.label=="Apply filters / Start scan").click().run()
+            self.assertFalse(app.exception,[str(x.message) for x in app.exception])
+            self.assertEqual(app.radio(key="ccs_results_layout_home").value,"Mobile cards")
+            self.assertEqual(len(app.dataframe),0)
+            scan.assert_called_once()
+            next(x for x in app.button if x.key and x.key.startswith("ccs_card_TCS_DEC-26_Straddle")).click().run()
+            self.assertFalse(app.exception,[str(x.message) for x in app.exception])
+            self.assertEqual(app.session_state["ccs_stock_strategy_active"]["symbol"],"TCS")
+            self.assertEqual(app.session_state["ccs_stock_strategy_active"]["preset"],"Short straddle")
+            full.assert_called_once()
+            scan.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
