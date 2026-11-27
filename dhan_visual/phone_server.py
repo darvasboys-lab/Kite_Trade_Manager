@@ -276,6 +276,8 @@ def dispatch(route,d):
         PROGRESS.update(request_id=d.get("progress_id"),stage="options")
         try:
             run_automatic_batch(a,available,s,progress=lambda stage: report_scan_progress(s,available,stage))
+        except Exception as exc:
+            s["error"],s["stopped"] = "Scan batch failed ("+type(exc).__name__+"). Apply filters to retry manually.",True
         finally:
             LAST_BATCH = time.monotonic()
             finish_scan_progress(s,available)
