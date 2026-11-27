@@ -19,7 +19,8 @@ from .screener import choose_expiry, expiry_options
 from .screener_ui import _auto_universe
 from .technical_ui import attach_technical_columns
 from .r1_today import session_r1_cross
-from .tradingview_links import clickable_stock_frame, TRADINGVIEW_SYMBOL_DISPLAY
+from .tradingview_links import clickable_stock_frame, TRADINGVIEW_SYMBOL_DISPLAY, tradingview_chart_url
+from .mobile_cards import card_pages, card_value
 from .table_layout import dataframe_key, autofit_column_config, autofit_enabled, click_autofit
 
 BATCH = 35
@@ -276,6 +277,12 @@ def _strategy_cell_callback(key, frame, entries, expiry, snapshot_key, scan_day)
 
 
 def _display(frame, *, market=False, futures=False, strategy_context=None):
+    kind = "futures" if futures else "market" if market else "home"
+    view = st.radio("Results layout", ["Full table", "Mobile cards"], horizontal=True,
+                    key=f"ccs_results_layout_{kind}")
+    if view == "Mobile cards":
+        _display_mobile_cards(frame, kind)
+        return
     config = {
         "CMP (₹)": st.column_config.NumberColumn("CMP (₹)", format="₹%.2f"),
         R1_COLUMN: st.column_config.TextColumn("> R1", help="CMP strictly above current monthly R1. Dash = not verified."),
@@ -309,6 +316,36 @@ def _display(frame, *, market=False, futures=False, strategy_context=None):
     st.dataframe(frame, hide_index=True, use_container_width=True, height=520,
                  key=key, column_config=autofit_column_config(config, autofit_enabled(st.session_state)),
                  **selection)
+
+
+def _display_mobile_cards(frame, kind):
+    """Presentation only: page existing results without additional API calls."""
+    if frame.empty:
+        st.info("No matching results yet.")
+        return
+    pages = card_pages(len(frame))
+    page = st.selectbox("Result page", list(range(pages)),
+                        format_func=lambda i: f"{i + 1} / {pages}",
+                        key=f"ccs_cards_page_{kind}")
+    start = page * 8
+    st.caption(f"Showing {start + 1}–{min(start + 8, len(frame))} of {len(frame)} results. Original scan order.")
+    primary = ("CMP (₹)", "5%+ OTM CE (%)", "ATM Straddle Total (₹)",
+               "Straddle (%)", "Contract size (₹)", "Lot size",
+               "Futures Price (₹)", "Futures vs CMP (%)", R1_COLUMN)
+    for _, row in frame.iloc[start:start + 8].iterrows():
+        with st.container(border=True):
+            st.markdown("**" + str(row["Stock"]) + "**")
+            st.link_button("TradingView chart", tradingview_chart_url(row["Stock"]))
+            for col in primary:
+                if col in row:
+                    st.text(f"{col}: {card_value(row[col], col)}")
+            extra = [col for col in frame.columns if col != "Stock" and col not in primary]
+            if extra:
+                with st.expander("All additional indicators / details"):
+                    for col in extra:
+                        st.text(f"{col}: {card_value(row[col], col)}")
+    if kind == "home":
+        st.caption("Choose a stock in Build strategy below to open its covered call or straddle. Full table retains direct cell shortcuts.")
 
 
 def futures_discount_frame(available, cash, futures, expiry):
@@ -519,7 +556,7 @@ def render_selective_home():
     if snapshot["options_at"]:
         st.caption("Options requested " + snapshot["options_at"] + " · each stock checked once; cached quotes are not refreshed automatically.")
     save_scan_controls(snapshot,frame)
-    st.caption("Click any CE premium %, ATM straddle total or straddle % cell to open that stock’s Strategy Builder.")
+    st.caption("In Full table, click a CE or straddle cell to open Strategy Builder. In Mobile cards, use Build strategy below.")
     _display(frame, strategy_context=({item.entry.symbol: item.entry for item in available},
                                      snapshot["expiry"], snapshot["key"], snapshot.get("scan_day")))
     if not frame.empty:

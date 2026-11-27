@@ -28,7 +28,7 @@ st.markdown(
     """<section class="ps-header" aria-label="Covered Call Strategy Builder workspace">
       <div class="ps-topbar">
         <div class="ps-brand"><div class="ps-mark">↗</div>
-          <h1>CCS Terminal <span>· v1.0</span></h1></div>
+          <h1>CCS Terminal <span>· Mobile ready</span></h1></div>
         <div class="ps-chips">
           <span class="ps-chip safe">● Market-data only</span>
           <span class="ps-chip">Stock F&O</span>

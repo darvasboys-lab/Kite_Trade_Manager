@@ -4,6 +4,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from hashlib import sha256
+import sys
 from queue import Empty, SimpleQueue
 from threading import Event
 
@@ -46,7 +47,7 @@ def render_fyers_settings():
         st.caption(
             "FYERS is paused. Select FYERS above as the ONLY active broker "
             "to authenticate. Its saved App ID, Secret and valid token "
-            "remain in Windows Credential Manager."
+            "remain in their existing supported secure vault or browser session."
         )
         return
     st.caption(
@@ -61,23 +62,26 @@ def render_fyers_settings():
         "App name: **Covered Call Strategy Builder** · "
         "Redirect URL: `https://trade.fyers.in/api-login/redirect-uri/index.html`"
     )
+    windows = sys.platform == "win32"
     existing = read_app_from_vault()
+    if not windows:
+        st.info("Android / Linux: connect for this browser session. Windows secure storage is unavailable here; no secret or token is written to disk.")
     app_id = st.text_input(
         "FYERS App ID (ends in -100)",
         value=existing[0] if existing else "",
         key="fyers_local_app_id", max_chars=50,
     ).strip()
     entered_secret = st.text_input(
-        "FYERS App Secret · blank uses your secure saved secret",
+        "FYERS App Secret · blank uses your secure saved secret" if windows else "FYERS App Secret",
         value="", type="password", key="fyers_local_app_secret",
         help="Stored secrets are never re-sent to the browser. "
              "Type only once for first-time setup or replacement.",
     )
     app_secret = (entered_secret or
                   (existing[1] if existing and existing[0] == app_id else ""))
-    col1, col2 = st.columns([1, 1])
+    col1, col2 = st.columns([1, 1]) if windows else (st.container(), st.container())
     with col1:
-        if st.button("Save in Windows Credential Manager", key="fyers_save_keys",
+        if windows and st.button("Save in Windows Credential Manager", key="fyers_save_keys",
                      use_container_width=True):
             try:
                 save_app_to_vault(app_id, app_secret)
@@ -86,7 +90,7 @@ def render_fyers_settings():
                 st.warning(str(exc))
     with col2:
         if st.button("1 · Begin FYERS login", key="fyers_start_login",
-                     use_container_width=True):
+                     type="primary", use_container_width=True):
             try:
                 validate_app_id(app_id)
                 _valid_secret(app_secret)
@@ -98,22 +102,26 @@ def render_fyers_settings():
     pending_app = st.session_state.get("_fyers_pending_app")
     state = st.session_state.get("_fyers_oauth_state")
     if pending_app and state:
+        login_url = authorization_url(pending_app, state)
         st.link_button(
             "2 · Open secure FYERS login (new browser tab)",
-            url=authorization_url(pending_app, state),
+            url=login_url,
             use_container_width=True,
         )
+        with st.expander("Login button not opening? Copy the login link", expanded=not windows):
+            st.caption("Use the copy icon, open a new Chrome tab, paste the link and sign in. Keep this CCS tab open.")
+            st.code(login_url, language=None)
         st.caption(
             "After signing in to FYERS, copy the FULL address from the "
             "FYERS redirect browser tab (including auth_code and state). "
-            "Paste it below ON THIS PC, not in ChatGPT or GitHub."
+            "Paste it below in this same CCS tab, not in chat or GitHub."
         )
         redirected = st.text_input(
             "3 · Paste full FYERS redirect URL",
             type="password", key="fyers_redirect_return",
         )
         if st.button("4 · Connect FYERS market data", key="fyers_finish_login",
-                     use_container_width=True):
+                     type="primary", use_container_width=True):
             try:
                 code = parse_authorization_return(redirected, state)
                 access = exchange_code(
@@ -122,6 +130,8 @@ def render_fyers_settings():
                 st.session_state["_fyers_access"] = access
                 st.session_state["fno_fyers_select_on_next_run"] = True
                 try:
+                    if not windows:
+                        raise FyersDataError("No supported mobile secure vault")
                     save_access_to_vault(access)
                     st.session_state["_fyers_session_note"] = (
                         "Connected and token safely stored in Windows Credential Manager."
@@ -156,7 +166,7 @@ def render_fyers_settings():
                     st.warning("FYERS authorized; TCS stock quote not returned.")
             except FyersDataError as exc:
                 st.warning(str(exc))
-        if st.button("Disconnect and forget FYERS credentials on this PC",
+        if st.button("Disconnect and forget FYERS credentials on this device",
                      key="fyers_remove_connection",
                      help="Stops local FYERS scanning and forgets the saved "
                           "credentials. Existing broker-issued tokens are not revoked."):
