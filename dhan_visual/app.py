@@ -29,7 +29,9 @@ phone = phone_layout()
 st.markdown('<div class="ccs-ios-title">CCS Terminal</div>', unsafe_allow_html=True)
 
 # Keep the original broker selector and theme action mounted on every rerun.
-from dhan_visual.broker_control import render_single_broker_selector
+from dhan_visual.broker_control import (render_single_broker_selector, initialize_broker_selection,
+                                        active_broker, PENDING_KEY, _pending_status)
+initialize_broker_selection()
 
 def render_theme_control():
     if st.button(
@@ -42,9 +44,9 @@ def render_theme_control():
         st.rerun()
 
 if phone:
-    with st.expander("Connection & appearance", expanded=False):
-        render_single_broker_selector()
-        render_theme_control()
+    # Keep connection switching and its completion alive across all pages.
+    if st.session_state.get(PENDING_KEY):
+        _pending_status()
 else:
     theme_space, theme_action = st.columns([6, 1.4])
     with theme_action:
@@ -81,6 +83,9 @@ if legacy:
         render_screener()
     
     with settings:
+        if phone:
+            render_single_broker_selector()
+            render_theme_control()
         from dhan_visual.screener_ui import render_dhan_settings
         render_dhan_settings()
         render_settings()
@@ -90,7 +95,7 @@ else:
     from dhan_visual.fyers_ui import connected_fyers
     from dhan_visual.mobile_fyers_vault import exists as mobile_vault_exists
     from dhan_visual.fyers_readonly import read_app_from_vault
-    if (broker_allowed("FYERS")
+    if (not phone and broker_allowed("FYERS")
             and (read_app_from_vault() if sys.platform == "win32" else mobile_vault_exists())
             and not connected_fyers()
             and st.session_state.get("ccs_selective_page") != "⚙ Settings"):
@@ -106,6 +111,19 @@ else:
     else:
         page = st.radio("Workspace", pages, horizontal=True,
                         key="ccs_selective_page", label_visibility="collapsed")
+    if phone:
+        broker = active_broker()
+        if st.session_state.get(PENDING_KEY):
+            status = "Switching connection"
+            state = "pending"
+        elif broker == "FYERS":
+            status = "Session available" if connected_fyers() else "Connection required"
+            state = "ready" if status == "Session available" else "pending"
+        else:
+            status = "Selected"
+            state = "pending"
+        st.markdown(f'<div class="ccs-ios-status"><span class="ccs-ios-dot {state}"></span>'
+                    f'{broker} · {status}</div>', unsafe_allow_html=True)
     if page == "◎ OTM CE Home":
         render_selective_home()
     elif page == "⌕ Market Screener":
@@ -114,6 +132,9 @@ else:
         from dhan_visual.stock_strategy_ui import render_independent_strategy
         render_independent_strategy()
     elif page == "⚙ Settings":
+        if phone:
+            render_single_broker_selector()
+            render_theme_control()
         from dhan_visual.screener_ui import render_dhan_settings
         render_dhan_settings()
         render_settings()
