@@ -728,12 +728,18 @@ def render_selective_home():
     default_expiry = snapshot["expiry"] if snapshot and snapshot["expiry"] in expiries else choose_expiry(entries)
     if phone_layout():
         from .workspace_ui import load_workspace, FILTER_KEYS
+        from .mobile_refresh_ui import startup_filters
         saved = (load_workspace() or {}).get("snapshot")
-        if saved:
+        defaults = startup_filters(expiries)
+        # Fresh Home sessions always begin with the requested default scan.
+        # Saved snapshots are display data, not startup filter instructions.
+        if not st.session_state.get("ccs_mobile_defaults_initialized"):
             for field, widget in FILTER_KEYS.items():
-                value = saved["filters"][field]
-                if field != "expiry" or value in expiries:
-                    st.session_state.setdefault(widget, value)
+                st.session_state[widget] = defaults[field]
+            st.session_state["ccs_mobile_defaults_initialized"] = True
+        elif st.session_state.get(FILTER_KEYS["expiry"]) not in expiries:
+            st.session_state[FILTER_KEYS["expiry"]] = defaults["expiry"]
+        default_expiry = defaults["expiry"]
     prepare_filters(expiries)
     with st.expander("Filters", expanded=not bool(snapshot or saved)) if phone_layout() else st.container():
         with st.form("selective_scan_filters"):
@@ -743,20 +749,20 @@ def render_selective_home():
                               index=expiries.index(default_expiry), horizontal=True,
                               key="selective_expiry_choice")
             maximum = right.radio("Contract size below", list(range(4, 11)),
-                               index=(snapshot["maximum"]-4 if snapshot else 3),
+                               index=(3 if phone_layout() else snapshot["maximum"]-4 if snapshot else 3),
                                format_func=lambda value: f"₹{value}L", horizontal=True,
                                key="selective_contract_choice")
             minimum = left.radio("5%+ OTM CE premium above", [2, 3, 4, 5, 6, 7, 8],
-                               index=(snapshot["minimum"]-2 if snapshot else 0),
+                               index=(3 if phone_layout() else snapshot["minimum"]-2 if snapshot else 0),
                                format_func=lambda value: f"{value}%", horizontal=True,
                                key="selective_premium_choice")
             r1_filter = right.radio("Monthly R1 filter", [R1_ALL, R1_ABOVE],
-                                 index=int(bool(snapshot and snapshot.get("r1_filter") == R1_ABOVE)),
+                                 index=(0 if phone_layout() else int(bool(snapshot and snapshot.get("r1_filter") == R1_ABOVE))),
                                  horizontal=True, key="selective_r1_choice",
                                  help="Above R1 only excludes both below/equal R1 and unknown R1. "
                                       "History is requested only after contract and CE filters.")
             note, action, future_action = st.columns([2, 1, 1])
-            note.caption("Refresh uses these filters." if phone_layout() else "No market-data requests before Start scan.")
+            note.caption("Startup scans automatically · change filters and apply for a different scan." if phone_layout() else "No market-data requests before Start scan.")
             apply = action.form_submit_button("Apply filters / Start scan", type="primary",
                                              use_container_width=True)
             show_futures = future_action.form_submit_button("Show futures · < ₹7L", use_container_width=True)
