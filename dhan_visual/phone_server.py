@@ -20,7 +20,7 @@ from .fyers_readonly import (authorization_url, new_state, parse_authorization_r
     exchange_code, FyersDataError, fetch_cash_quotes, fetch_strategy_expiries,
     fetch_strategy_quotes, fetch_strategy_chain, fetch_r1_intraday_bars)
 from .fast_universe import load_fast_catalogue
-from .screener import expiry_options
+from .screener import expiry_options, expiry_sort_key
 from .ce_eod_remote import IST
 from .selective_scan import (new_snapshot, _universe_rows, contract_candidates,
     qualified_rows, pending_r1_symbols, load_shortlist_history, run_automatic_batch,
@@ -37,15 +37,20 @@ LOCK = Lock()
 STATE = {"vault": None, "oauth": None, "universe": None, "scan": None}
 LAST_BATCH = 0.0
 
+class PhoneInputError(ValueError):
+    """Explicit, safe user-facing error; never include request secrets."""
+
+
 def access():
     vault = STATE["vault"]
     a = vault.access() if vault else None
     if not a:
-        raise ValueError("Unlock and authorize FYERS in Settings first.")
+        raise PhoneInputError("Unlock and authorize FYERS in Settings first.")
     return a
 
 def clear_scan():
     STATE["scan"] = None
+    STATE.pop("verified_months",None)
 
 def catalogue():
     if STATE["universe"] is None:
@@ -53,7 +58,37 @@ def catalogue():
     return STATE["universe"]
 
 def months():
-    return expiry_options([item.entry for item in catalogue()])
+    today = datetime.now(IST).date()
+    # Refresh the public catalogue on date rollover, never pick older months.
+    if STATE.get("catalogue_day") != today:
+        STATE["universe"] = None
+        STATE["catalogue_day"] = today
+    try:
+        entries = [item.entry for item in catalogue()]
+    except Exception:
+        raise PhoneInputError("Could not load the NSE F&O catalogue. Check internet and retry Load expiries.") from None
+    options = [m for m in expiry_options(entries) if expiry_sort_key(m) >= (today.year,today.month)]
+    if not options:
+        raise PhoneInputError("No current or future F&O expiry in the verified catalogue.")
+    v = STATE["vault"]
+    a = v.access() if v else None
+    if not a:
+        return options
+    key = (today,a.app_id,a.expires_at,tuple(options))
+    cached = STATE.get("verified_months")
+    if cached and cached[0] == key:
+        return cached[1]
+    # One paced FYERS request to verify that the listed months have not expired.
+    probe = next((e for e in entries if e.symbol == "SBIN" and all(m in e.lots for m in options)),None)
+    probe = probe or next((e for e in entries if all(m in e.lots for m in options)),None)
+    if probe is None:
+        raise PhoneInputError("No common stock for verifying the listed expiries. Refresh the catalogue.")
+    verified = fetch_strategy_expiries(a,probe.symbol,options)
+    options = [m for m in options if m in verified]
+    if not options:
+        raise PhoneInputError("No unexpired monthly expiry verified by FYERS.")
+    STATE["verified_months"] = (key,options)
+    return options
 
 def status():
     v = STATE["vault"]
@@ -70,7 +105,7 @@ def scan_result():
         return {"rows": [], "pending": False}
     if s["scan_day"] != datetime.now(IST).date().isoformat():
         clear_scan()
-        raise ValueError("Scan is from a previous session date. Start a fresh scan.")
+        return {"rows": [], "pending": False, "expired": True}
     available = _universe_rows(catalogue(), s["expiry"])
     frame = qualified_rows(available, s)
     technical = attach_technical_columns(
@@ -84,7 +119,7 @@ def scan_result():
             "checked": len(set(candidates["Stock"]) & s["attempted"]),
             "total": len(candidates), "cash": len(s["cash"]),
             "pending": not s["stopped"] and automatic_work_pending(available,s),
-            "error": s["error"], "asof": s["options_at"],
+            "error": s["error"], "asof": s["options_at"], "filters":{"expiry":s["expiry"],"maximum":s["maximum"],"minimum":s["minimum"],"r1":s["r1_filter"]=="Above R1 only"},
             "retry_after": max(0, ceil(60 - (time.monotonic()-LAST_BATCH)))}
 
 def strategy(d):
@@ -93,7 +128,7 @@ def strategy(d):
     def integer(k):
         v = d[k]
         if type(v) is not int:
-            raise ValueError("Share counts and batches must be integers.")
+            raise PhoneInputError("Share counts and batches must be integers.")
         return v
     p = Position(dec("avg"),integer("shares"),dec("strike"),integer("lot"),
                  dec("credit"),dec("tick"))
@@ -133,7 +168,7 @@ def dispatch(route,d):
     if route == "/authorize":
         v = STATE["vault"]
         if not v:
-            raise ValueError("Unlock the credential vault first.")
+            raise PhoneInputError("Unlock the credential vault first.")
         state = new_state()
         STATE["oauth"] = (state,time.monotonic()+600)
         return {"url":authorization_url(v.credentials()[0],state)}
@@ -142,25 +177,32 @@ def dispatch(route,d):
         STATE["oauth"] = None
         v = STATE["vault"]
         if not v or not pending or time.monotonic()>pending[1]:
-            raise ValueError("Login expired. Start authorization again.")
+            raise PhoneInputError("Login expired. Start authorization again.")
         code = parse_authorization_return(d["url"],pending[0])
         app,secret = v.credentials()
         v.save_access(exchange_code(app,secret,code),secret)
         clear_scan()
         return status()
     if route == "/months":
-        return {"months":months()}
+        available = months()
+        return {"months":available,"default":available[0]}
     if route == "/scan":
         a = access()
+        available_months = months()
+        expiry = d.get("expiry") or available_months[0]
+        maximum,minimum = d.get("maximum",7),d.get("minimum",2)
+        r1_filter = "Above R1 only" if d.get("r1") is True else "Include all stocks"
+        if expiry not in available_months:
+            raise PhoneInputError("Selected expiry has expired or is unavailable. Reload expiries.")
+        if type(maximum) is not int or maximum not in range(4,11) or type(minimum) is not int or minimum not in range(2,9):
+            raise PhoneInputError("Choose contract size ₹4–10 lakh and CE premium threshold 2–8%.")
+        existing = STATE["scan"]
+        if existing and not d.get("refresh") and existing["scan_day"] == datetime.now(IST).date().isoformat() and (existing["expiry"],existing["maximum"],existing["minimum"],existing["r1_filter"]) == (expiry,maximum,minimum,r1_filter):
+            return scan_result()
         now = time.monotonic()
-        if now-LAST_BATCH < 60 and LAST_BATCH:
-            raise ValueError("Wait 60 seconds between scan batches, including new scans.")
-        expiry = d["expiry"]
-        maximum,minimum = d["maximum"],d["minimum"]
-        if expiry not in months() or type(maximum) is not int or maximum not in range(4,11) or type(minimum) is not int or minimum not in range(2,9):
-            raise ValueError("Invalid scan filters.")
-        s = new_snapshot("phone",expiry,maximum,minimum,
-                         "Above R1 only" if d.get("r1") is True else "Include all stocks")
+        if LAST_BATCH and now-LAST_BATCH < 60:
+            return {"rows":[],"pending":False,"cooldown":max(1,ceil(60-(now-LAST_BATCH)))}
+        s = new_snapshot("phone",expiry,maximum,minimum,r1_filter)
         STATE["scan"] = s
         available = _universe_rows(catalogue(),expiry)
         LAST_BATCH = now
@@ -181,7 +223,7 @@ def dispatch(route,d):
         if not result["pending"]:
             return result
         if result["retry_after"] > 0 or time.monotonic()-LAST_BATCH < 60:
-            raise ValueError("Wait until the next 60-second scan slot.")
+            return result
         s = STATE["scan"]
         LAST_BATCH = time.monotonic()
         s["auto_scan"] = True
@@ -198,10 +240,10 @@ def dispatch(route,d):
         result = scan_result()
         s = STATE["scan"]
         if not s or s["stopped"]:
-            raise ValueError("No active scan.")
+            raise PhoneInputError("No active scan.")
         requested = d["symbols"]
         if not isinstance(requested,list) or len(requested)>10:
-            raise ValueError("Select at most ten symbols.")
+            raise PhoneInputError("Select at most ten symbols.")
         allowed = {row["Stock"] for row in result["rows"]}
         today = datetime.now(IST).date()
         for symbol in dict.fromkeys(requested):
@@ -220,7 +262,7 @@ def dispatch(route,d):
     if route == "/futures":
         a = access()
         if d["expiry"] not in months():
-            raise ValueError("Invalid month.")
+            raise PhoneInputError("Invalid month.")
         f,total,cash = load_futures_discount(a,catalogue(),d["expiry"])
         return {"rows":frame_rows(f),"total":total,"cash":cash,"asof":datetime.now(IST).isoformat()}
     if route == "/chain":
@@ -228,17 +270,17 @@ def dispatch(route,d):
         symbol,expiry = d["symbol"],d["expiry"]
         entry = next((item.entry for item in catalogue() if item.entry.symbol==symbol),None)
         if entry is None or expiry not in entry.lots:
-            raise ValueError("Choose a verified stock and month.")
+            raise PhoneInputError("Choose a verified stock and month.")
         available = expiry_options([entry])[:3]
         verified = fetch_strategy_expiries(a,symbol,available)
         if expiry not in verified:
-            raise ValueError("Selected expiry unavailable at FYERS.")
+            raise PhoneInputError("Selected expiry unavailable at FYERS.")
         quotes = fetch_strategy_quotes(a,symbol,list(verified))
         chain = fetch_strategy_chain(a,symbol,expiry,verified[expiry][0])
         return {"quotes":{k:asdict(v) for k,v in quotes.items()},
                 "months":list(verified),"lot":entry.lots[expiry],
                 "rows":list(chain.values()),"asof":datetime.now(IST).isoformat()}
-    raise ValueError("Unknown API operation.")
+    raise PhoneInputError("Unknown API operation.")
 
 class Handler(BaseHTTPRequestHandler):
     timeout = 15
@@ -279,10 +321,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             size=int(self.headers.get("Content-Length","0"))
             if not 0<size<=16384:
-                raise ValueError("Invalid request size.")
+                raise PhoneInputError("Invalid request size.")
             d=json.loads(self.rfile.read(size))
             if not isinstance(d,dict):
-                raise ValueError("Invalid request.")
+                raise PhoneInputError("Invalid request.")
             if not LOCK.acquire(blocking=False):
                 return self.response(409,{"error":"Another operation is running. Try again after it finishes."})
             try:
@@ -290,12 +332,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.response(200,result)
             finally:
                 LOCK.release()
-        except (FyersDataError,VaultError) as exc:
+        except (PhoneInputError,FyersDataError,VaultError) as exc:
             self.response(400,{"error":str(exc)})
-        except (ValueError,KeyError,TypeError,ArithmeticError):
-            self.response(400,{"error":"Invalid input, expired scan or request not ready. Check fields, connection and batch timing."})
-        except Exception:
-            self.response(500,{"error":"Operation failed. No automatic retry."})
+        except (ValueError,KeyError,TypeError,ArithmeticError) as exc:
+            # Do not echo arbitrary exception text or secrets from requests.
+            print("CCS request failed:", self.path.split("?")[0], type(exc).__name__, flush=True)
+            self.response(400,{"error":"Could not complete this operation ("+type(exc).__name__+"). Check the selected inputs; if it persists, send the terminal diagnostic."})
+        except Exception as exc:
+            print("CCS request failed:", self.path.split("?")[0], type(exc).__name__, flush=True)
+            self.response(500,{"error":"Local operation failed ("+type(exc).__name__+"). No automatic retry."})
 
 if __name__=="__main__":
     print("CCS Phone candidate: "+ORIGIN,flush=True)
