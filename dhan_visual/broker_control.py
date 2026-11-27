@@ -123,7 +123,7 @@ def _pending_status():
     st.rerun(scope="app")
 
 
-def render_single_broker_selector() -> None:
+def initialize_broker_selection() -> None:
     # Prefer read-only FYERS for options when its app is already configured.
     # This is a LOCAL vault inspection, never an API call or FYERS login.
     # A broker the user explicitly selected during this browser session wins.
@@ -142,7 +142,11 @@ def render_single_broker_selector() -> None:
         if preferred == "FYERS":
             # Set both Home and Screener option sources *before* widgets exist.
             _apply_source_selection("FYERS")
-    st.session_state.setdefault(SELECTION_KEY, active_broker())
+
+
+def render_single_broker_selector() -> None:
+    initialize_broker_selection()
+    st.session_state.setdefault(SELECTION_KEY, st.session_state.get(PENDING_KEY) or active_broker())
     # A pending switch updates ACTIVE_KEY, which is *not* widget-owned.
     # It can safely complete in a fragment rerun after previous jobs finish.
     _pending_status()
