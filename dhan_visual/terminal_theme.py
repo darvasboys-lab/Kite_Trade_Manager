@@ -5,13 +5,13 @@ DARK = {
     "page": "#101012", "surface": "#1c1c1e", "surface2": "#28282c",
     "border": "#353538", "text": "#f5f5f7", "muted": "#aaaab1",
     "accent": "#e5e5ea", "tint": "#30333b", "blue": "#90bbf2",
-    "atm-bg": "#232d3b", "green": "#51bc8b", "red": "#ff777b",
+    "settings-muted": "#b8b8bf", "atm-bg": "#232d3b", "green": "#51bc8b", "red": "#ff777b",
 }
 LIGHT = {
     "page": "#f2f2f7", "surface": "#ffffff", "surface2": "#f2f2f7",
     "border": "#e5e5ea", "text": "#1c1c1e", "muted": "#777780",
     "accent": "#414854", "tint": "#e5e7ed", "blue": "#3769a6",
-    "atm-bg": "#edf2f8", "green": "#27835c", "red": "#d45656",
+    "settings-muted": "#62626a", "atm-bg": "#edf2f8", "green": "#27835c", "red": "#d45656",
 }
 
 CSS = """
@@ -222,6 +222,75 @@ button:focus-visible,a:focus-visible { outline:2px solid var(--accent) !importan
  .st-key-ccs_ios_dock button { display:flex !important; flex-direction:column !important; align-items:center !important; justify-content:center !important; gap:3px !important; min-height:52px !important; }
  .st-key-ccs_ios_dock button > div, .st-key-ccs_ios_dock button > span { flex-direction:column !important; align-items:center !important; gap:3px !important; }
  .st-key-ccs_ios_dock button [data-testid="stIconMaterial"] { font-size:21px !important; }
+}
+
+/* Settings only: reset native Streamlit/BaseWeb surfaces that may still follow
+   the browser's theme rather than the CCS appearance toggle. */
+:is(.st-key-ccs_settings_panel,.st-key-ccs_legacy_settings_panel) {
+  color:var(--text);
+}
+:is(.st-key-ccs_settings_panel,.st-key-ccs_legacy_settings_panel)
+:is([data-testid="stCaptionContainer"],[data-testid="stCaptionContainer"] p,
+    [data-testid="stWidgetLabel"] p) {
+  color:var(--settings-muted) !important;
+  opacity:1 !important;
+}
+:is(.st-key-ccs_settings_panel,.st-key-ccs_legacy_settings_panel)
+:is([data-testid="stAlert"],[data-testid="stAlertContainer"],
+    [data-testid="stAlert"] [role="alert"],[data-testid="stAlert"] [data-baseweb="notification"]) {
+  background:var(--surface2) !important;
+  color:var(--text) !important;
+  border-radius:12px !important;
+}
+:is(.st-key-ccs_settings_panel,.st-key-ccs_legacy_settings_panel)
+[data-testid="stAlert"] :is(p,span,li,strong,div) {
+  color:var(--text) !important;
+}
+:is(.st-key-ccs_settings_panel,.st-key-ccs_legacy_settings_panel)
+:is([data-baseweb="input"],[data-baseweb="base-input"],[data-baseweb="textarea"],
+    [data-baseweb="select"] > div,[data-testid="stTextInput"] input,
+    [data-testid="stNumberInput"] input,[data-testid="stTextArea"] textarea) {
+  background:var(--surface) !important;
+  color:var(--text) !important;
+  border-color:var(--border) !important;
+  caret-color:var(--text) !important;
+}
+:is(.st-key-ccs_settings_panel,.st-key-ccs_legacy_settings_panel)
+:is([data-testid="stTextInput"],[data-testid="stNumberInput"]) button {
+  background:var(--surface) !important; color:var(--text) !important;
+}
+:is(.st-key-ccs_settings_panel,.st-key-ccs_legacy_settings_panel)
+:is([data-testid="stTextInput"],[data-testid="stNumberInput"]) button svg {
+  color:var(--text) !important; fill:currentColor;
+}
+:is(.st-key-ccs_settings_panel,.st-key-ccs_legacy_settings_panel)
+:is(input,textarea)::placeholder { color:var(--settings-muted) !important; opacity:1; }
+:is(.st-key-ccs_settings_panel,.st-key-ccs_legacy_settings_panel)
+.stMarkdown code {
+  background:var(--surface2) !important; color:var(--text) !important;
+  border-radius:5px; overflow-wrap:anywhere;
+}
+:is(.st-key-ccs_settings_panel,.st-key-ccs_legacy_settings_panel)
+[data-testid="stCheckbox"] label > div:first-child {
+  background:var(--surface) !important;
+  border-color:var(--settings-muted) !important;
+}
+:is(.st-key-ccs_settings_panel,.st-key-ccs_legacy_settings_panel)
+[data-testid="stCheckbox"] label:has(input:checked) > div:first-child {
+  background:var(--blue) !important; border-color:var(--blue) !important;
+}
+:is(.st-key-ccs_settings_panel,.st-key-ccs_legacy_settings_panel)
+:is([data-testid="stCheckbox"],[data-testid="stRadio"]) label p {
+  color:var(--text) !important;
+}
+:is(.st-key-ccs_settings_panel,.st-key-ccs_legacy_settings_panel)
+:is([data-testid="stButton"],[data-testid="stFormSubmitButton"]) button[kind="primary"] {
+  background:var(--accent) !important; border-color:var(--accent) !important;
+  color:var(--surface) !important;
+}
+:is(.st-key-ccs_settings_panel,.st-key-ccs_legacy_settings_panel)
+:is([data-testid="stButton"],[data-testid="stFormSubmitButton"]) button[kind="primary"] p {
+  color:var(--surface) !important;
 }
 
 """
