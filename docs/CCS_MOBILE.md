@@ -33,3 +33,17 @@ passphrase/key is never persisted; this is not an Android hardware-backed
 Keystore. Keep CCS bound to localhost. Windows Credential Manager is unchanged.
 Forgetting the passphrase requires removing/recreating the local vault; no
 password recovery. Dhan PIN/TOTP storage remains Windows-only.
+
+### Faster daily login and Android autofill
+
+Once the encrypted FYERS vault is created, reopen Settings or use the new
+Unlock / renew FYERS shortcut. The passphrase field requests current-password
+autofill. Android Chrome or your chosen password manager may offer autofill
+with biometric/device authentication, depending on device settings and support
+for the local site. CCS itself does not access Android biometrics or Keystore.
+An unlocked vault with an expired token prepares a new OAuth URL immediately;
+App ID/Secret inputs are collapsed and no Begin login click is required.
+Open Authorize FYERS, complete broker-required authentication, then paste the
+full returned URL and Connect FYERS. No refresh-token or 2FA bypass. Keep the
+same localhost origin and browser tab. If autofill is unavailable, enter the
+vault passphrase manually. No change to the Windows credential manager.

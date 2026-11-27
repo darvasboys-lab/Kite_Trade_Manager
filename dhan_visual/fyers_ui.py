@@ -42,6 +42,16 @@ def connected_fyers() -> FyersAccess | None:
     return access
 
 
+def prepare_saved_login(state, credentials):
+    """Prepare a local OAuth request; never contacts FYERS or embeds the secret in a URL."""
+    app_id, secret = credentials
+    app_id = validate_app_id(app_id)
+    secret = _valid_secret(secret)
+    state["_fyers_pending_app"] = app_id
+    state["_fyers_pending_secret"] = secret
+    state["_fyers_oauth_state"] = new_state()
+
+
 def render_fyers_settings():
     st.markdown("### FYERS · read-only market data")
     if not broker_allowed("FYERS"):
@@ -72,8 +82,10 @@ def render_fyers_settings():
         elif mobile_vault_exists():
             st.info("Saved FYERS credentials found. Unlock once in this CCS session.")
             with st.form("fyers_mobile_unlock", clear_on_submit=True):
-                password = st.text_input("Vault passphrase", type="password")
+                password = st.text_input("Vault passphrase", type="password",
+                                         autocomplete="current-password")
                 unlock = st.form_submit_button("Unlock saved FYERS", type="primary")
+            st.caption("You can use your Android password manager to fill this passphrase, with fingerprint/device unlock if supported and enabled.")
             if unlock:
                 try:
                     vault = MobileVault.unlock(password)
@@ -91,22 +103,29 @@ def render_fyers_settings():
                     st.rerun()
                 except VaultError as exc:
                     st.error(str(exc))
-            st.caption("You can also use a temporary session without unlocking.")
+            if not st.checkbox("Use different credentials for this session instead", key="fyers_mobile_temporary"):
+                return
         else:
             st.caption("Save your FYERS App ID and Secret once in an encrypted vault. No Windows credential manager needed.")
-    app_id = st.text_input(
-        "FYERS App ID (ends in -100)",
-        value=existing[0] if existing else "",
-        key="fyers_local_app_id", max_chars=50,
-    ).strip()
-    entered_secret = st.text_input(
-        "FYERS App Secret · blank uses your secure saved secret" if (windows or existing) else "FYERS App Secret",
-        value="", type="password", key="fyers_local_app_secret",
-        help="Stored secrets are never re-sent to the browser. "
-             "Type for first-time setup or replacement; unlock saved credentials when available.",
-    )
-    app_secret = (entered_secret or
-                  (existing[1] if existing and existing[0] == app_id else ""))
+    if vault:
+        if not connected_fyers() and not st.session_state.get("_fyers_oauth_state"):
+            prepare_saved_login(st.session_state, vault.credentials())
+        st.caption("Saved App ID: " + existing[0] + " · App Secret saved")
+    credentials_panel = st.expander("Edit saved App ID / Secret", expanded=False) if vault else st.container()
+    with credentials_panel:
+        app_id = st.text_input(
+            "FYERS App ID (ends in -100)",
+            value=existing[0] if existing else "",
+            key="fyers_local_app_id", max_chars=50,
+        ).strip()
+        entered_secret = st.text_input(
+            "FYERS App Secret · blank uses your secure saved secret" if (windows or existing) else "FYERS App Secret",
+            value="", type="password", key="fyers_local_app_secret",
+            help="Stored secrets are never re-sent to the browser. "
+                 "Type for first-time setup or replacement; unlock saved credentials when available.",
+        )
+        app_secret = (entered_secret or
+                      (existing[1] if existing and existing[0] == app_id else ""))
     if not windows:
         if vault:
             with st.expander("Manage saved FYERS credentials"):
@@ -117,7 +136,10 @@ def render_fyers_settings():
                         if changed:
                             for key in ("_fyers_access", "_fyers_pending_app", "_fyers_pending_secret", "_fyers_oauth_state"):
                                 st.session_state.pop(key, None)
-                        st.success("Encrypted credentials saved. Reauthorize if changed.")
+                        if changed:
+                            prepare_saved_login(st.session_state, vault.credentials())
+                            st.rerun()
+                        st.success("Encrypted credentials saved.")
                     except (VaultError, FyersDataError) as exc:
                         st.error(str(exc))
                 if st.checkbox("Confirm remove saved credentials", key="fyers_mobile_delete_confirm"):
@@ -135,8 +157,8 @@ def render_fyers_settings():
             with st.expander("Save FYERS credentials on this phone", expanded=True):
                 st.caption("Choose a strong passphrase (at least 10 characters). Enter it once after a new CCS session. It is not saved; forgetting it means recreating the vault.")
                 with st.form("fyers_mobile_create", clear_on_submit=True):
-                    password = st.text_input("Create vault passphrase", type="password")
-                    confirmation = st.text_input("Confirm vault passphrase", type="password")
+                    password = st.text_input("Create vault passphrase", type="password", autocomplete="new-password")
+                    confirmation = st.text_input("Confirm vault passphrase", type="password", autocomplete="new-password")
                     save = st.form_submit_button("Save encrypted FYERS credentials")
                 if save:
                     try:
@@ -158,25 +180,27 @@ def render_fyers_settings():
             except FyersDataError as exc:
                 st.warning(str(exc))
     with col2:
-        if st.button("1 · Begin FYERS login", key="fyers_start_login",
+        if not vault and st.button("1 · Begin FYERS login", key="fyers_start_login",
                      type="primary", use_container_width=True):
             try:
-                validate_app_id(app_id)
-                _valid_secret(app_secret)
-                st.session_state["_fyers_pending_app"] = app_id
-                st.session_state["_fyers_pending_secret"] = app_secret
-                st.session_state["_fyers_oauth_state"] = new_state()
+                prepare_saved_login(st.session_state, (app_id, app_secret))
             except FyersDataError as exc:
                 st.error(str(exc))
     pending_app = st.session_state.get("_fyers_pending_app")
     state = st.session_state.get("_fyers_oauth_state")
     if pending_app and state:
         login_url = authorization_url(pending_app, state)
+        if vault:
+            st.markdown("#### Renew FYERS session")
         st.link_button(
-            "2 · Open secure FYERS login (new browser tab)",
+            "Authorize FYERS ↗" if vault else "2 · Open secure FYERS login (new browser tab)",
             url=login_url,
             use_container_width=True,
         )
+        if vault and st.button("Restart authorization", key="fyers_mobile_restart_oauth"):
+            prepare_saved_login(st.session_state, vault.credentials())
+            st.session_state.pop("fyers_redirect_return", None)
+            st.rerun()
         with st.expander("Login button not opening? Copy the login link", expanded=not windows):
             st.caption("Use the copy icon, open a new Chrome tab, paste the link and sign in. Keep this CCS tab open.")
             st.code(login_url, language=None)
@@ -186,10 +210,10 @@ def render_fyers_settings():
             "Paste it below in this same CCS tab, not in chat or GitHub."
         )
         redirected = st.text_input(
-            "3 · Paste full FYERS redirect URL",
-            type="password", key="fyers_redirect_return",
+            "Paste full FYERS redirect URL" if vault else "3 · Paste full FYERS redirect URL",
+            type="password", key="fyers_redirect_return", autocomplete="off",
         )
-        if st.button("4 · Connect FYERS market data", key="fyers_finish_login",
+        if st.button("Connect FYERS" if vault else "4 · Connect FYERS market data", key="fyers_finish_login",
                      type="primary", use_container_width=True):
             try:
                 code = parse_authorization_return(redirected, state)
