@@ -27,6 +27,7 @@ from .selective_scan import (new_snapshot, _universe_rows, contract_candidates,
     automatic_work_pending, load_futures_discount)
 from .technical_ui import attach_technical_columns
 from .r1_today import session_r1_cross
+from .smart_suggestions import bullish_checks
 
 PORT = 8502
 HOST = f"127.0.0.1:{PORT}"
@@ -119,7 +120,14 @@ def scan_result():
         lambda symbol: "Yes" if s["crosses"].get(symbol) else
         ("No" if symbol in s["crosses"] else "Unknown"))
     candidates = contract_candidates(available, s)
-    return {"rows": frame_rows(technical), "expiry": s["expiry"],
+    rows = frame_rows(technical)
+    for row in rows:
+        symbol = row["Stock"]
+        quote = s["cash"].get(symbol)
+        levels = s["levels"].get(symbol)
+        row["bullish_checks"] = bullish_checks(getattr(quote,"price",None),levels)
+        row["technical_asof"] = getattr(levels,"asof",None)
+    return {"rows": rows, "expiry": s["expiry"],
             "checked": len(set(candidates["Stock"]) & s["attempted"]),
             "total": len(candidates), "cash": len(s["cash"]),
             "pending": not s["stopped"] and automatic_work_pending(available,s),
