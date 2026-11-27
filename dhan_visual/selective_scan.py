@@ -98,7 +98,7 @@ def pending_r1_symbols(available, snapshot):
             if s not in snapshot["levels"] and s not in attempted]
 
 
-def load_shortlist_history(access, snapshot, symbols, *, today=None):
+def load_shortlist_history(access, snapshot, symbols, *, today=None, progress=None):
     """One daily history per shortlisted name; shared with Market Screener."""
     today = today or datetime.now(IST).date()
     _ensure_history_day(snapshot, today)
@@ -113,6 +113,8 @@ def load_shortlist_history(access, snapshot, symbols, *, today=None):
             attempted.add(symbol)
             snapshot["levels"][symbol] = fetch_daily_levels(access, symbol, day=today)
             count += 1
+            if progress is not None:
+                progress("history")
     except FyersDataError as exc:
         snapshot["error"] = str(exc)
         snapshot["stopped"] = True
@@ -122,7 +124,7 @@ def load_shortlist_history(access, snapshot, symbols, *, today=None):
     return count
 
 
-def next_option_batch(access, available, snapshot, *, limit=BATCH):
+def next_option_batch(access, available, snapshot, *, limit=BATCH, progress=None):
     """Only contract-qualified, previously unattempted names; no retry loop."""
     candidates = contract_candidates(available, snapshot)["Stock"].tolist()
     pending = [s for s in candidates if s not in snapshot["attempted"]][:max(0, min(BATCH, limit))]
@@ -141,6 +143,8 @@ def next_option_batch(access, available, snapshot, *, limit=BATCH):
             if straddle is not None:
                 snapshot["straddles"][symbol] = straddle
             done += 1
+            if progress is not None:
+                progress("options")
     except FyersDataError as exc:
         snapshot["error"] = str(exc)
         snapshot["stopped"] = True
@@ -161,7 +165,7 @@ def automatic_work_pending(available, snapshot):
                 or pending_r1_symbols(available, snapshot))
 
 
-def run_automatic_batch(access, available, snapshot, *, now=None):
+def run_automatic_batch(access, available, snapshot, *, now=None, progress=None):
     """At most one batch per minute; all requests share existing FYERS pacing.
 
     Synchronous execution on the Streamlit session thread prevents overlapping
@@ -181,9 +185,17 @@ def run_automatic_batch(access, available, snapshot, *, now=None):
         return False
     # Reserve the next time slot BEFORE doing I/O, including on error.
     snapshot["next_batch_at"] = now + BATCH_INTERVAL_SECONDS
-    next_option_batch(access, available, snapshot)
+    if progress is None:
+        next_option_batch(access, available, snapshot)
+    else:
+        progress("options")
+        next_option_batch(access, available, snapshot, progress=progress)
     if not snapshot["stopped"]:
-        load_shortlist_history(access, snapshot, pending_r1_symbols(available, snapshot))
+        if progress is None:
+            load_shortlist_history(access, snapshot, pending_r1_symbols(available, snapshot))
+        else:
+            progress("history")
+            load_shortlist_history(access, snapshot, pending_r1_symbols(available, snapshot), progress=progress)
     if snapshot["stopped"] or not automatic_work_pending(available, snapshot):
         snapshot["auto_scan"] = False
     return True
