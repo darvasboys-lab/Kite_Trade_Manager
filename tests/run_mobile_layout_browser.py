@@ -171,10 +171,10 @@ def main():
                 verify_theme(page,prefix+"-dark-dropdown")
                 page.keyboard.press("Escape")
                 page.get_by_text("Filters · change scan settings", exact=True).click()
-                page.locator('[class*="st-key-ccs_ios_tiles_"] [data-testid="stPopover"] button').first.click()
-                page.locator('[data-testid="stPopoverBody"]').wait_for()
-                verify_theme(page,prefix+"-dark-premium-popover")
-                page.keyboard.press("Escape")
+                page.get_by_text("View details", exact=True).first.click()
+                page.get_by_role("button",name="Build covered call").first.wait_for()
+                verify_theme(page,prefix+"-dark-strategy-actions")
+                page.get_by_text("View details", exact=True).first.click()
                 navigate(page,1,"Market Screener · Shortlisted stocks only")
                 verify_theme(page,prefix+"-dark-screener")
                 navigate(page,2,"Strategy Builder")
@@ -191,6 +191,31 @@ def main():
             if mode=="ready":
                 page.get_by_role("button",name="Update now").wait_for()
             verify(page,"390-"+mode)
+            context.close()
+        for w in (320,390,430):
+            context,page=open_case(browser,w,844,"transition")
+            cards=page.locator('[class*="st-key-ccs_ios_saved_card_"]')
+            cards.first.wait_for()
+            assert cards.count()==1, "expected one cached card"
+            before=cards.first.locator(".ccs-ios-stockhead").evaluate("(el)=>el.parentElement.innerHTML")
+            verify_theme(page,f"{w}-before-accept")
+            page.get_by_role("button",name="Update now").click(timeout=30000)
+            page.get_by_text("Showing 1–12 of 18",exact=True).wait_for(timeout=30000)
+            assert cards.count()==12
+            after=cards.first.locator(".ccs-ios-stockhead").evaluate("(el)=>el.parentElement.innerHTML")
+            assert before==after, "cached and accepted card markup differs for unchanged stock"
+            assert page.locator('[class*="st-key-ccs_ios_tiles_"]').count()==0
+            verify_theme(page,f"{w}-after-accept")
+            page.wait_for_timeout(4500)
+            verify_theme(page,f"{w}-after-idle")
+            page.get_by_text("View details",exact=True).first.click()
+            page.get_by_role("button",name="Build covered call").first.wait_for()
+            verify_theme(page,f"{w}-after-details")
+            page.get_by_text("View details",exact=True).first.click()
+            page.get_by_role("button",name="Show more stocks").click()
+            page.get_by_text("Showing 1–18 of 18",exact=True).wait_for()
+            assert cards.count()==18
+            verify_theme(page,f"{w}-after-show-more")
             context.close()
         browser.close()
 
