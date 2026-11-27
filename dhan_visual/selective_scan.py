@@ -621,14 +621,8 @@ def render_ios_disconnected_home():
     data = load_workspace() or {}
     saved = data.get("snapshot")
     filters = (saved or {}).get("filters") or data.get("preferences", {}).get("filters") or {}
-    maximum = filters.get("maximum", 7)
-    st.markdown(
-        '<div class="ccs-ios-summary"><small>OTM COVERED CALL SCANNER</small>'
-        '<div class="ccs-ios-count">— <span>opportunities</span></div>'
-        '<div class="ccs-ios-progress"></div><small>Awaiting connection</small>'
-        '<div class="ccs-ios-summarygrid"><div><small>Highest CE premium</small><strong>—</strong></div>'
-        f'<div><small>Contract limit</small><strong>₹{int(maximum)} lakh</strong></div></div></div>',
-        unsafe_allow_html=True)
+    from .mobile_refresh_ui import render_saved_summary
+    render_saved_summary(saved, filters, status="Cached data · Unlock FYERS to refresh" if saved is not None else "Awaiting first connection")
     with st.container(border=True, key="ccs_ios_connect"):
         if st.session_state.get(PENDING_KEY):
             st.markdown("**Switching connection**")
@@ -648,7 +642,7 @@ def render_ios_disconnected_home():
 def render_ios_saved_shortlist(saved, *, disconnected=False):
     st.markdown("### Opportunities")
     if not saved:
-        message = "Connect FYERS to load opportunities" if disconnected else "Apply filters to load opportunities"
+        message = "Connect FYERS to load opportunities" if disconnected else "Waiting for the first complete scan"
         st.markdown(f'<div class="ccs-ios-empty">{message}</div>', unsafe_allow_html=True)
         return
     st.caption("Saved shortlist · historical · " + saved["saved_at"])
@@ -713,12 +707,21 @@ def render_selective_home():
     if not universe:
         if phone_layout():
             from .workspace_ui import load_workspace
+            from .mobile_refresh_ui import render_saved_summary
+            cached = (load_workspace() or {}).get("snapshot")
+            render_saved_summary(cached, {}, status="Cached data · Waiting for stock universe")
             with st.container(key="ccs_mobile_results"):
-                render_ios_saved_shortlist((load_workspace() or {}).get("snapshot"))
+                render_ios_saved_shortlist(cached)
         return
     entries = [item.entry for item in universe]
     expiries = expiry_options(entries)
     if not expiries:
+        if phone_layout():
+            from .workspace_ui import load_workspace
+            from .mobile_refresh_ui import render_saved_summary
+            cached = (load_workspace() or {}).get("snapshot")
+            render_saved_summary(cached, {}, status="Cached data · Waiting for verified expiry")
+            render_ios_saved_shortlist(cached)
         st.warning("No verified NSE expiry is available.")
         return
     snapshot = _snapshot(access)
@@ -732,7 +735,7 @@ def render_selective_home():
                 if field != "expiry" or value in expiries:
                     st.session_state.setdefault(widget, value)
     prepare_filters(expiries)
-    with st.expander("Filters", expanded=not bool(snapshot)) if phone_layout() else st.container():
+    with st.expander("Filters", expanded=not bool(snapshot or saved)) if phone_layout() else st.container():
         with st.form("selective_scan_filters"):
             st.markdown("#### Quick Scan")
             left, right = st.columns(2)
