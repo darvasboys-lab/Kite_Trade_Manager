@@ -18,6 +18,7 @@ from dhan_visual.payoff import current_expiry_payoff, expiry_breakevens, theoret
 st.set_page_config(page_title="Covered Call Strategy Builder", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 # Presentation only: shared terminal palette and responsive native controls.
 from dhan_visual.terminal_theme import apply_terminal_theme
+from dhan_visual.mobile_cards import phone_layout
 from dhan_visual.workspace_ui import initialize, remember_pref, render_settings
 initialize()
 if "ccs_dark_mode" not in st.session_state:
@@ -28,7 +29,7 @@ st.markdown(
     """<section class="ps-header" aria-label="Covered Call Strategy Builder workspace">
       <div class="ps-topbar">
         <div class="ps-brand"><div class="ps-mark">↗</div>
-          <h1>CCS Terminal <span>· Mobile ready</span></h1></div>
+          <h1>CCS Terminal <span>· v1.1</span></h1></div>
         <div class="ps-chips">
           <span class="ps-chip safe">● Market-data only</span>
           <span class="ps-chip">Stock F&O</span>
@@ -39,22 +40,29 @@ st.markdown(
     </section>""", unsafe_allow_html=True
 )
 
-# Keep the mode control readily accessible on desktop and iPhone.
-theme_space, theme_action = st.columns([6, 1.4])
-with theme_action:
+# Preserve desktop controls; on phones collapse broker settings beneath a small header.
+from dhan_visual.broker_control import render_single_broker_selector
+phone = phone_layout()
+def render_theme_control():
     if st.button(
         "☀ Light mode" if st.session_state["ccs_dark_mode"] else "☾ Dark mode",
         key="ccs_theme_button", use_container_width=True,
-        help="Toggle the local appearance; market data and scanner rules are unchanged.",
+        help="Toggle appearance without changing scanner rules.",
     ):
         st.session_state["ccs_dark_mode"] = not st.session_state["ccs_dark_mode"]
         remember_pref("dark",st.session_state["ccs_dark_mode"])
         st.rerun()
 
-# Explicit single-active-broker policy; all tabs below use the same mode.
-# Switching preserves saved Dhan/FYERS credentials without simultaneous logins.
-from dhan_visual.broker_control import render_single_broker_selector
-render_single_broker_selector()
+if phone:
+    with st.container(key="ccs_phone_header"):
+        with st.expander("Connection & appearance", expanded=False):
+            render_single_broker_selector()
+            render_theme_control()
+else:
+    theme_space, theme_action = st.columns([6, 1.4])
+    with theme_action:
+        render_theme_control()
+    render_single_broker_selector()
 from dhan_visual.fyers_ui import handle_fyers_local_return
 handle_fyers_local_return()
 
@@ -62,6 +70,11 @@ handle_fyers_local_return()
 # Legacy full-market tabs are available only by explicit opt-in for existing
 # workflows; their higher request volume is clearly labeled.
 with st.sidebar:
+    if st.button("Use desktop results" if phone else "Use mobile results", key="ccs_layout_switch"):
+        st.session_state["ccs_phone_layout"] = not phone
+        for kind in ("home", "market", "futures"):
+            st.session_state.pop("ccs_results_layout_" + kind, None)
+        st.rerun()
     legacy = st.toggle("Legacy full-market mode (high data usage)",
                        value=False, key="ccs_legacy_full_scan",
                        help="Off by default. When enabled, the old full-universe "

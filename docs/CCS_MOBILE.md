@@ -2,12 +2,11 @@
  
 - Existing Windows/desktop features, lazy page navigation, rate limits, read-only
   broker isolation and scanner logic are retained.
-- Mobile viewport uses wrapped navigation, stacked controls, larger touch targets,
+- Mobile viewport uses a fixed five-tab bottom bar (Home, Screener, Strategy, Trades, Settings), stacked controls, larger touch targets,
   and responsive chart/table containers.
 - On the selective Home, Market Screener and futures results choose Mobile cards
   or Full table. Cards are paginated (8 per page), reuse the same snapshot, show
-  all extra fields in an expander and retain TradingView links. Use existing
-  Build strategy controls below Home cards; Full table retains cell actions.
+  all extra fields in an expander and retain TradingView links. Home cards include per-stock Covered call and Short straddle actions; Full table retains cell actions.
 - FYERS Android/Linux: opt in to the encrypted mobile vault described below, or use temporary browser-session credentials.
   Begin login, open the link or copy it from the fallback, open a new Chrome tab,
   and paste the complete returned URL into the original CCS tab. OAuth state
@@ -51,3 +50,5 @@ vault passphrase manually. No change to the Windows credential manager.
 ### Optional local automatic OAuth return
 
 If FYERS accepts the exact redirect URI `http://127.0.0.1:8502/` in your non-trading app dashboard, use the new automatic-return link after saving/unlocking credentials. Keep the local server bound to 127.0.0.1. Finish any required FYERS authentication in the browser; the returned tab exchanges and verifies the code and saves the access token. The pending state expires after ten minutes or one use. This is not unattended token renewal. If FYERS refuses the local redirect, retain the original registered FYERS sample redirect and manual paste workflow. On Android, update dependencies in the same Python environment that starts CCS (`python -m pip install -r requirements-dhan-visual.txt`).
+
+Phone user agents default to Mobile cards; desktop keeps Full table. The sidebar layout switch changes result defaults. Bottom navigation is viewport-responsive (760px or narrower); it uses the original native radio routing. All pages remain read-only. Actual Chrome Android rendering and touch interaction require device acceptance.
