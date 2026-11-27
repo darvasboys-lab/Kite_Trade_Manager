@@ -8,8 +8,6 @@ jobs:
   browser:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      CCS_DATA_DIR: ${{ runner.temp }}/ccs-layout-offline
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,6 +19,7 @@ jobs:
           python -m playwright install --with-deps chromium
       - name: Launch offline fixture and run geometry checks
         run: |
+          export CCS_DATA_DIR="$RUNNER_TEMP/ccs-layout-offline"
           python -m streamlit run tests/browser_mobile_fixture.py --server.address 127.0.0.1 --server.port 8502 --server.headless true > layout-server.log 2>&1 &
           for i in $(seq 1 60); do
             if curl -fsS http://127.0.0.1:8502/_stcore/health; then break; fi
