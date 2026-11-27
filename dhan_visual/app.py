@@ -22,24 +22,11 @@ from dhan_visual.mobile_cards import phone_layout
 from dhan_visual.workspace_ui import initialize, remember_pref, render_settings
 initialize()
 if "ccs_dark_mode" not in st.session_state:
-    st.session_state["ccs_dark_mode"] = True
+    st.session_state["ccs_dark_mode"] = False
 apply_terminal_theme(st.session_state["ccs_dark_mode"])
 phone = phone_layout()
 
-st.markdown(
-    """<section class="ps-header" aria-label="Covered Call Strategy Builder workspace">
-      <div class="ps-topbar">
-        <div class="ps-brand"><div class="ps-mark">↗</div>
-          <h1>CCS Terminal <span>· NSE F&O</span></h1></div>
-        <div class="ps-chips">
-          <span class="ps-chip safe">● Market-data only</span>
-          <span class="ps-chip">Stock F&O</span>
-          <span class="ps-chip">Strategy demo</span>
-        </div>
-      </div>
-      <p class="ps-sub">NSE F&O workspace · Read-only market data · Strategy demo</p>
-    </section>""", unsafe_allow_html=True
-)
+st.markdown('<div class="ccs-ios-title">CCS Terminal</div>', unsafe_allow_html=True)
 
 # Keep the original broker selector and theme action mounted on every rerun.
 from dhan_visual.broker_control import render_single_broker_selector
@@ -112,19 +99,10 @@ else:
                   on_click=lambda: st.session_state.update(ccs_selective_page="⚙ Settings"))
     pages = ["◎ OTM CE Home", "⌕ Market Screener", "◇ Strategy Builder", "▥ Manage Trade", "⚙ Settings"]
     if phone:
-        # Native segmented widget in normal document flow: no fixed overlay,
-        # artificial radio hiding, JavaScript, or absolute positioning.
-        short = dict(zip(pages, ("Home", "Screener", "Strategy", "Trades", "Settings")))
+        # Authoritative page state is independent of native button widget keys.
         if st.session_state.get("ccs_selective_page") not in pages:
             st.session_state["ccs_selective_page"] = pages[0]
-        def keep_selected():
-            if st.session_state.get("ccs_selective_page") not in pages:
-                st.session_state["ccs_selective_page"] = st.session_state.get("ccs_last_page", pages[0])
-        page = st.segmented_control("Workspace", pages, selection_mode="single",
-                                    format_func=short.__getitem__, key="ccs_selective_page",
-                                    label_visibility="collapsed", on_change=keep_selected)
-        page = page if page in pages else pages[0]
-        st.session_state["ccs_last_page"] = page
+        page = st.session_state["ccs_selective_page"]
     else:
         page = st.radio("Workspace", pages, horizontal=True,
                         key="ccs_selective_page", label_visibility="collapsed")
@@ -325,3 +303,18 @@ if manage is not None:
             st.warning("The partially uncovered short-call exposure can have substantial downside and upside risk. The conditional profit cap only applies if all required shares actually fill. Profit target is an advisory; no closing order is ever sent.")
             st.caption("Before any future Dhan connection, reconcile original first-batch fills, options transaction credit, expiry/lot size, holdings and today's tradebook, mark-data freshness, account funds and service isolation from ResultBot.")
 
+
+# The phone dock uses genuine Streamlit buttons, never transformed radio labels.
+# Render after the selected content; CSS anchors only this named container.
+if phone and not legacy:
+    with st.container(key="ccs_ios_dock"):
+        dock = st.columns(5, gap="small")
+        for i, (target, label, icon) in enumerate(zip(
+            pages, ("Home", "Screener", "Strategy", "Trades", "Settings"),
+            (":material/home:", ":material/search:", ":material/show_chart:",
+             ":material/work_outline:", ":material/settings:"),
+        )):
+            dock[i].button(label, icon=icon, key=f"ccs_ios_nav_{i}",
+                           type="primary" if page == target else "secondary",
+                           use_container_width=True,
+                           on_click=lambda p=target: st.session_state.update(ccs_selective_page=p))
