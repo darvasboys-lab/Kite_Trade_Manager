@@ -8,7 +8,7 @@
   or Full table. Cards are paginated (8 per page), reuse the same snapshot, show
   all extra fields in an expander and retain TradingView links. Use existing
   Build strategy controls below Home cards; Full table retains cell actions.
-- FYERS Android/Linux: skip Windows-only storage; use browser-session credentials.
+- FYERS Android/Linux: opt in to the encrypted mobile vault described below, or use temporary browser-session credentials.
   Begin login, open the link or copy it from the fallback, open a new Chrome tab,
   and paste the complete returned URL into the original CCS tab. OAuth state
   validation is unchanged. No plaintext credential fallback is introduced.

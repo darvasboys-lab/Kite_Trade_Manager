@@ -81,6 +81,8 @@ def render_fyers_settings():
                     for key in ("fyers_local_app_id", "fyers_local_app_secret",
                                 "_fyers_pending_app", "_fyers_pending_secret", "_fyers_oauth_state"):
                         st.session_state.pop(key, None)
+                    st.session_state.pop("_fyers_access", None)
+                    st.session_state.pop("_fyers_session_note", None)
                     access = vault.access()
                     if access:
                         st.session_state["_fyers_access"] = access
@@ -101,7 +103,7 @@ def render_fyers_settings():
         "FYERS App Secret · blank uses your secure saved secret" if (windows or existing) else "FYERS App Secret",
         value="", type="password", key="fyers_local_app_secret",
         help="Stored secrets are never re-sent to the browser. "
-             "Type only once for first-time setup or replacement.",
+             "Type for first-time setup or replacement; unlock saved credentials when available.",
     )
     app_secret = (entered_secret or
                   (existing[1] if existing and existing[0] == app_id else ""))
