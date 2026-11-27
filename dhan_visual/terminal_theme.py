@@ -354,6 +354,28 @@ button:focus-visible,a:focus-visible { outline:2px solid var(--accent) !importan
  .ccs-ios-empty { padding:12px 8px 16px; line-height:1.45; }
 }
 
+
+/* Keep the live Home summary and its native actions in normal document flow. */
+@media(max-width:760px) {
+ .st-key-ccs_mobile_refresh_panel [data-testid="stVerticalBlock"] {
+   gap:12px !important; min-width:0;
+ }
+ .ccs-ios-summary {
+   display:block; position:relative; height:auto; min-height:0;
+   margin:5px 0 12px; box-sizing:border-box;
+ }
+ .ccs-ios-summary .ccs-ios-progress { margin:12px 0 8px; }
+ .ccs-ios-summary .ccs-ios-refresh-status,
+ .ccs-ios-summary .ccs-ios-refresh-elapsed {
+   display:block; line-height:1.45; color:#cce9dc;
+   overflow-wrap:anywhere;
+ }
+ .ccs-ios-summary .ccs-ios-refresh-elapsed { margin-top:4px; }
+ .st-key-ccs_mobile_refresh_panel [data-testid="stButton"] { margin:0 0 4px; }
+ .st-key-ccs_mobile_refresh_panel [data-testid="stButton"] button { min-height:44px; }
+ .st-key-ccs_mobile_results { margin-top:8px; }
+}
+
 """
 
 
