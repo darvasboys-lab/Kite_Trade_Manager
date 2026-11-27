@@ -10,6 +10,7 @@ from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock
+from math import ceil
 from dataclasses import asdict
 
 from .strategy import Position, plan, expiry_payoff, exposure_after_fills, current_closeout
@@ -84,7 +85,7 @@ def scan_result():
             "total": len(candidates), "cash": len(s["cash"]),
             "pending": not s["stopped"] and automatic_work_pending(available,s),
             "error": s["error"], "asof": s["options_at"],
-            "retry_after": max(0, round(60 - (time.monotonic()-LAST_BATCH)))}
+            "retry_after": max(0, ceil(60 - (time.monotonic()-LAST_BATCH)))}
 
 def strategy(d):
     def dec(k):
@@ -171,6 +172,8 @@ def dispatch(route,d):
             run_automatic_batch(a,available,s)
         except FyersDataError as exc:
             s["error"],s["stopped"] = str(exc),True
+        finally:
+            LAST_BATCH = time.monotonic()
         return scan_result()
     if route == "/next":
         a = access()
@@ -182,7 +185,10 @@ def dispatch(route,d):
         s = STATE["scan"]
         LAST_BATCH = time.monotonic()
         s["auto_scan"] = True
-        run_automatic_batch(a,_universe_rows(catalogue(),s["expiry"]),s)
+        try:
+            run_automatic_batch(a,_universe_rows(catalogue(),s["expiry"]),s)
+        finally:
+            LAST_BATCH = time.monotonic()
         return scan_result()
     if route == "/snapshot":
         access()
@@ -235,6 +241,7 @@ def dispatch(route,d):
     raise ValueError("Unknown API operation.")
 
 class Handler(BaseHTTPRequestHandler):
+    timeout = 15
     def log_message(self,*args):
         pass
     def send_bytes(self,code,data,mime):
