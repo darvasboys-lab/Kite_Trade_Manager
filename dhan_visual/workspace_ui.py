@@ -100,8 +100,12 @@ def save_scan_controls(snapshot,frame):
         if st.button("Save preset",key="ccs_save_preset",disabled=not name.strip()):
             if save_change(lambda d:d["presets"].update({name.strip():f})):
                 st.success("Preset saved.")
-        payload=dict(saved_at=datetime.now(IST).isoformat(timespec="seconds"),filters=f,
-                     rows=json.loads(frame.to_json(orient="records")))
+        rows=json.loads(frame.to_json(orient="records"))
+        for row in rows:
+            quote = snapshot.get("calls", {}).get(row.get("Stock"))
+            if quote is not None:
+                row["CE strike"] = float(quote.strike)
+        payload=dict(saved_at=datetime.now(IST).isoformat(timespec="seconds"),filters=f, rows=rows)
         if st.button("Save shortlist snapshot",key="ccs_save_shortlist"):
             if save_change(lambda d:d.update(snapshot=payload)):
                 st.success("Historical shortlist saved.")
