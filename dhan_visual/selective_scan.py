@@ -517,12 +517,17 @@ def render_ios_disconnected_home():
                   key="ccs_ios_connect_settings", use_container_width=True,
                   disabled=bool(st.session_state.get(PENDING_KEY)),
                   on_click=lambda: st.session_state.update(ccs_selective_page="⚙ Settings"))
+    render_ios_saved_shortlist(saved, disconnected=True)
+
+
+def render_ios_saved_shortlist(saved, *, disconnected=False):
     st.markdown("### Opportunities")
     if not saved:
-        st.markdown('<div class="ccs-ios-empty">Connect FYERS to load opportunities</div>', unsafe_allow_html=True)
+        message = "Connect FYERS to load opportunities" if disconnected else "Apply filters to load opportunities"
+        st.markdown(f\'<div class="ccs-ios-empty">{message}</div>\', unsafe_allow_html=True)
         return
     st.caption("Saved shortlist · Historical only · " + saved["saved_at"])
-    st.caption("Renew FYERS and scan for current quotes. Saved results cannot launch a strategy.")
+    st.caption("Scan for current quotes. Saved results cannot launch a strategy.")
     rows = saved.get("rows", [])
     if not rows:
         st.caption("No opportunities in the saved shortlist.")
@@ -641,6 +646,17 @@ def render_selective_home():
             with st.spinner("Checking eligible option chains and shortlisted R1…"):
                 run_automatic_batch(access, available, snapshot)
     if not snapshot:
+        if phone_layout():
+            from .workspace_ui import load_workspace
+            data = load_workspace() or {}
+            st.markdown(
+                '<div class="ccs-ios-summary"><small>OTM COVERED CALL SCANNER</small>'
+                '<div class="ccs-ios-count">— <span>opportunities</span></div>'
+                '<div class="ccs-ios-progress"></div><small>Ready to scan</small>'
+                '<div class="ccs-ios-summarygrid"><div><small>Highest CE premium</small><strong>—</strong></div>'
+                f'<div><small>Contract limit</small><strong>₹{int(maximum)} lakh</strong></div></div></div>',
+                unsafe_allow_html=True)
+            render_ios_saved_shortlist(data.get("snapshot"))
         return
     _ensure_history_day(snapshot, datetime.now(IST).date())
     available = _universe_rows(universe, snapshot["expiry"])
