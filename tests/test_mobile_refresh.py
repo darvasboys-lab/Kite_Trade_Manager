@@ -105,3 +105,11 @@ class MobileRefreshTests(unittest.TestCase):
         self.assertEqual([r["Stock"] for r in stored["snapshot"]["rows"]],["TCS"])
         self.assertIs(state[STATE],candidate)
         self.assertNotIn(ui.JOB,state)
+
+    def test_startup_filters_use_first_expiry_and_requested_values(self):
+        from dhan_visual.mobile_refresh_ui import startup_filters
+        self.assertEqual(startup_filters(["DEC-26", "JAN-27", "FEB-27"]),
+                         dict(expiry="DEC-26", maximum=7, minimum=5,
+                              r1_filter="Include all stocks"))
+        with self.assertRaises(ValueError):
+            startup_filters([])
