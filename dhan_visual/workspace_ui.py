@@ -90,7 +90,7 @@ def applied_filters(snapshot):
     return {k:snapshot[k] for k in FILTER_KEYS}
 
 
-def save_scan_controls(snapshot,frame, *, automatic=True):
+def save_scan_controls(snapshot,frame, *, automatic=True, complete=True):
     data=load_workspace()
     if not data:
         return
@@ -109,10 +109,10 @@ def save_scan_controls(snapshot,frame, *, automatic=True):
         if snapshot.get("complete"):
             from .mobile_refresh_ui import payload_for
             payload = payload_for(snapshot,frame)
-        if st.button("Save shortlist snapshot",key="ccs_save_shortlist", disabled=bool(snapshot.get("auto_scan") or snapshot.get("stopped"))):
+        if st.button("Save shortlist snapshot",key="ccs_save_shortlist", disabled=not complete or bool(snapshot.get("auto_scan") or snapshot.get("stopped"))):
             if save_change(lambda d:d.update(snapshot=payload)):
                 st.success("Historical shortlist saved.")
-    if automatic and data["remember"] and not snapshot.get("auto_scan") and not snapshot.get("stopped"):
+    if automatic and complete and data["remember"] and not snapshot.get("auto_scan") and not snapshot.get("stopped"):
         signature=(snapshot.get("cash_at"),snapshot.get("options_at"),len(snapshot.get("levels",{})),str(f),len(frame))
         if st.session_state.get("ccs_saved_scan_signature")!=signature and snapshot.get("cash_at"):
             def apply(d):

@@ -43,3 +43,18 @@ class MobileRefreshTests(unittest.TestCase):
             with self.assertRaises(FyersDataError):
                 refresh.collect(access(),available,self.filters,"key",stop,lambda *a:None)
             cash.assert_not_called()
+
+    def test_worker_completes_without_touching_saved_state(self):
+        from dhan_visual.dhan_market import DhanUnderlying
+        from dhan_visual.screener import Underlying
+        available=[DhanUnderlying(Underlying("TCS","TCS",{"DEC-26":100}),1)]
+        seen=[]
+        with patch("dhan_visual.fyers_readonly.fetch_cash_quotes",return_value={"TCS":quotes()["TCS"]}), \
+             patch("dhan_visual.selective_scan.resolve_expiry_timestamp",return_value=("123","2026-12-29")), \
+             patch("dhan_visual.selective_scan.fetch_chain",return_value=(call(),straddle())), \
+             patch("dhan_visual.selective_scan.fetch_daily_levels",return_value=levels()):
+            snap=refresh.collect(access(),available,self.filters,"key",Event(),lambda *args:seen.append(args))
+        self.assertTrue(snap["complete"])
+        self.assertEqual(seen[-1][0],100)
+        self.assertEqual(snap["attempted"],{"TCS"})
+        self.assertEqual(set(snap["levels"]),{"TCS"})

@@ -773,7 +773,7 @@ def render_selective_home():
         st.caption("Partial scan: more matches may exist in the unscanned stocks. Automatic batches run only on Home while active.")
     if snapshot["options_at"]:
         st.caption("Options requested " + snapshot["options_at"] + " · each stock checked once; cached quotes are not refreshed automatically.")
-    save_scan_controls(snapshot,frame)
+    save_scan_controls(snapshot,frame, complete=not work_pending and not snapshot['stopped'] and bool(snapshot['cash_at']))
     st.caption("In Full table, click a CE or straddle cell to open Strategy Builder. In Mobile cards, use Build strategy below.")
     _display(frame, strategy_context=({item.entry.symbol: item.entry for item in available},
                                      snapshot["expiry"], snapshot["key"], snapshot.get("scan_day")))

@@ -41,7 +41,8 @@ def payload_for(snapshot, frame):
 def begin(access, universe, filters):
     from .selective_scan import _universe_rows
     old = st.session_state.get(JOB)
-    if old and not old["future"].done():
+    if old:
+        st.session_state[ERROR] = "Finish, accept or discard the current refresh first."
         return
     job = start(access, _universe_rows(universe, filters["expiry"]), filters,
                 _scope(access, [], filters["expiry"]))
@@ -66,6 +67,8 @@ def refresh_panel(universe):
         job["cancel"].set()
         if future.done():
             st.session_state.pop(JOB,None)
+            st.session_state.pop(AUTO,None)
+            st.rerun(scope="app")
         return
     if not future.done():
         percent, stage = job["progress"]
@@ -88,7 +91,7 @@ def refresh_panel(universe):
         return
     with st.container(key="ccs_refresh_ready", border=True):
         st.markdown("**✓ Fresh data available**")
-        st.caption("All scan stages finished. Apply together.")
+        st.caption("100% · All scan stages finished. Apply together.")
         if st.button("Update now", key="ccs_apply_refresh", type="primary", use_container_width=True):
             frame = qualified_rows(_universe_rows(universe,candidate["expiry"]),candidate)
             payload = payload_for(candidate, frame)
@@ -154,7 +157,7 @@ def render_mobile_refresh(access, universe, filters, apply):
         refresh_panel(universe)
         job = st.session_state.get(JOB)
         if st.button("Refresh data", key="ccs_mobile_refresh", use_container_width=True,
-                     disabled=bool(job and not job["future"].done())):
+                     disabled=bool(job)):
             st.session_state[AUTO] = token_scope
             begin(access,universe,filters)
             st.rerun()

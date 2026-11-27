@@ -43,12 +43,16 @@ def collect(access, available, filters, key, cancel, report):
     total = len(candidates)
     for start in range(0, total, s.BATCH):
         began = time.monotonic()
-        for _ in candidates[start:start+s.BATCH]:
+        for symbol in candidates[start:start+s.BATCH]:
             check()
             if s.next_option_batch(access, available, snap, limit=1) != 1:
                 check()
                 raise FyersDataError("Option-chain scan incomplete.")
             check()
+            # A valid request may have no eligible OTM call; a wholly absent
+            # parsed chain cannot be treated as a successful refresh.
+            if symbol not in snap["calls"] and symbol not in snap["straddles"]:
+                raise FyersDataError("An eligible option chain returned no usable quotes. Previous data retained.")
             report(20 + 70 * len(snap["attempted"]) // max(1,total),
                    f"Option chains {len(snap['attempted'])}/{total}")
         if start+s.BATCH < total:
