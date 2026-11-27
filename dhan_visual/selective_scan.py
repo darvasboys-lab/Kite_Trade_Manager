@@ -338,7 +338,7 @@ def _display_mobile_cards(frame, kind, strategy_context=None):
         atm = current["straddles"].get(symbol) if current else None
         with st.container(border=True, key=f"ccs_ios_card_{ident}"):
             if kind == "home" and strategy_context is not None:
-                strike = f"{quote.strike:f} CE" if quote is not None else "—"
+                strike = f"{quote.strike.normalize():f} CE" if quote is not None else "—"
                 cmp = card_value(row.get("CMP (₹)"), "CMP (₹)")
                 st.markdown(
                     f'<div class="ccs-ios-stockhead"><span class="ccs-ios-logo">{escape(symbol[:1])}</span>'
@@ -355,7 +355,7 @@ def _display_mobile_cards(frame, kind, strategy_context=None):
                             val = card_value(row.get(col), col)
                             st.markdown(f'<div class="ccs-ios-tile-label">{label}</div>', unsafe_allow_html=True)
                             with st.popover(val, use_container_width=True, disabled=actual is None):
-                                st.write(f"Strike: {actual.strike:f}" if actual is not None else "Strike unavailable")
+                                st.write(f"Strike: {actual.strike.normalize():f}" if actual is not None else "Strike unavailable")
                                 if actual is not None:
                                     if preset == "Covered call":
                                         st.write(f"Call premium: ₹{actual.call_ltp:f}")
@@ -415,9 +415,9 @@ def _display_mobile_cards(frame, kind, strategy_context=None):
                     st.caption(f"R1 crossed today: {cross.first_bar_time}" if cross is not None
                                else "R1 crossed today: not confirmed")
                 if quote is not None:
-                    st.text(f"Selected call: {quote.strike:f} CE")
+                    st.text(f"Selected call: {quote.strike.normalize():f} CE")
                 if atm is not None:
-                    st.text(f"ATM strike: {atm.strike:f} CE + PE")
+                    st.text(f"ATM strike: {atm.strike.normalize():f} CE + PE")
                 st.link_button("TradingView chart ↗", tradingview_chart_url(symbol))
 
 
