@@ -322,6 +322,9 @@ def render_fyers_settings():
                      key="fyers_remove_connection",
                      help="Stops local FYERS scanning and forgets the saved "
                           "credentials. Existing broker-issued tokens are not revoked."):
+            refresh = st.session_state.get("ccs_mobile_refresh_job") or {}
+            if refresh.get("cancel"):
+                refresh["cancel"].set()
             chain = st.session_state.get("fno_fyers_chain_job") or {}
             if chain.get("cancel"):
                 chain["cancel"].set()

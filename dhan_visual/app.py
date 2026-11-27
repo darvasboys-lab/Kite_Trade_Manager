@@ -68,6 +68,12 @@ with st.sidebar:
 
 manage = None
 if legacy:
+    refresh = st.session_state.get("ccs_mobile_refresh_job") or {}
+    if refresh.get("cancel"):
+        refresh["cancel"].set()
+    if refresh.get("future") and not refresh["future"].done():
+        st.info("Finishing mobile refresh cancellation before opening legacy mode.")
+        st.stop()
     otm_home, search, manage, settings = st.tabs([
         "◎ OTM CE Home", "⌕ Market Screener", "▥ Manage Trade", "⚙ Settings",
     ])

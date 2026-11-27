@@ -279,8 +279,15 @@ def _strategy_cell_callback(key, frame, entries, expiry, snapshot_key, scan_day)
 
 def _display(frame, *, market=False, futures=False, strategy_context=None):
     kind = "futures" if futures else "market" if market else "home"
-    view = st.radio("Results layout", ["Full table", "Mobile cards"], horizontal=True,
-                    index=1 if phone_layout() else 0, key=f"ccs_results_layout_{kind}")
+    if phone_layout():
+        with st.expander("Display options"):
+            view = st.radio("Results layout", ["Full table", "Mobile cards"], horizontal=True,
+                            index=1, key=f"ccs_results_layout_{kind}")
+            if view == "Full table" and st.button("Auto-fit", key=f"ccs_mobile_fit_{kind}"):
+                click_autofit(st.session_state)
+    else:
+        view = st.radio("Results layout", ["Full table", "Mobile cards"], horizontal=True,
+                        index=0, key=f"ccs_results_layout_{kind}")
     if view == "Mobile cards":
         _display_mobile_cards(frame, kind, strategy_context=strategy_context)
         return
@@ -324,13 +331,18 @@ def _display_mobile_cards(frame, kind, strategy_context=None):
     if frame.empty:
         st.info("No matching results yet.")
         return
-    pages = card_pages(len(frame))
-    page = st.selectbox("Result page", list(range(pages)),
-                        format_func=lambda i: f"{i + 1} / {pages}",
-                        key=f"ccs_cards_page_{kind}")
-    start = page * 8
-    st.caption(f"Showing {start + 1}–{min(start + 8, len(frame))} of {len(frame)} results · original scan order")
-    for offset, (_, row) in enumerate(frame.iloc[start:start + 8].iterrows()):
+    if phone_layout() and kind == "home":
+        limit_key = "ccs_home_card_limit"
+        limit = max(12, int(st.session_state.get(limit_key,12)))
+        start, end = 0, min(limit,len(frame))
+    else:
+        pages = card_pages(len(frame))
+        page = st.selectbox("Result page", list(range(pages)),
+                            format_func=lambda i: f"{i + 1} / {pages}",
+                            key=f"ccs_cards_page_{kind}")
+        start, end = page * 8, min((page+1)*8,len(frame))
+    st.caption(f"Showing {start + 1}–{end} of {len(frame)}")
+    for offset, (_, row) in enumerate(frame.iloc[start:end].iterrows()):
         symbol = str(row["Stock"])
         ident = f"{kind}_{start + offset}"
         current = _snapshot(connected_fyers()) if strategy_context is not None else None
@@ -348,7 +360,7 @@ def _display_mobile_cards(frame, kind, strategy_context=None):
                 with st.container(key=f"ccs_ios_tiles_{ident}"):
                     left, right = st.columns(2, gap="small")
                     for col, side, label, preset, actual in (
-                        ("5%+ OTM CE (%)", left, "1.05 CE", "Covered call", quote),
+                        ("5%+ OTM CE (%)", left, "5% OTM CE", "Covered call", quote),
                         ("Straddle (%)", right, "STRADDLE", "Short straddle", atm),
                     ):
                         with side:
@@ -419,7 +431,10 @@ def _display_mobile_cards(frame, kind, strategy_context=None):
                 if atm is not None:
                     st.text(f"ATM strike: {atm.strike.normalize():f} CE + PE")
                 st.link_button("TradingView chart ↗", tradingview_chart_url(symbol))
-
+    if phone_layout() and kind == "home" and end < len(frame):
+        if st.button("Show more stocks", key="ccs_home_more", use_container_width=True):
+            st.session_state[limit_key] = limit + 12
+            st.rerun()
 
 
 def futures_discount_frame(available, cash, futures, expiry):
@@ -526,17 +541,15 @@ def render_ios_saved_shortlist(saved, *, disconnected=False):
         message = "Connect FYERS to load opportunities" if disconnected else "Apply filters to load opportunities"
         st.markdown(f'<div class="ccs-ios-empty">{message}</div>', unsafe_allow_html=True)
         return
-    st.caption("Saved shortlist · Historical only · " + saved["saved_at"])
-    st.caption("Scan for current quotes. Saved results cannot launch a strategy.")
+    st.caption("Saved shortlist · historical · " + saved["saved_at"])
+    st.caption("Cached quotes are read-only until a fresh scan is accepted.")
     rows = saved.get("rows", [])
     if not rows:
         st.caption("No opportunities in the saved shortlist.")
         return
     frame = pd.DataFrame(rows)
-    pages = card_pages(len(frame))
-    page = st.selectbox("Result page", list(range(pages)),
-                        format_func=lambda n: f"{n + 1} / {pages}", key="ccs_ios_saved_page") if pages > 1 else 0
-    for offset, (_, row) in enumerate(frame.iloc[page * 8:page * 8 + 8].iterrows()):
+    limit = max(12, int(st.session_state.get("ccs_saved_card_limit",12)))
+    for offset, (_, row) in enumerate(frame.iloc[:limit].iterrows()):
         symbol = str(row["Stock"])
         with st.container(border=True, key=f"ccs_ios_saved_card_{offset}"):
             strike = card_value(row.get("CE strike"), "CE strike")
@@ -547,14 +560,21 @@ def render_ios_saved_shortlist(saved, *, disconnected=False):
                 f'<div><b>{escape(symbol)}</b><small>{escape(strike)}</small></div>'
                 f'<strong>{escape(card_value(row.get("CMP (₹)"), "CMP (₹)"))}</strong></div>'
                 '<div class="ccs-ios-saved-tiles">'
-                f'<div><small>1.05 CE</small><strong>{escape(card_value(row.get("5%+ OTM CE (%)"), "5%+ OTM CE (%)"))}</strong></div>'
+                f'<div><small>5% OTM CE</small><strong>{escape(card_value(row.get("5%+ OTM CE (%)"), "5%+ OTM CE (%)"))}</strong></div>'
                 f'<div><small>STRADDLE</small><strong>{escape(card_value(row.get("Straddle (%)"), "Straddle (%)"))}</strong></div></div>',
                 unsafe_allow_html=True)
+            size = pd.to_numeric(row.get("Contract size (₹)"), errors="coerce")
+            size_text = f"₹{size / 100000:.2f}L" if pd.notna(size) else "—"
+            lot = card_value(row.get("Lot size"), "Lot size")
+            st.markdown(f'<div class="ccs-ios-foot"><span>{escape(size_text)}</span><span>Lot {escape(lot)}</span></div>', unsafe_allow_html=True)
             with st.expander("View details"):
                 for col in frame.columns:
                     if col != "Stock":
                         st.text(f"{col}: {card_value(row[col], col)}")
                 st.link_button("TradingView chart ↗", tradingview_chart_url(symbol))
+    if limit < len(frame) and st.button("Show more stocks", key="ccs_saved_more", use_container_width=True):
+        st.session_state["ccs_saved_card_limit"] = limit + 12
+        st.rerun()
     st.download_button("Download saved shortlist CSV", frame.to_csv(index=False), "ccs-shortlist.csv", key="ccs_ios_saved_csv")
 
 
@@ -571,12 +591,17 @@ def render_selective_home():
     if not phone_layout():
         st.markdown("### OTM Covered Call")
         st.caption("Select filters first. Nothing is fetched from FYERS or Yahoo until you apply a scan.")
-    render_historical_shortlist()
+    if not phone_layout():
+        render_historical_shortlist()
     if not access:
         st.info("Connect and select FYERS in Settings to use the data-saving scan.")
         return
     universe = _auto_universe()
     if not universe:
+        if phone_layout():
+            from .workspace_ui import load_workspace
+            with st.container(key="ccs_mobile_results"):
+                render_ios_saved_shortlist((load_workspace() or {}).get("snapshot"))
         return
     entries = [item.entry for item in universe]
     expiries = expiry_options(entries)
@@ -585,6 +610,14 @@ def render_selective_home():
         return
     snapshot = _snapshot(access)
     default_expiry = snapshot["expiry"] if snapshot and snapshot["expiry"] in expiries else choose_expiry(entries)
+    if phone_layout():
+        from .workspace_ui import load_workspace, FILTER_KEYS
+        saved = (load_workspace() or {}).get("snapshot")
+        if saved:
+            for field, widget in FILTER_KEYS.items():
+                value = saved["filters"][field]
+                if field != "expiry" or value in expiries:
+                    st.session_state.setdefault(widget, value)
     prepare_filters(expiries)
     with st.expander("Filters", expanded=not bool(snapshot)) if phone_layout() else st.container():
         with st.form("selective_scan_filters"):
@@ -607,11 +640,17 @@ def render_selective_home():
                                  help="Above R1 only excludes both below/equal R1 and unknown R1. "
                                       "History is requested only after contract and CE filters.")
             note, action, future_action = st.columns([2, 1, 1])
-            note.caption("No market-data requests before Start scan.")
+            note.caption("Refresh uses these filters." if phone_layout() else "No market-data requests before Start scan.")
             apply = action.form_submit_button("Apply filters / Start scan", type="primary",
                                              use_container_width=True)
             show_futures = future_action.form_submit_button("Show futures · < ₹7L", use_container_width=True)
     if show_futures:
+        if phone_layout():
+            from .mobile_refresh import JOB
+            job = st.session_state.get(JOB)
+            if job and not job["future"].done():
+                st.warning("Cancel or finish the background refresh before requesting futures.")
+                return
         if snapshot:
             snapshot["auto_scan"] = False
         render_futures_discount_request(access, universe, expiry)
@@ -619,6 +658,11 @@ def render_selective_home():
         st.session_state.pop(FUTURES_STATE, None)
     elif st.session_state.get(FUTURES_STATE):
         render_futures_discount(access, universe, expiry)
+        return
+    if phone_layout():
+        from .mobile_refresh_ui import render_mobile_refresh
+        render_mobile_refresh(access, universe,
+                              dict(expiry=expiry, maximum=maximum, minimum=minimum, r1_filter=r1_filter), apply)
         return
     if apply:
         key = _scope(access, [], expiry)

@@ -293,6 +293,37 @@ button:focus-visible,a:focus-visible { outline:2px solid var(--accent) !importan
   color:var(--surface) !important;
 }
 
+/* Mobile result area only. The approved summary, header and dock are unchanged. */
+@media(max-width: 700px) {
+ .st-key-ccs_mobile_results [data-testid="stVerticalBlock"] { gap:.45rem !important; }
+ .st-key-ccs_mobile_results [data-testid="stCaptionContainer"] p,
+ .st-key-ccs_mobile_results [data-testid="stWidgetLabel"] p {
+   color:var(--settings-muted) !important; opacity:1 !important; line-height:1.35 !important;
+ }
+ .st-key-ccs_mobile_results :is([data-baseweb="select"] > div,[data-baseweb="input"],[data-baseweb="base-input"]) {
+   background:var(--surface) !important; color:var(--text) !important; border-color:var(--border) !important;
+ }
+ .st-key-ccs_mobile_results :is([data-testid="stAlert"],[data-testid="stAlertContainer"],[role="alert"],[data-baseweb="notification"]) {
+   background:var(--surface2) !important; color:var(--text) !important;
+ }
+ .st-key-ccs_mobile_results [data-testid="stAlert"] :is(p,span,li,strong,div) {color:var(--text) !important;}
+ .st-key-ccs_mobile_results [data-testid="stRadio"] label p {color:var(--text) !important;}
+ :is([class*="st-key-ccs_ios_card_"],[class*="st-key-ccs_ios_saved_card_"]) {
+   background:var(--surface) !important; border:1px solid var(--border) !important;
+   border-radius:15px !important; padding:10px !important; margin:0 0 5px !important;
+ }
+ :is([class*="st-key-ccs_ios_card_"],[class*="st-key-ccs_ios_saved_card_"]) [data-testid="stVerticalBlock"] {gap:.35rem !important;}
+ .ccs-ios-tile-label {display:block; line-height:1.3 !important; padding:3px 2px 2px; margin:0 !important;}
+ .ccs-ios-foot {line-height:1.5 !important; padding:4px 0 2px; margin:0 !important;}
+ [class*="st-key-ccs_ios_tiles_"] [data-testid="stPopover"] button {min-height:44px !important;}
+ [class*="st-key-ccs_ios_card_"] [data-testid="stButton"] button {min-height:38px !important; padding:4px 8px !important;}
+ [class*="st-key-ccs_ios_card_"] [data-testid="stExpander"] summary,
+ [class*="st-key-ccs_ios_saved_card_"] [data-testid="stExpander"] summary {min-height:38px !important; padding:4px 8px !important;}
+ .st-key-ccs_refresh_ready {background:var(--surface) !important; border-color:var(--green) !important;}
+ .st-key-ccs_refresh_ready button[kind="primary"] {background:var(--green) !important;color:var(--surface) !important;}
+ .st-key-ccs_refresh_ready button[kind="primary"] p {color:var(--surface) !important;}
+}
+
 """
 
 

@@ -87,7 +87,7 @@ def validate(raw):
         if not isinstance(stamp,str) or len(stamp)>80:
             raise ValueError("Invalid snapshot date.")
         datetime.fromisoformat(stamp)
-        columns={"Stock","CMP (₹)","Lot size","Contract size (₹)","5%+ OTM CE (%)","ATM Straddle Total (₹)","Straddle (%)","> R1","CE strike"}
+        columns={"Stock","CMP (₹)","Lot size","Contract size (₹)","5%+ OTM CE (%)","ATM Straddle Total (₹)","Straddle (%)","> R1","CE strike","CE premium (₹)","ATM strike","ATM CE premium (₹)","ATM PE premium (₹)","EMA 200","EMA 50","EMA 20","EMA 10","Monthly R1"}
         rows=[]
         for row in snap["rows"]:
             if not isinstance(row,dict) or not isinstance(row.get("Stock"),str) or not SYMBOL.fullmatch(row["Stock"]):
@@ -108,6 +108,8 @@ def validate(raw):
                     raise ValueError("Invalid cached quote.")
             rows.append(clean)
         out["snapshot"]=dict(saved_at=stamp,filters=filters(snap["filters"]),rows=rows)
+        if snap.get("complete") is True:
+            out["snapshot"]["complete"] = True
     return out
 
 

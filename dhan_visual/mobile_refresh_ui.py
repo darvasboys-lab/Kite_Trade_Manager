@@ -1,0 +1,168 @@
+"""Mobile-only refresh and atomic publication of complete scans."""
+from datetime import datetime
+from html import escape
+import json
+import pandas as pd
+import streamlit as st
+from .ce_eod_remote import IST
+from .mobile_refresh import JOB, start
+from .workspace_ui import load_workspace, save_change
+from .fyers_ui import connected_fyers, _scope
+
+AUTO = "ccs_mobile_auto_started"
+ERROR = "ccs_mobile_refresh_error"
+
+
+def payload_for(snapshot, frame):
+    if not snapshot.get("complete") or snapshot.get("stopped"):
+        raise ValueError("Cannot publish an incomplete snapshot.")
+    rows = json.loads(frame.to_json(orient="records"))
+    for row in rows:
+        symbol = row["Stock"]
+        call = snapshot["calls"].get(symbol)
+        atm = snapshot["straddles"].get(symbol)
+        levels = snapshot["levels"].get(symbol)
+        if call is not None:
+            row.update({"CE strike":float(call.strike),"CE premium (₹)":float(call.call_ltp)})
+        if atm is not None:
+            row.update({"ATM strike":float(atm.strike),"ATM CE premium (₹)":float(atm.call_ltp),
+                        "ATM PE premium (₹)":float(atm.put_ltp)})
+        if levels is not None:
+            for label, attr in (("EMA 200","ema200"),("EMA 50","ema50"),
+                                ("EMA 20","ema20"),("EMA 10","ema10"),("Monthly R1","monthly_r1")):
+                val = getattr(levels,attr,None)
+                if val is not None:
+                    row[label] = float(val)
+    return dict(saved_at=snapshot["completed_at"], complete=True,
+                filters={k:snapshot[k] for k in ("maximum","minimum","expiry","r1_filter")},
+                rows=rows)
+
+
+def begin(access, universe, filters):
+    from .selective_scan import _universe_rows
+    old = st.session_state.get(JOB)
+    if old and not old["future"].done():
+        return
+    job = start(access, _universe_rows(universe, filters["expiry"]), filters,
+                _scope(access, [], filters["expiry"]))
+    if job is None:
+        st.session_state[ERROR] = "Another refresh is running. Retry when it finishes."
+        return
+    st.session_state[JOB] = job
+    st.session_state.pop(ERROR,None)
+
+
+@st.fragment(run_every="2s")
+def refresh_panel(universe):
+    from .selective_scan import STATE, _universe_rows, qualified_rows
+    job = st.session_state.get(JOB)
+    access = connected_fyers()
+    if not job:
+        if st.session_state.get(ERROR):
+            st.caption(st.session_state[ERROR])
+        return
+    future = job["future"]
+    if not access or job["key"] != _scope(access, [], job["filters"]["expiry"]):
+        job["cancel"].set()
+        if future.done():
+            st.session_state.pop(JOB,None)
+        return
+    if not future.done():
+        percent, stage = job["progress"]
+        st.progress(min(percent,99)/100, text=f"{percent}% · {stage}")
+        if st.button("Cancel refresh", key="ccs_cancel_refresh"):
+            job["cancel"].set()
+        return
+    try:
+        candidate = future.result()
+        if job["cancel"].is_set() or not candidate.get("complete") or candidate.get("stopped"):
+            raise ValueError("Refresh cancelled")
+        if candidate["scan_day"] != datetime.now(IST).date().isoformat():
+            raise ValueError("Refresh expired")
+    except Exception as exc:
+        from .fyers_readonly import FyersDataError
+        msg = str(exc) if isinstance(exc,FyersDataError) else "Refresh incomplete or cancelled."
+        st.session_state[ERROR] = msg + " Last saved results kept."
+        st.session_state.pop(JOB,None)
+        st.rerun(scope="app")
+        return
+    with st.container(key="ccs_refresh_ready", border=True):
+        st.markdown("**✓ Fresh data available**")
+        st.caption("All scan stages finished. Apply together.")
+        if st.button("Update now", key="ccs_apply_refresh", type="primary", use_container_width=True):
+            frame = qualified_rows(_universe_rows(universe,candidate["expiry"]),candidate)
+            payload = payload_for(candidate, frame)
+            def publish(data):
+                data["snapshot"] = payload
+                if data["remember"]:
+                    data["preferences"]["filters"] = payload["filters"]
+            if save_change(publish):
+                st.session_state[STATE] = candidate
+                st.session_state.pop(JOB,None)
+                st.session_state.pop(ERROR,None)
+                st.rerun(scope="app")
+        if st.button("Keep old data", key="ccs_discard_refresh"):
+            st.session_state.pop(JOB,None)
+            st.rerun(scope="app")
+
+
+def render_mobile_refresh(access, universe, filters, apply):
+    from .selective_scan import (_snapshot, _universe_rows, qualified_rows, _display,
+                                 render_ios_saved_shortlist)
+    data = load_workspace() or {}
+    saved = data.get("snapshot")
+    active = _snapshot(access)
+    if active and not active.get("complete"):
+        active = None
+    # Only once per connected session/authorization, never on a timed rerun.
+    token_scope = _scope(access, [], "")
+    if apply:
+        st.session_state[AUTO] = token_scope
+        begin(access,universe,filters)
+    elif saved and st.session_state.get(AUTO) != token_scope:
+        st.session_state[AUTO] = token_scope
+        begin(access,universe,filters)
+    if active:
+        available = _universe_rows(universe,active["expiry"])
+        frame = qualified_rows(available,active)
+        shown = payload_for(active, frame)
+    else:
+        shown = saved
+    rows = (shown or {}).get("rows",[])
+    vals = [r.get("5%+ OTM CE (%)") for r in rows]
+    vals = [v for v in vals if isinstance(v,(int,float))]
+    best = f"{max(vals):.2f}%" if vals else "—"
+    maximum = (shown or {}).get("filters",filters)["maximum"]
+    count = str(len(rows)) if shown else "—"
+    ratio = "100%" if shown and shown.get("complete") else "0%"
+    status = "Last accepted scan" if shown and shown.get("complete") else "Saved / awaiting verified scan"
+    st.markdown(
+        '<div class="ccs-ios-summary"><small>OTM COVERED CALL SCANNER</small>'
+        f'<div class="ccs-ios-count">{count} <span>opportunities</span></div>'
+        f'<div class="ccs-ios-progress"><i style="width:{ratio}"></i></div><small>{status}</small>'
+        '<div class="ccs-ios-summarygrid">'
+        f'<div><small>Highest CE premium</small><strong>{best}</strong></div>'
+        f'<div><small>Contract limit</small><strong>₹{int(maximum)} lakh</strong></div></div></div>',
+        unsafe_allow_html=True)
+    with st.container(key="ccs_mobile_results"):
+        if shown:
+            timestamp = datetime.fromisoformat(shown["saved_at"]).astimezone(IST)
+            label = "Accepted snapshot" if active else "Cached data"
+            if not shown.get("complete"):
+                label += " · previous scan completeness unverified"
+            st.caption(f"{label} · {timestamp:%d %b %H:%M IST} · {shown['filters']['expiry']}")
+        refresh_panel(universe)
+        job = st.session_state.get(JOB)
+        if st.button("Refresh data", key="ccs_mobile_refresh", use_container_width=True,
+                     disabled=bool(job and not job["future"].done())):
+            st.session_state[AUTO] = token_scope
+            begin(access,universe,filters)
+            st.rerun()
+        if active:
+            st.markdown(f"#### Opportunities · {len(frame)}")
+            _display(frame, strategy_context=({item.entry.symbol:item.entry for item in available},
+                       active["expiry"],active["key"],active["scan_day"]))
+            from .workspace_ui import save_scan_controls
+            save_scan_controls(active, frame, automatic=False)
+        else:
+            render_ios_saved_shortlist(saved)

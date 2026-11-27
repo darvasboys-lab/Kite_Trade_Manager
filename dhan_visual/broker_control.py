@@ -21,7 +21,7 @@ DHAN_JOB_KEYS = (
     "dhan_auto_auth_job", "dhan_auto_profile_job",
     "fno_dhan_job", "fno_dhan_funds_job", "fno_straddle_job",
 )
-FYERS_JOB_KEYS = ("fno_fyers_cash_job", "fno_fyers_chain_job")
+FYERS_JOB_KEYS = ("fno_fyers_cash_job", "fno_fyers_chain_job", "ccs_mobile_refresh_job")
 
 
 def active_broker() -> str:
@@ -55,7 +55,7 @@ def _request_cancel(name: str) -> None:
     keys = (
         ("fno_straddle_job",)
         if name == "Dhan"
-        else ("fno_fyers_chain_job", "fno_technical_job",
+        else ("fno_fyers_chain_job", "ccs_mobile_refresh_job", "fno_technical_job",
               "ccs_r1_today_job")
     )
     for key in keys:
