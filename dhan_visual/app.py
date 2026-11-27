@@ -18,17 +18,19 @@ from dhan_visual.payoff import current_expiry_payoff, expiry_breakevens, theoret
 st.set_page_config(page_title="Covered Call Strategy Builder", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 # Presentation only: shared terminal palette and responsive native controls.
 from dhan_visual.terminal_theme import apply_terminal_theme
+from dhan_visual.mobile_cards import phone_layout
 from dhan_visual.workspace_ui import initialize, remember_pref, render_settings
 initialize()
 if "ccs_dark_mode" not in st.session_state:
     st.session_state["ccs_dark_mode"] = True
 apply_terminal_theme(st.session_state["ccs_dark_mode"])
+phone = phone_layout()
 
 st.markdown(
     """<section class="ps-header" aria-label="Covered Call Strategy Builder workspace">
       <div class="ps-topbar">
         <div class="ps-brand"><div class="ps-mark">↗</div>
-          <h1>CCS Terminal <span>· Mobile ready</span></h1></div>
+          <h1>CCS Terminal <span>· NSE F&O</span></h1></div>
         <div class="ps-chips">
           <span class="ps-chip safe">● Market-data only</span>
           <span class="ps-chip">Stock F&O</span>
@@ -39,22 +41,28 @@ st.markdown(
     </section>""", unsafe_allow_html=True
 )
 
-# Keep the mode control readily accessible on desktop and iPhone.
-theme_space, theme_action = st.columns([6, 1.4])
-with theme_action:
+# Keep the original broker selector and theme action mounted on every rerun.
+from dhan_visual.broker_control import render_single_broker_selector
+
+def render_theme_control():
     if st.button(
-        "☀ Light mode" if st.session_state["ccs_dark_mode"] else "☾ Dark mode",
+        "Light mode" if st.session_state["ccs_dark_mode"] else "Dark mode",
         key="ccs_theme_button", use_container_width=True,
-        help="Toggle the local appearance; market data and scanner rules are unchanged.",
+        help="Toggle appearance without changing market data or scanner rules.",
     ):
         st.session_state["ccs_dark_mode"] = not st.session_state["ccs_dark_mode"]
-        remember_pref("dark",st.session_state["ccs_dark_mode"])
+        remember_pref("dark", st.session_state["ccs_dark_mode"])
         st.rerun()
 
-# Explicit single-active-broker policy; all tabs below use the same mode.
-# Switching preserves saved Dhan/FYERS credentials without simultaneous logins.
-from dhan_visual.broker_control import render_single_broker_selector
-render_single_broker_selector()
+if phone:
+    with st.expander("Connection & appearance", expanded=False):
+        render_single_broker_selector()
+        render_theme_control()
+else:
+    theme_space, theme_action = st.columns([6, 1.4])
+    with theme_action:
+        render_theme_control()
+    render_single_broker_selector()
 from dhan_visual.fyers_ui import handle_fyers_local_return
 handle_fyers_local_return()
 
@@ -102,10 +110,24 @@ else:
         st.button("Unlock / renew FYERS", key="ccs_mobile_quick_login",
                   type="primary", use_container_width=True,
                   on_click=lambda: st.session_state.update(ccs_selective_page="⚙ Settings"))
-    page = st.radio(
-        "Workspace", ["◎ OTM CE Home", "⌕ Market Screener", "◇ Strategy Builder", "▥ Manage Trade", "⚙ Settings"],
-        horizontal=True, key="ccs_selective_page", label_visibility="collapsed",
-    )
+    pages = ["◎ OTM CE Home", "⌕ Market Screener", "◇ Strategy Builder", "▥ Manage Trade", "⚙ Settings"]
+    if phone:
+        # Native segmented widget in normal document flow: no fixed overlay,
+        # artificial radio hiding, JavaScript, or absolute positioning.
+        short = dict(zip(pages, ("Home", "Screener", "Strategy", "Trades", "Settings")))
+        if st.session_state.get("ccs_selective_page") not in pages:
+            st.session_state["ccs_selective_page"] = pages[0]
+        def keep_selected():
+            if st.session_state.get("ccs_selective_page") not in pages:
+                st.session_state["ccs_selective_page"] = st.session_state.get("ccs_last_page", pages[0])
+        page = st.segmented_control("Workspace", pages, selection_mode="single",
+                                    format_func=short.__getitem__, key="ccs_selective_page",
+                                    label_visibility="collapsed", on_change=keep_selected)
+        page = page if page in pages else pages[0]
+        st.session_state["ccs_last_page"] = page
+    else:
+        page = st.radio("Workspace", pages, horizontal=True,
+                        key="ccs_selective_page", label_visibility="collapsed")
     if page == "◎ OTM CE Home":
         render_selective_home()
     elif page == "⌕ Market Screener":
