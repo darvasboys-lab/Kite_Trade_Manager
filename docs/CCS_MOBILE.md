@@ -47,3 +47,7 @@ Open Authorize FYERS, complete broker-required authentication, then paste the
 full returned URL and Connect FYERS. No refresh-token or 2FA bypass. Keep the
 same localhost origin and browser tab. If autofill is unavailable, enter the
 vault passphrase manually. No change to the Windows credential manager.
+
+### Optional local automatic OAuth return
+
+If FYERS accepts the exact redirect URI `http://127.0.0.1:8502/` in your non-trading app dashboard, use the new automatic-return link after saving/unlocking credentials. Keep the local server bound to 127.0.0.1. Finish any required FYERS authentication in the browser; the returned tab exchanges and verifies the code and saves the access token. The pending state expires after ten minutes or one use. This is not unattended token renewal. If FYERS refuses the local redirect, retain the original registered FYERS sample redirect and manual paste workflow. On Android, update dependencies in the same Python environment that starts CCS (`python -m pip install -r requirements-dhan-visual.txt`).
