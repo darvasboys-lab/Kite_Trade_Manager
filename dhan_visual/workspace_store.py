@@ -87,7 +87,7 @@ def validate(raw):
         if not isinstance(stamp,str) or len(stamp)>80:
             raise ValueError("Invalid snapshot date.")
         datetime.fromisoformat(stamp)
-        columns={"Stock","CMP (₹)","Lot size","Contract size (₹)","5%+ OTM CE (%)","ATM Straddle Total (₹)","Straddle (%)","> R1"}
+        columns={"Stock","CMP (₹)","Lot size","Contract size (₹)","5%+ OTM CE (%)","ATM Straddle Total (₹)","Straddle (%)","> R1","CE strike"}
         rows=[]
         for row in snap["rows"]:
             if not isinstance(row,dict) or not isinstance(row.get("Stock"),str) or not SYMBOL.fullmatch(row["Stock"]):
