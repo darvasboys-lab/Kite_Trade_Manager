@@ -22,3 +22,20 @@ class MobileV2PresentationTest(unittest.TestCase):
         self.assertEqual(card_value(-1.25, "Futures vs CMP (%)"), "-1.25%")
         self.assertEqual(card_value(2.35, "5%+ OTM CE (%)"), "2.35%")
         self.assertEqual(card_value(500, "Lot size"), "500")
+
+
+    def test_historical_strike_optional_and_validated(self):
+        from dhan_visual.workspace_store import validate
+        snapshot = {
+            "saved_at": "2026-11-27T15:00:00+05:30",
+            "filters": {"maximum": 7, "minimum": 2, "expiry": "NOV-26",
+                        "r1_filter": "Include all stocks"},
+            "rows": [{"Stock": "INFY", "CMP (₹)": 1485.0, "CE strike": 1560.0},
+                     {"Stock": "TCS", "CMP (₹)": 3420.0}],
+        }
+        result = validate({"version": 1, "snapshot": snapshot})["snapshot"]
+        self.assertEqual(result["rows"][0]["CE strike"], 1560.0)
+        self.assertNotIn("CE strike", result["rows"][1])
+        snapshot["rows"][0]["CE strike"] = -1
+        with self.assertRaises(ValueError):
+            validate({"version": 1, "snapshot": snapshot})
