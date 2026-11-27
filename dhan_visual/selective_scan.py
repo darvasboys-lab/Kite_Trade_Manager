@@ -396,6 +396,24 @@ def _display_mobile_cards(frame, kind, strategy_context=None):
                 for col in frame.columns:
                     if col != "Stock":
                         st.text(f"{col}: {card_value(row[col], col)}")
+                if kind == "home" and current is not None:
+                    levels = current["levels"].get(symbol)
+                    price = pd.to_numeric(row.get("CMP (₹)"), errors="coerce")
+                    st.markdown("**Technical indicators**")
+                    if levels is None or pd.isna(price):
+                        st.caption("EMA history not yet verified.")
+                    else:
+                        # Same cached technical values used by Market Screener.
+                        technical = attach_technical_columns(
+                            pd.DataFrame({"Symbol": [symbol], "Last price (₹)": [price]}),
+                            current["levels"], stage=4)
+                        for column in technical.columns:
+                            if column not in ("Symbol", "Last price (₹)"):
+                                value = str(technical.iloc[0][column]).replace("✅", "✓").replace("❌", "×")
+                                st.text(f"{column}: {value}")
+                    cross = current.get("crosses", {}).get(symbol)
+                    st.caption(f"R1 crossed today: {cross.first_bar_time}" if cross is not None
+                               else "R1 crossed today: not confirmed")
                 if quote is not None:
                     st.text(f"Selected call: {quote.strike:f} CE")
                 if atm is not None:
