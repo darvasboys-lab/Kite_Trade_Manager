@@ -8,6 +8,8 @@ broker. Yahoo and NSE public EOD are not broker logins.
 from __future__ import annotations
 
 import streamlit as st
+import sys
+from .mobile_fyers_vault import exists as mobile_fyers_vault_exists
 
 from .fyers_readonly import FyersAccess, read_access_from_vault, read_app_from_vault
 
@@ -134,7 +136,8 @@ def render_single_broker_selector() -> None:
         fyers_ready = bool(
             isinstance(access, FyersAccess) and access.valid()
         ) or bool(read_access_from_vault()) or bool(read_app_from_vault())
-        preferred = "FYERS" if old_fyers or fyers_ready else "Dhan"
+        saved_mobile = sys.platform != "win32" and mobile_fyers_vault_exists()
+        preferred = "FYERS" if old_fyers or fyers_ready or saved_mobile else "Dhan"
         st.session_state[ACTIVE_KEY] = preferred
         if preferred == "FYERS":
             # Set both Home and Screener option sources *before* widgets exist.

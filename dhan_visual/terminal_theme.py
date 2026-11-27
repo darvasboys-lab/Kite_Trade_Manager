@@ -95,8 +95,43 @@ button:focus-visible,a:focus-visible { outline:2px solid var(--accent) !importan
 @media(max-width:760px) {
  .block-container { padding:.9rem .8rem 1.2rem !important; }
  .ps-header { padding:12px; } .ps-brand h1 { font-size:19px; } .ps-sub { margin-left:0; }
- .st-key-ccs_selective_page [role="radiogroup"] { gap:12px; }
+ .st-key-ccs_selective_page [role="radiogroup"] {
+   display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; border:0;
+ }
+ .st-key-ccs_selective_page [role="radiogroup"] > label {
+   min-height:44px; padding:8px; border:1px solid var(--border);
+   border-radius:8px; background:var(--surface); margin:0 !important;
+ }
+ .st-key-ccs_selective_page [role="radiogroup"] > label:has(input:checked) {
+   background:var(--tint); border-color:var(--accent);
+ }
+ .st-key-ccs_selective_page [role="radiogroup"] > label:last-child {
+   grid-column:1 / -1;
+ }
+ [data-testid="stHorizontalBlock"] { flex-wrap:wrap; gap:.55rem; }
+ [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+   flex:1 1 100% !important; width:100% !important; min-width:0 !important;
+ }
+ [data-testid="stWidgetLabel"] p, [data-testid="stCaptionContainer"] p { font-size:13px; }
  [data-testid="stMetricValue"] > div { font-size:20px !important; }
+ [data-testid="stMetric"] { min-height:58px; padding:8px 12px; }
+ [data-testid="stForm"] { padding:10px !important; }
+ .stButton button, [data-testid="stFormSubmitButton"] button,
+ [data-testid="stLinkButton"] a, [data-testid="stDownloadButton"] button {
+   min-height:44px; width:100%; white-space:normal; overflow-wrap:anywhere;
+ }
+ [data-testid="stTextInput"] input, [data-testid="stNumberInput"] input,
+ [data-testid="stTextArea"] textarea { font-size:16px !important; }
+ [data-testid="stForm"] [role="radiogroup"] > label { min-height:44px; }
+ [data-testid="stRadio"] [role="radiogroup"] { flex-wrap:wrap; }
+ .stTabs [data-baseweb="tab-list"] { overflow-x:auto; }
+ .stTabs [data-baseweb="tab"] { min-height:44px; white-space:nowrap; }
+ [data-testid="stDataFrame"], [data-testid="stPlotlyChart"] { max-width:100%; min-width:0; }
+ .ps-chips { gap:5px; } .ps-topbar { gap:6px; } .ps-sub { font-size:12px; }
+ .ps-mark { width:34px; height:34px; font-size:20px; }
+ .ccs-screen-head,.ccs-market-strip { padding:9px; overflow-wrap:anywhere; }
+ [data-testid="stHeader"] { height:2.6rem; }
+ .block-container { padding-top:3rem !important; }
 }
 """
 

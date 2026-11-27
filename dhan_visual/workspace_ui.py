@@ -145,13 +145,13 @@ def render_settings():
     d.metric("FYERS 429 responses",usage["counts"].get(("FYERS","rate_limit"),0))
     st.caption("Process-local counters since launch; Yahoo counts download batches, not internal HTTP calls. FYERS uses the existing shared 1.5-second request gate. Last FYERS success: "+usage["last"].get("FYERS","—"))
     st.markdown("#### Software update")
-    st.caption("Updates use the existing Git repository. Close the app before running Update CCS Terminal; only clean, fast-forward updates are allowed.")
+    st.caption("Updates use the existing Git repository. Close the app first; only clean, fast-forward updates are allowed. Android/Termux: enter Debian and run git pull --ff-only origin main from the CCS folder.")
     if st.button("Check GitHub for update",key="ccs_check_update"):
         try:
             root=Path(__file__).resolve().parent.parent
             local=subprocess.run(["git","rev-parse","HEAD"],cwd=root,check=True,capture_output=True,text=True,timeout=8).stdout.strip()
             remote=subprocess.run(["git","ls-remote","--exit-code","origin","refs/heads/main"],cwd=root,check=True,capture_output=True,text=True,timeout=15).stdout.split()[0]
-            st.info("Up to date." if local==remote else "Remote main differs. Close CCS and run Update_CCS.bat to update safely.")
+            st.info("Up to date." if local==remote else "Remote main differs. Close CCS and use your platform’s fast-forward update command.")
         except (OSError,subprocess.SubprocessError,IndexError):
             st.warning("Unable to verify GitHub update. Existing installation unchanged.")
-    st.caption("Desktop shortcuts: run Install_CCS_Shortcuts.bat once. Open CCS Terminal from Desktop; use Update CCS Terminal after closing it.")
+    st.caption("Windows: Install_CCS_Shortcuts.bat. Android: use your Termux:Widget Open_CCS launcher; stop the server before updating.")

@@ -28,7 +28,7 @@ st.markdown(
     """<section class="ps-header" aria-label="Covered Call Strategy Builder workspace">
       <div class="ps-topbar">
         <div class="ps-brand"><div class="ps-mark">↗</div>
-          <h1>CCS Terminal <span>· v1.0</span></h1></div>
+          <h1>CCS Terminal <span>· Mobile ready</span></h1></div>
         <div class="ps-chips">
           <span class="ps-chip safe">● Market-data only</span>
           <span class="ps-chip">Stock F&O</span>
@@ -89,6 +89,15 @@ if legacy:
         render_settings()
 else:
     from dhan_visual.selective_scan import render_selective_home, render_selective_market
+    from dhan_visual.broker_control import broker_allowed
+    from dhan_visual.fyers_ui import connected_fyers
+    from dhan_visual.mobile_fyers_vault import exists as mobile_vault_exists
+    if (sys.platform != "win32" and broker_allowed("FYERS")
+            and mobile_vault_exists() and not connected_fyers()
+            and st.session_state.get("ccs_selective_page") != "⚙ Settings"):
+        st.button("Unlock / renew FYERS", key="ccs_mobile_quick_login",
+                  type="primary", use_container_width=True,
+                  on_click=lambda: st.session_state.update(ccs_selective_page="⚙ Settings"))
     page = st.radio(
         "Workspace", ["◎ OTM CE Home", "⌕ Market Screener", "◇ Strategy Builder", "▥ Manage Trade", "⚙ Settings"],
         horizontal=True, key="ccs_selective_page", label_visibility="collapsed",
