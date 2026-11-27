@@ -28,7 +28,7 @@ class PayoffStudioTerminalThemeTests(unittest.TestCase):
         self.assertIn('key="ccs_theme_button"', source)
         self.assertIn('st.session_state["ccs_dark_mode"] = not st.session_state["ccs_dark_mode"]', source)
         theme = (ROOT / "dhan_visual" / "terminal_theme.py").read_text(encoding="utf-8")
-        for expected in ("#10151c", "#171e27", "#48c9a1", "#eef2f6", "#ffffff", "#08795b",
+        for expected in ("#101012", "#1c1c1e", "#51bc8b", "#f2f2f7", "#ffffff", "#27835c",
                          "stTabs [data-baseweb", "@media(max-width:760px)", "input:checked"):
             self.assertIn(expected, theme)
         self.assertIn('apply_terminal_theme(st.session_state["ccs_dark_mode"])', source)
