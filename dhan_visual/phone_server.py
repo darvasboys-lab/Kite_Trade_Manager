@@ -321,7 +321,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.response(403,{"error":"Invalid host"})
         files = {"/":("index.html","text/html; charset=utf-8"),
                  "/manifest.webmanifest":("manifest.webmanifest","application/manifest+json"),
-                 "/icon.svg":("icon.svg","image/svg+xml"),"/sw.js":("sw.js","text/javascript")}
+                 "/icon.svg":("icon.svg","image/svg+xml"),"/sw.js":("sw.js","text/javascript"),
+                 "/smart.js":("smart.js","text/javascript")}
         item = files.get(self.path)
         if not item:
             return self.response(404,{"error":"Not found"})
