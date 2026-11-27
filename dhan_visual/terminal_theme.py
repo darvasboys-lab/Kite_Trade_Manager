@@ -199,6 +199,31 @@ button:focus-visible,a:focus-visible { outline:2px solid var(--accent) !importan
  .block-container { padding-bottom:100px !important; }
 }
 
+/* Phone correction from Android screenshot: do not let the fixed Streamlit header
+   cover the title; use the actual native button layout in the dock. */
+.ccs-ios-status { color:var(--muted); font-size:12px; display:flex; align-items:center; gap:6px; }
+.ccs-ios-dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--muted); }
+.ccs-ios-dot.ready { background:var(--green); }
+.ccs-ios-empty { text-align:center; color:var(--muted); padding:24px 12px; font-size:13px; }
+.ccs-ios-saved-tiles { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:12px; }
+.ccs-ios-saved-tiles > div { padding:11px; border-radius:11px; background:var(--surface2); color:var(--accent); }
+.ccs-ios-saved-tiles > div:nth-child(2) { background:var(--atm-bg); color:var(--blue); }
+.ccs-ios-saved-tiles small { display:block; font-size:10px; color:inherit; }
+.ccs-ios-saved-tiles strong { display:block; font-size:23px; color:inherit; }
+.st-key-ccs_ios_connect { border-radius:19px !important; }
+.st-key-ccs_ios_connect button { background:var(--accent) !important; color:var(--surface) !important; border-radius:12px !important; min-height:44px; }
+.st-key-ccs_ios_connect button p { color:var(--surface) !important; }
+@media(max-width:760px) {
+ [data-testid="stHeader"] { background:transparent !important; height:2.25rem !important; }
+ .block-container { padding-top:3rem !important; }
+ .ccs-ios-title { display:block; padding:5px 0 3px; min-height:42px; line-height:1.35 !important; }
+ [data-testid="stAlert"] [data-baseweb="notification"] { background:var(--surface2) !important; color:var(--text) !important; }
+ [data-testid="stAlert"] p { color:var(--text) !important; }
+ .st-key-ccs_ios_dock button { display:flex !important; flex-direction:column !important; align-items:center !important; justify-content:center !important; gap:3px !important; min-height:52px !important; }
+ .st-key-ccs_ios_dock button > div, .st-key-ccs_ios_dock button > span { flex-direction:column !important; align-items:center !important; gap:3px !important; }
+ .st-key-ccs_ios_dock button [data-testid="stIconMaterial"] { font-size:21px !important; }
+}
+
 """
 
 
