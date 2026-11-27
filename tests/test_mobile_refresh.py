@@ -153,3 +153,19 @@ class MobileRefreshTests(unittest.TestCase):
                    for i, symbol in enumerate(("NIFTYFPI", "NIFTY", "TCS"), 1)]
         self.assertEqual([x.entry.symbol for x in _universe_rows(entries, "DEC-26")],
                          ["TCS"])
+
+    def test_live_summary_has_single_progress_bar_and_preserves_cached_metrics(self):
+        from unittest.mock import patch
+        from dhan_visual.mobile_refresh_ui import render_saved_summary
+        saved = {"filters": {"maximum": 7}, "complete": True,
+                 "rows": [{"Stock": "TCS", "5%+ OTM CE (%)": 5.25}]}
+        with patch("dhan_visual.mobile_refresh_ui.st.markdown") as markup:
+            render_saved_summary(saved, {}, status="Option chains 78/135",
+                                 progress=60, elapsed=142)
+        html = markup.call_args.args[0]
+        self.assertEqual(html.count('class="ccs-ios-progress"'), 1)
+        self.assertIn('width:60%', html)
+        self.assertIn("60% · Option chains 78/135", html)
+        self.assertIn("Elapsed: 2m 22s", html)
+        self.assertIn("5.25%", html)
+        self.assertIn('1 <span>opportunities', html)
