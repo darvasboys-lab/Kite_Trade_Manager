@@ -2,16 +2,16 @@
 import streamlit as st
 
 DARK = {
-    "page": "#10151c", "surface": "#171e27", "surface2": "#1c2530",
-    "border": "#2b3643", "text": "#e7edf4", "muted": "#8d9cad",
-    "accent": "#48c9a1", "tint": "#183b33", "blue": "#80b8f3",
-    "green": "#48c9a1", "red": "#f08b91",
+    "page": "#101012", "surface": "#1c1c1e", "surface2": "#28282c",
+    "border": "#353538", "text": "#f5f5f7", "muted": "#aaaab1",
+    "accent": "#e5e5ea", "tint": "#30333b", "blue": "#90bbf2",
+    "atm-bg": "#232d3b", "green": "#51bc8b", "red": "#ff777b",
 }
 LIGHT = {
-    "page": "#eef2f6", "surface": "#ffffff", "surface2": "#f5f7fa",
-    "border": "#dce3eb", "text": "#1c2938", "muted": "#607387",
-    "accent": "#08795b", "tint": "#dff3e9", "blue": "#1769bc",
-    "green": "#08795b", "red": "#b9404d",
+    "page": "#f2f2f7", "surface": "#ffffff", "surface2": "#f2f2f7",
+    "border": "#e5e5ea", "text": "#1c1c1e", "muted": "#777780",
+    "accent": "#414854", "tint": "#e5e7ed", "blue": "#3769a6",
+    "atm-bg": "#edf2f8", "green": "#27835c", "red": "#d45656",
 }
 
 CSS = """
@@ -161,6 +161,44 @@ button:focus-visible,a:focus-visible { outline:2px solid var(--accent) !importan
  .st-key-ccs_card_actions [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] { width:100% !important; min-width:0 !important; }
 
 }
+/* Final approved iOS-inspired presentation. Scoped widget selectors only. */
+.ccs-ios-title { font:760 25px/1.25 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+ letter-spacing:-1px; color:var(--text) !important; visibility:visible !important; opacity:1 !important; }
+.ccs-ios-summary { background:linear-gradient(130deg,#092b23,#174f3d 65%,#267251);
+ color:#fff; padding:19px; border-radius:21px; overflow:hidden; }
+.ccs-ios-summary small { color:#b2dfca; font-size:11px; }
+.ccs-ios-count { font-size:39px; font-weight:700; letter-spacing:-2px; margin:7px 0; color:#fff; }
+.ccs-ios-count span { font-size:17px; letter-spacing:0; }
+.ccs-ios-progress { height:5px; border-radius:10px; background:#ffffff25; margin:12px 0 6px; overflow:hidden; }
+.ccs-ios-progress i { display:block; height:100%; background:#67e5ae; }
+.ccs-ios-summarygrid { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:17px; padding-top:13px; border-top:1px solid #ffffff29; }
+.ccs-ios-summarygrid strong { display:block; color:white; font-size:20px; margin-top:4px; }
+.ccs-ios-stockhead { display:flex; gap:10px; align-items:center; color:var(--text); }
+.ccs-ios-stockhead b { display:block; font-size:15px; color:var(--text); }
+.ccs-ios-stockhead small { display:block; font-size:11px; color:var(--muted); }
+.ccs-ios-stockhead strong { margin-left:auto; font-size:18px; white-space:nowrap; color:var(--text); font-variant-numeric:tabular-nums; }
+.ccs-ios-logo { flex:none; width:38px; height:38px; display:grid; place-items:center; border-radius:12px; background:#e5e8ee; color:#465161; font-weight:750; }
+.ccs-ios-foot { display:flex; justify-content:space-between; color:var(--muted); font-size:11px; }
+.ccs-ios-tile-label { color:var(--muted); font-size:10px; font-weight:650; letter-spacing:.25px; }
+[class*="st-key-ccs_ios_card_"] { border-radius:19px !important; }
+[class*="st-key-ccs_ios_tiles_"] [data-testid="stHorizontalBlock"] { display:grid !important; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+[class*="st-key-ccs_ios_tiles_"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] { width:100% !important; min-width:0 !important; }
+[class*="st-key-ccs_ios_tiles_"] [data-testid="stPopover"] button { background:var(--surface2) !important; color:var(--accent) !important; border-radius:11px !important; min-height:49px; }
+[class*="st-key-ccs_ios_tiles_"] [data-testid="stPopover"] button p { font-size:23px !important; font-weight:700; color:var(--accent) !important; }
+[class*="st-key-ccs_ios_tiles_"] [data-testid="stColumn"]:nth-child(2) .ccs-ios-tile-label { color:var(--blue); }
+[class*="st-key-ccs_ios_tiles_"] [data-testid="stColumn"]:nth-child(2) [data-testid="stPopover"] button { background:var(--atm-bg) !important; color:var(--blue) !important; }
+[class*="st-key-ccs_ios_tiles_"] [data-testid="stColumn"]:nth-child(2) [data-testid="stPopover"] button p { color:var(--blue) !important; }
+.st-key-ccs_ios_dock { position:fixed !important; z-index:1000; bottom:0; left:0; right:0; padding:8px 4px max(12px,env(safe-area-inset-bottom)); background:var(--surface); border-top:1px solid var(--border); }
+.st-key-ccs_ios_dock [data-testid="stHorizontalBlock"] { display:grid !important; grid-template-columns:repeat(5,minmax(0,1fr)); gap:0 !important; }
+.st-key-ccs_ios_dock [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] { min-width:0 !important; width:100% !important; }
+.st-key-ccs_ios_dock button { min-height:52px !important; padding:4px 0 !important; border:0 !important; border-radius:9px !important; background:transparent !important; color:var(--muted) !important; }
+.st-key-ccs_ios_dock button[kind="primary"] { background:var(--tint) !important; color:var(--text) !important; }
+.st-key-ccs_ios_dock button > div { flex-direction:column !important; gap:2px !important; }
+.st-key-ccs_ios_dock button p { font-size:10px !important; white-space:nowrap !important; overflow-wrap:normal !important; color:inherit !important; }
+@media(max-width:760px) {
+ .block-container { padding-bottom:100px !important; }
+}
+
 """
 
 
