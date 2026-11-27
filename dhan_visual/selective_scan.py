@@ -363,6 +363,75 @@ def _display_mobile_cards(frame, kind, strategy_context=None):
                                 unsafe_allow_html=True)
 
 
+def futures_discount_frame(available, cash, futures, expiry):
+    """Every priced contract strictly below 7 lakh, independent of CE/R1."""
+    frame = otm_home_dataframe(available, cash, {}, expiry=expiry)
+    frame = filter_home_contracts(frame, FUTURES_MAX_LAKH)
+    frame = frame[["Stock", "CMP (₹)", "Lot size", "Contract size (₹)"]]
+    frame = attach_futures_columns(frame, futures)
+    return frame.sort_values(["Futures vs CMP (%)", "Stock"], ascending=[True, True],
+                             na_position="last").reset_index(drop=True)
+
+
+def load_futures_discount(access, universe, expiry):
+    """One explicit full-universe cash snapshot, then batched qualified futures."""
+    available = _universe_rows(universe, expiry)
+    cash = fetch_cash_quotes(access, [item.entry.symbol for item in available])
+    candidate = futures_discount_frame(available, cash, {}, expiry)
+    symbols = candidate["Stock"].tolist()
+    quotes = fetch_futures_quotes(access, symbols, expiry) if symbols else {}
+    return futures_discount_frame(available, cash, quotes, expiry), len(available), len(cash)
+
+
+def render_futures_discount(access, universe, expiry):
+    key = (_scope(access, [], expiry), datetime.now(IST).date().isoformat())
+    state = st.session_state.get(FUTURES_STATE)
+    if not state or state["key"] != key:
+        state = dict(key=key, expiry=expiry, frame=None, error="", at="")
+        st.session_state[FUTURES_STATE] = state
+    st.markdown("### Futures · Discount to Premium")
+    st.caption(f"{expiry} · CMP × selected-expiry lot < ₹7,00,000 · independent of CE premium and R1 filters")
+    a,b = st.columns(2)
+    if a.button("Refresh all futures", key="ccs_futures_refresh", use_container_width=True):
+        render_futures_discount_request(access, universe, expiry)
+        st.rerun()
+    if b.button("Hide futures / return to shortlist", key="ccs_futures_hide", use_container_width=True):
+        st.session_state.pop(FUTURES_STATE, None)
+        st.rerun()
+    if state["error"]:
+        st.warning(state["error"] + " · No automatic retry. Refresh manually.")
+    frame = state["frame"]
+    if frame is None:
+        if not state["error"]:
+            st.info("Snapshot expired or broker changed. Refresh manually to load the selected month.")
+        return
+    basis = pd.to_numeric(frame["Futures vs CMP (%)"], errors="coerce")
+    priced = basis.notna()
+    x,y,z = st.columns(3)
+    x.metric("Contracts below ₹7 lakh",len(frame))
+    y.metric("Trading at discount",int((basis<0).sum()))
+    z.metric("Futures prices available",int(priced.sum()))
+    st.caption(f"Snapshot requested {state['at']} · cash quotes {state['cash']}/{state['total']} eligible stocks. Missing futures prices appear last; missing CMP cannot establish contract size.")
+    st.caption("Basis = (futures − CMP) / CMP × 100. Cash and futures are sequential snapshots, not simultaneous fills.")
+    _display(frame, futures=True)
+    st.download_button("Download futures CSV",frame.to_csv(index=False),file_name="ccs-futures-discount.csv",key="ccs_futures_csv")
+
+
+def render_futures_discount_request(access, universe, expiry):
+    # Request is only made after an explicit form submit or refresh click.
+    key = (_scope(access, [], expiry), datetime.now(IST).date().isoformat())
+    state = dict(key=key, expiry=expiry, frame=None, error="", at="")
+    try:
+        with st.spinner("Loading all sub-₹7 lakh stock futures in quote batches…"):
+            state["frame"], state["total"], state["cash"] = load_futures_discount(access, universe, expiry)
+        state["at"] = _stamp()
+    except FyersDataError as exc:
+        state["error"] = str(exc)
+    except Exception:
+        state["error"] = "Futures quote request stopped."
+    st.session_state[FUTURES_STATE] = state
+
+
 def render_selective_home():
     from .workspace_ui import prepare_filters, save_scan_controls, remember_pref, render_historical_shortlist
     from .stock_strategy_ui import ACTIVE, launch_strategy, render_stock_strategy
