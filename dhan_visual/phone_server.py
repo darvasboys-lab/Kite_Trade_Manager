@@ -29,6 +29,7 @@ from .technical_ui import attach_technical_columns
 from .r1_today import session_r1_cross
 from .smart_suggestions import bullish_checks
 from .phone_progress import ScanProgress
+from .phone_call_detail import call_detail
 
 PORT = 8502
 HOST = f"127.0.0.1:{PORT}"
@@ -150,6 +151,8 @@ def scan_result():
         levels = s["levels"].get(symbol)
         row["bullish_checks"] = bullish_checks(getattr(quote,"price",None),levels)
         row["technical_asof"] = getattr(levels,"asof",None)
+        row["otm_call_detail"] = call_detail(s["calls"].get(symbol),symbol=symbol,
+            expiry=s["expiry"],premium_pct=row.get("5%+ OTM CE (%)"),lot=row.get("Lot size"))
     return {"rows": rows, "expiry": s["expiry"],
             "checked": len(set(candidates["Stock"]) & s["attempted"]),
             "total": len(candidates), "cash": len(s["cash"]),
