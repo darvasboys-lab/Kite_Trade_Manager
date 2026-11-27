@@ -3,7 +3,7 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from concurrent.futures import Future
-from threading import Event
+from threading import Event, Timer
 from dataclasses import replace
 from unittest.mock import patch
 import runpy
@@ -34,8 +34,11 @@ if not st.session_state.get("layout_fixture_initialized"):
                        (now.month - 1 + i) % 12 + 1, 1).strftime("%b-%y").upper()
               for i in range(3)]
     expiry = months[0]
+    symbols = ["TCS", "SBIN"]
+    if mode == "transition":
+        symbols += [f"TESTLONGSTOCK{i:02d}" for i in range(16)]
     items = [DhanUnderlying(Underlying(s, s, {m: 100 for m in months}), i)
-             for i, s in enumerate(("TCS", "SBIN"), 1)]
+             for i, s in enumerate(symbols, 1)]
     token = access()
     snapshot = scan.new_snapshot(_scope(token, [], expiry), expiry, 7, 5)
     snapshot.update(cash=quotes(), calls={s:replace(call(s,"6"),expiry=expiry) for s in ("TCS","SBIN")},
@@ -45,9 +48,16 @@ if not st.session_state.get("layout_fixture_initialized"):
                     levels_day=now.date().isoformat(), scan_day=now.date().isoformat(),
                     cash_at="offline", options_at="offline", complete=True,
                     completed_at=now.isoformat())
-    if not workspace_store.location().exists():
+    if mode == "transition":
+        snapshot.update(cash={s:quotes()["TCS"] for s in symbols},
+                        calls={s:replace(call(s,"6"),expiry=expiry) for s in symbols},
+                        attempted=set(symbols), history_attempted=set(symbols),
+                        levels={s:levels() for s in symbols})
+    if not workspace_store.location().exists() or mode == "transition":
         data = workspace_store.read()
         data["snapshot"] = refresh.payload_for(snapshot, scan.qualified_rows(items, snapshot))
+        if mode == "transition":
+            data["snapshot"]["rows"] = data["snapshot"]["rows"][:1]
         workspace_store.write(data)
     st.session_state.update(layout_fixture_initialized=True, ccs_active_broker="FYERS",
                             fno_universe_data=(items,"Offline browser fixture"),
@@ -57,10 +67,14 @@ if not st.session_state.get("layout_fixture_initialized"):
         st.session_state[refresh.AUTO] = _scope(token, [], "")
     if mode == "accepted":
         st.session_state[scan.STATE] = snapshot
-    if mode in ("loading","ready"):
+    if mode in ("loading","ready","transition"):
         future = Future()
         if mode == "ready":
             future.set_result(snapshot)
+        elif mode == "transition":
+            timer = Timer(4, lambda: future.set_result(snapshot))
+            timer.daemon = True
+            timer.start()
         st.session_state[refresh.JOB] = {"future":future,"cancel":Event(),
             "key":snapshot["key"],"filters":{k:snapshot[k] for k in ("expiry","maximum","minimum","r1_filter")},
             "progress":(60,"Option chains 78/135")}
