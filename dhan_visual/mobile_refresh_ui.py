@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 from .ce_eod_remote import IST
 from .mobile_refresh import JOB, start
+from .mobile_cards import sort_ce5_rows
 from .workspace_ui import load_workspace, save_change
 from .fyers_ui import connected_fyers, _scope
 
@@ -17,7 +18,7 @@ ERROR = "ccs_mobile_refresh_error"
 def payload_for(snapshot, frame):
     if not snapshot.get("complete") or snapshot.get("stopped"):
         raise ValueError("Cannot publish an incomplete snapshot.")
-    rows = json.loads(frame.to_json(orient="records"))
+    rows = json.loads(sort_ce5_rows(frame).to_json(orient="records"))
     for row in rows:
         symbol = row["Stock"]
         call = snapshot["calls"].get(symbol)
