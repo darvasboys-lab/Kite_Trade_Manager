@@ -1,6 +1,7 @@
 """Mobile-only refresh and atomic publication of complete scans."""
 from datetime import datetime
 import json
+from html import escape
 import time
 import pandas as pd
 import streamlit as st
@@ -51,7 +52,7 @@ def should_auto_start(previous_scope, token_scope, job, apply=False):
     return not job and (apply or previous_scope != token_scope)
 
 
-def render_saved_summary(shown, filters, *, status=None):
+def render_saved_summary(shown, filters, *, status=None, progress=None, elapsed=None):
     """One summary for locked, loading and connected Home."""
     rows = (shown or {}).get("rows", [])
     vals = [r.get("5%+ OTM CE (%)") for r in rows]
@@ -62,10 +63,17 @@ def render_saved_summary(shown, filters, *, status=None):
     ratio = "100%" if shown and shown.get("complete") else "0%"
     if status is None:
         status = "Last accepted scan" if shown and shown.get("complete") else "Saved / awaiting verified scan"
+    if progress is not None:
+        progress = max(0, min(100, int(progress)))
+        ratio = f"{progress}%"
+        status = f"{progress}% · {status}"
+    elapsed_html = (f'<small class="ccs-ios-refresh-elapsed">Elapsed: {elapsed // 60}m {elapsed % 60:02d}s</small>'
+                    if elapsed is not None else "")
     st.markdown(
         '<div class="ccs-ios-summary"><small>OTM COVERED CALL SCANNER</small>'
         f'<div class="ccs-ios-count">{count} <span>opportunities</span></div>'
-        f'<div class="ccs-ios-progress"><i style="width:{ratio}"></i></div><small>{status}</small>'
+        f'<div class="ccs-ios-progress"><i style="width:{ratio}"></i></div>'
+        f'<small class="ccs-ios-refresh-status">{escape(status)}</small>{elapsed_html}'
         '<div class="ccs-ios-summarygrid">'
         f'<div><small>Highest CE premium</small><strong>{best}</strong></div>'
         f'<div><small>Contract limit</small><strong>₹{int(maximum)} lakh</strong></div></div></div>',
@@ -107,16 +115,18 @@ def begin(access, universe, filters):
 
 
 @st.fragment(run_every="2s")
-def refresh_panel(universe):
+def refresh_panel(universe, shown, filters):
     job = st.session_state.get(JOB)
     access = connected_fyers()
     if not job:
+        render_saved_summary(shown, filters)
         if st.session_state.get(ERROR):
             st.warning(st.session_state[ERROR])
         return
     future = job["future"]
     if not access or job["key"] != _scope(access, [], job["filters"]["expiry"]):
         job["cancel"].set()
+        render_saved_summary(shown, filters, status="Stopping previous refresh")
         if future.done():
             st.session_state.pop(JOB,None)
             st.session_state.pop(AUTO,None)
@@ -124,9 +134,8 @@ def refresh_panel(universe):
         return
     if not future.done():
         percent, stage = job["progress"]
-        st.progress(min(percent,99)/100, text=f"{percent}% · {stage}")
-        elapsed = int(time.monotonic() - job.get("started_at", time.monotonic()))
-        st.caption(f"Refresh elapsed: {elapsed // 60}m {elapsed % 60:02d}s · previous data remains available.")
+        elapsed = max(0, int(time.monotonic() - job.get("started_at", time.monotonic())))
+        render_saved_summary(shown, filters, status=stage, progress=min(percent, 99), elapsed=elapsed)
         if st.button("Cancel refresh", key="ccs_cancel_refresh"):
             job["cancel"].set()
         return
@@ -144,6 +153,7 @@ def refresh_panel(universe):
         st.rerun(scope="app")
         return
     # Every completed scan, including the first, awaits explicit acceptance.
+    render_saved_summary(shown, filters, status="Fresh data ready · tap Update now", progress=100)
     with st.container(key="ccs_refresh_ready", border=True):
         st.markdown("**✓ Fresh data available**")
         st.caption("100% · All scan stages finished. Tap Update now to display and save the complete results.")
@@ -176,7 +186,8 @@ def render_mobile_refresh(access, universe, filters, apply):
         shown = payload_for(active, frame)
     else:
         shown = saved
-    render_saved_summary(shown, filters)
+    with st.container(key="ccs_mobile_refresh_panel"):
+        refresh_panel(universe, shown, filters)
     with st.container(key="ccs_mobile_results"):
         if shown:
             timestamp = datetime.fromisoformat(shown["saved_at"]).astimezone(IST)
@@ -184,10 +195,8 @@ def render_mobile_refresh(access, universe, filters, apply):
             if not shown.get("complete"):
                 label += " · previous scan completeness unverified"
             st.caption(f"{label} · {timestamp:%d %b %H:%M IST} · {shown['filters']['expiry']}")
-        refresh_panel(universe)
         job = st.session_state.get(JOB)
-        if st.button("Retry refresh" if st.session_state.get(ERROR) else "Refresh data", key="ccs_mobile_refresh", use_container_width=True,
-                     disabled=bool(job)):
+        if not job and st.button("Retry refresh" if st.session_state.get(ERROR) else "Refresh data", key="ccs_mobile_refresh", use_container_width=True):
             st.session_state[AUTO] = token_scope
             begin(access,universe,filters)
             st.rerun()
