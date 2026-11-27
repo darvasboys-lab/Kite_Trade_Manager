@@ -1,0 +1,30 @@
+const assert=require("node:assert/strict");
+const {rank,criteria,weights,premiumPoints}=require("../dhan_visual/phone/smart.js");
+function row(Stock,premium,flags){
+ return {Stock,"5%+ OTM CE (%)":premium,bullish_checks:Object.fromEntries(criteria.map(k=>[k,flags[k]]))};
+}
+const all={monthly_r1:true,ema20:true,ema50:true,ema200:true};
+assert.deepEqual(weights,{monthly_r1:20,ema20:15,ema50:10,ema200:5});
+assert.equal(premiumPoints(2),25);
+assert.equal(premiumPoints(3),37.5);
+assert.equal(premiumPoints(3.5),43.8);
+assert.equal(premiumPoints(4),50);
+assert.equal(premiumPoints(8),50);
+assert.equal(premiumPoints(NaN),0);
+const rows=[row("A",2.1,all),row("B",4,{...all,ema200:false,ema50:false}),row("C",3.5,all),row("D",5,{monthly_r1:true,ema20:null}),row("E",8,{}),row("F",null,all),row("G",NaN,all)];
+const result=rank(rows);
+assert.deepEqual(result.map(x=>x.row.Stock),["C","B","A","D","E"]);
+assert.equal(result[0].score,93.8);
+assert.equal(result[1].score,85);
+assert.equal(result[1].passed,2);
+assert.equal(result[1].cePoints,50);
+assert.equal(result[1].technicalPoints,35);
+assert.equal(result[3].unknown,3);
+assert.equal(result[4].passed,0);
+assert.equal(result[4].score,50);
+assert.equal(rank([row("X",4,all)])[0].score,100);
+assert.equal(rank([row("X",4,all)],["ema200"])[0].total,55);
+assert.equal(rank([row("X",4,all)],["ema200"])[0].score,55);
+assert.deepEqual(rank(rows,[]),[]);
+assert.deepEqual(rank([row("X",4,all),row("Y",5,all)]).map(x=>x.row.Stock),["Y","X"]);
+console.log("Weighted Smart Suggestions rank tests passed");
