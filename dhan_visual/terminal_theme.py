@@ -95,42 +95,35 @@ button:focus-visible,a:focus-visible { outline:2px solid var(--accent) !importan
 @media(max-width:760px) {
  .block-container { padding:.9rem .8rem 1.2rem !important; }
  .ps-header { padding:12px; } .ps-brand h1 { font-size:19px; } .ps-sub { margin-left:0; }
- /* Native radio retains its actual state, keyboard support and lazy routing. */
- .st-key-ccs_selective_page {
+ /* Real buttons; do not depend on radio-label DOM or hide input controls. */
+ .st-key-ccs_phone_nav {
    position:fixed !important; left:0; right:0; bottom:0; z-index:999;
+   width:100% !important; max-width:100% !important; box-sizing:border-box;
    background:var(--surface); border-top:1px solid var(--border);
-   padding:6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
-   box-shadow:0 -5px 20px #0002;
+   padding:4px 4px calc(4px + env(safe-area-inset-bottom, 0px));
  }
- .st-key-ccs_selective_page [data-testid="stWidgetLabel"] { display:none; }
- .st-key-ccs_selective_page [role="radiogroup"] {
-   display:grid !important; grid-template-columns:repeat(5,minmax(0,1fr)); gap:3px; border:0;
+ .st-key-ccs_phone_nav [data-testid="stHorizontalBlock"] {
+   display:grid !important; grid-template-columns:repeat(5,minmax(0,1fr));
+   gap:2px !important; width:100% !important; flex-wrap:nowrap !important;
  }
- .st-key-ccs_selective_page [role="radiogroup"] > label {
-   display:flex !important; flex-direction:column; align-items:center; justify-content:center;
-   min-width:0; min-height:52px; padding:5px 1px; border:1px solid transparent;
-   border-radius:9px; margin:0 !important; gap:3px; position:relative;
-   color:var(--muted); cursor:pointer;
+ .st-key-ccs_phone_nav [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+   width:100% !important; min-width:0 !important; flex:1 1 0 !important;
  }
- .st-key-ccs_selective_page [role="radiogroup"] > label > div:first-child { position:absolute; opacity:0; width:1px; height:1px; overflow:hidden; }
- .st-key-ccs_selective_page [role="radiogroup"] > label p { font-size:0 !important; line-height:0; margin:0; }
- .st-key-ccs_selective_page [role="radiogroup"] > label::before { font-size:19px; line-height:22px; font-weight:650; }
- .st-key-ccs_selective_page [role="radiogroup"] > label::after { font-size:10px; line-height:14px; font-weight:650; }
- .st-key-ccs_selective_page [role="radiogroup"] > label:nth-child(1)::before { content:"⌂"; }
- .st-key-ccs_selective_page [role="radiogroup"] > label:nth-child(2)::before { content:"⌕"; }
- .st-key-ccs_selective_page [role="radiogroup"] > label:nth-child(3)::before { content:"◇"; }
- .st-key-ccs_selective_page [role="radiogroup"] > label:nth-child(4)::before { content:"▥"; }
- .st-key-ccs_selective_page [role="radiogroup"] > label:nth-child(5)::before { content:"⚙"; }
- .st-key-ccs_selective_page [role="radiogroup"] > label:nth-child(1)::after { content:"Home"; }
- .st-key-ccs_selective_page [role="radiogroup"] > label:nth-child(2)::after { content:"Screener"; }
- .st-key-ccs_selective_page [role="radiogroup"] > label:nth-child(3)::after { content:"Strategy"; }
- .st-key-ccs_selective_page [role="radiogroup"] > label:nth-child(4)::after { content:"Trades"; }
- .st-key-ccs_selective_page [role="radiogroup"] > label:nth-child(5)::after { content:"Settings"; }
- .st-key-ccs_selective_page [role="radiogroup"] > label:has(input:checked) {
-   background:var(--tint); border-color:var(--accent); color:var(--accent);
+ .st-key-ccs_phone_nav .stButton button {
+   height:52px !important; min-height:52px !important; padding:2px !important;
+   border:0 !important; background:transparent !important;
+   flex-direction:column !important; gap:2px !important;
+   font-size:10px !important; white-space:nowrap !important;
  }
- .st-key-ccs_selective_page [role="radiogroup"] > label:focus-within { outline:2px solid var(--accent); }
- .block-container { padding-bottom:calc(94px + env(safe-area-inset-bottom, 0px)) !important; }
+ .st-key-ccs_phone_nav .stButton button * {
+   white-space:nowrap !important; overflow-wrap:normal !important;
+   word-break:normal !important; line-height:1.15 !important;
+ }
+ .st-key-ccs_phone_nav .stButton button p { font-size:10px !important; margin:0 !important; }
+ .st-key-ccs_phone_nav .stButton button[kind="primary"] {
+   background:var(--tint) !important; color:var(--accent) !important;
+ }
+ .block-container { padding-bottom:calc(76px + env(safe-area-inset-bottom, 0px)) !important; }
  .ccs-card-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
  .ccs-card-grid > div { background:var(--surface2); border:1px solid var(--border); padding:8px; border-radius:8px; min-width:0; }
  .ccs-card-grid small { display:block; font-size:11px; color:var(--muted); }
@@ -162,8 +155,17 @@ button:focus-visible,a:focus-visible { outline:2px solid var(--accent) !importan
  .ps-chips { gap:5px; } .ps-topbar { gap:6px; } .ps-sub { font-size:12px; }
  .ps-mark { width:34px; height:34px; font-size:20px; }
  .ccs-screen-head,.ccs-market-strip { padding:9px; overflow-wrap:anywhere; }
- [data-testid="stHeader"] { height:2.6rem; }
- .block-container { padding-top:3rem !important; }
+ [data-testid="stHeader"] { height:2.2rem; }
+ [data-testid="stToolbar"] { display:none !important; }
+ .block-container { padding-top:2.4rem !important; }
+ .ps-header { padding:7px 9px !important; }
+ .ps-topbar { flex-wrap:nowrap !important; gap:4px !important; }
+ .ps-brand { gap:6px !important; flex-wrap:nowrap !important; min-width:0; }
+ .ps-brand h1 { font-size:15px !important; padding:0 !important; line-height:1.2 !important; white-space:nowrap; }
+ .ps-mark { width:26px !important; height:26px !important; flex:none; font-size:16px !important; }
+ .ps-chips { flex-wrap:nowrap !important; }
+ .ps-chip.safe { font-size:9px !important; padding:3px 4px !important; white-space:nowrap; }
+ .st-key-ccs_phone_header [data-testid="stExpander"] summary { padding:5px 8px !important; }
 }
 """
 
