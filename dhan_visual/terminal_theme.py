@@ -376,6 +376,95 @@ button:focus-visible,a:focus-visible { outline:2px solid var(--accent) !importan
  .st-key-ccs_mobile_results { margin-top:8px; }
 }
 
+
+/* Shared responsive layout contract for every phone workspace.
+   Only the dock is fixed. All other elements reserve their normal flow space. */
+.block-container:has(.st-key-ccs_ios_dock) {
+  padding-bottom:calc(112px + env(safe-area-inset-bottom, 0px)) !important;
+}
+.st-key-ccs_ios_dock {
+  box-sizing:border-box; width:100% !important; max-width:none !important;
+  padding:8px 4px calc(10px + env(safe-area-inset-bottom, 0px)) !important;
+}
+@media(max-width:760px) {
+ .block-container { box-sizing:border-box; width:100% !important; min-width:0; }
+ .block-container [data-testid="stVerticalBlock"] {
+   min-width:0; max-width:100%; gap:.75rem;
+ }
+ .block-container :is([data-testid="stElementContainer"],[data-testid="stMarkdownContainer"],
+                     [data-testid="stHorizontalBlock"],[data-testid="stColumn"],
+                     [data-testid="column"],[data-testid="stForm"],[data-testid="stExpander"]) {
+   box-sizing:border-box; min-width:0 !important; max-width:100%;
+ }
+ /* Explicit stacking, rather than a wrapping flex row with competing widths. */
+ .block-container [data-testid="stHorizontalBlock"] {
+   flex-direction:column !important; align-items:stretch !important; gap:.75rem;
+ }
+ .block-container [data-testid="stHorizontalBlock"] > :is([data-testid="stColumn"],[data-testid="column"]) {
+   flex:0 0 auto !important; width:100% !important; min-width:0 !important;
+ }
+ /* The three deliberate compact grids remain side by side. */
+ .st-key-ccs_ios_dock [data-testid="stHorizontalBlock"] {
+   display:grid !important; grid-template-columns:repeat(5,minmax(0,1fr)); gap:2px !important;
+ }
+ :is([class*="st-key-ccs_ios_tiles_"],.st-key-ccs_card_actions) [data-testid="stHorizontalBlock"] {
+   display:grid !important; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px !important;
+ }
+ .st-key-ccs_ios_dock button {
+   width:100% !important; min-width:0 !important; height:auto !important;
+   min-height:52px !important; padding:4px 1px !important;
+   display:flex !important; flex-direction:column !important; gap:3px !important;
+ }
+ .st-key-ccs_ios_dock button :is(p,span) { line-height:1.2 !important; }
+ .st-key-ccs_ios_dock button p {
+   font-size:clamp(9px,2.7vw,11px) !important; white-space:normal !important;
+   overflow-wrap:normal !important; text-align:center;
+ }
+ .ccs-ios-title,.ccs-ios-status { margin:0; overflow-wrap:anywhere; }
+ .ccs-ios-status { padding-bottom:5px; }
+ .ccs-ios-dot { flex:0 0 7px; }
+ .ccs-ios-summary { margin:0 0 12px; }
+ .ccs-ios-stockhead { display:grid; grid-template-columns:38px minmax(0,1fr) auto; gap:8px; }
+ .ccs-ios-stockhead > div { min-width:0; }
+ .ccs-ios-stockhead :is(b,small) { overflow-wrap:anywhere; }
+ .ccs-ios-stockhead strong { margin:0; font-size:clamp(13px,4vw,18px); }
+ .ccs-ios-saved-tiles > div,.ccs-ios-summarygrid > div { min-width:0; }
+ .ccs-ios-saved-tiles strong { overflow-wrap:anywhere; }
+ .ccs-ios-foot { flex-wrap:wrap; gap:4px 8px; }
+ .block-container :is([data-testid="stButton"],[data-testid="stFormSubmitButton"],
+    [data-testid="stDownloadButton"],[data-testid="stLinkButton"],[data-testid="stPopover"]) {
+   max-width:100%; min-width:0;
+ }
+ .block-container :is([data-testid="stButton"],[data-testid="stFormSubmitButton"],
+    [data-testid="stDownloadButton"],[data-testid="stLinkButton"],[data-testid="stPopover"]) :is(button,a) {
+   max-width:100%; min-width:0; height:auto; white-space:normal; overflow-wrap:anywhere;
+ }
+ .block-container [role="radiogroup"] { flex-wrap:wrap; gap:6px; }
+ .block-container [role="radiogroup"] > label { min-width:0; max-width:100%; margin:0 !important; }
+ .block-container [role="radiogroup"] > label p { white-space:normal; overflow-wrap:anywhere; }
+ .block-container :is([data-testid="stWidgetLabel"],[data-testid="stCaptionContainer"]) p {
+   line-height:1.4 !important; opacity:1 !important; color:var(--settings-muted) !important;
+   overflow-wrap:anywhere;
+ }
+ .block-container :is([data-testid="stMetricLabel"],[data-testid="stMetricValue"]) :is(p,div) {
+   white-space:normal; overflow-wrap:anywhere;
+ }
+ .block-container :is([data-testid="stPlotlyChart"],[data-testid="stDataFrame"],
+    [data-testid="stTextInput"],[data-testid="stNumberInput"],[data-testid="stSelectbox"],
+    [data-testid="stMultiSelect"],[data-testid="stSlider"],[data-testid="stFileUploader"]) {
+   width:100%; min-width:0; max-width:100%;
+ }
+ .block-container [data-testid="stTabs"] { min-width:0; max-width:100%; }
+ .block-container [data-baseweb="tab-list"] { max-width:100%; overflow-x:auto; }
+ .block-container [data-testid="stText"] pre { white-space:pre-wrap; overflow-wrap:anywhere; }
+ .block-container [data-testid="stCode"] { max-width:100%; overflow-x:auto; }
+}
+@media(max-width:350px) {
+ .ccs-ios-stockhead { grid-template-columns:32px minmax(0,1fr); }
+ .ccs-ios-stockhead strong { grid-column:2; justify-self:start; }
+ .ccs-ios-stockhead .ccs-ios-logo { width:32px; height:32px; }
+}
+
 """
 
 
