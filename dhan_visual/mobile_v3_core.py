@@ -17,10 +17,12 @@ def home():
             "live_refresh": False, "error": error}
 
 
-def saved_payoff(symbol, preset):
+def saved_payoff(symbol, preset, accepted_stamp=None):
     snapshot = read()["snapshot"]
     if not snapshot:
         raise ValueError("No saved snapshot.")
+    if accepted_stamp is not None and snapshot["saved_at"] != accepted_stamp:
+        raise ValueError("Saved data changed. Accept the newer snapshot before calculating its payoff.")
     row = next((r for r in snapshot["rows"] if r["Stock"] == symbol), None)
     if row is None:
         raise ValueError("Stock not in saved snapshot.")

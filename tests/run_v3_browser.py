@@ -67,6 +67,28 @@ def main():
             page.locator("#sheetContent").get_by_role("button", name="Covered call").click()
             page.locator("#payoff svg").wait_for()
             assert not errors, errors
+            # Browser cache retains accepted data. Simulate a newer complete V2
+            # snapshot without touching the real fixture or making broker calls.
+            page.locator('nav [data-page="home"]').click()
+            fresh = page.request.get("http://127.0.0.1:8503/api/home").json()
+            fresh["snapshot"]["saved_at"]="2026-11-28T15:25:00+05:30"
+            fresh["snapshot"]["rows"][0]["5%+ OTM CE (%)"]=4
+            page.route("**/api/home",lambda route:route.fulfill(json=fresh))
+            page.locator("#reload").click()
+            page.locator("#freshNotice").wait_for()
+            assert page.locator(".minimalCard").first.get_by_text("3.00%",exact=True).is_visible()
+            page.locator("#acceptFresh").click()
+            assert page.locator(".minimalCard").first.get_by_text("4.00%",exact=True).is_visible()
+            assert page.locator(".premiumChange").first.inner_text()=="↑ 1.00 pp"
+            page.unroute("**/api/home")
+            page.evaluate("navigator.serviceWorker.ready")
+            page.wait_for_function("navigator.serviceWorker.controller !== null")
+            page.context.set_offline(True)
+            page.reload()
+            page.locator(".minimalCard").first.wait_for()
+            assert page.locator(".minimalCard").first.get_by_text("4.00%",exact=True).is_visible()
+            assert "Offline" in page.locator("#status").inner_text()
+            assert not errors, errors
             page.close()
         browser.close()
 

@@ -57,9 +57,9 @@ def home():
 
 
 @app.get("/api/payoff")
-def payoff(symbol: str, preset: str = "Covered call"):
+def payoff(symbol: str, accepted_stamp: str, preset: str = "Covered call"):
     try:
-        return core.saved_payoff(symbol, preset)
+        return core.saved_payoff(symbol, preset, accepted_stamp)
     except (ValueError, OSError, TypeError, ArithmeticError) as exc:
         raise HTTPException(400, detail=str(exc) if isinstance(exc, ValueError) else "Saved data unavailable")
 

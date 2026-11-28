@@ -45,3 +45,12 @@ class MobileV3Tests(unittest.TestCase):
     def test_no_snapshot(self):
         store.write(dict(self.data,snapshot=None))
         self.assertIsNone(core.home()["snapshot"])
+
+
+    def test_payoff_refuses_unaccepted_snapshot(self):
+        with self.assertRaisesRegex(ValueError, "Accept the newer snapshot"):
+            core.saved_payoff("TCS","Covered call","2026-11-26T15:25:00+05:30")
+
+    def test_payoff_uses_accepted_snapshot(self):
+        self.assertEqual(core.saved_payoff("TCS","Covered call",
+            self.data["snapshot"]["saved_at"])["summary"]["max_profit"],8000)
