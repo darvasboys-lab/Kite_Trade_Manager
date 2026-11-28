@@ -123,6 +123,13 @@ else:
         if st.session_state.get(PENDING_KEY):
             status = "Switching connection"
             state = "pending"
+        elif broker == "FYERS" and page == "◎ OTM CE Home" and not st.session_state.get("ccs_stock_strategy_active"):
+            from dhan_visual.market_session import is_refresh_open
+            if not is_refresh_open():
+                status, state = "Refresh paused", "pending"
+            else:
+                status = "Session available" if connected_fyers() else "Connection required"
+                state = "ready" if status == "Session available" else "pending"
         elif broker == "FYERS":
             status = "Session available" if connected_fyers() else "Connection required"
             state = "ready" if status == "Session available" else "pending"

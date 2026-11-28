@@ -279,12 +279,12 @@ button:focus-visible,a:focus-visible { outline:2px solid var(--accent) !importan
  [data-testid="stHorizontalBlock"] {
    display:grid !important; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px !important;
  }
- .ccs-ios-title { display:block; font-size:26px; line-height:1.3; padding:0; margin:0; }
- .ccs-ios-status { font-size:13px; line-height:1.45; padding:0; margin:0; }
+ .ccs-ios-title { display:block; font-size:26px; line-height:1.25; padding:0; margin:0; }
+ .ccs-ios-status { font-size:13px; line-height:1.5; padding:3px 0 10px; margin:0; color:var(--settings-muted); }
  .ccs-ios-dot { flex:0 0 7px; }
- .ccs-ios-summary { box-sizing:border-box; display:block; position:relative; margin:0; padding:18px; height:auto; border-radius:20px; }
+ .ccs-ios-summary { box-sizing:border-box; display:block; position:relative; margin:0; padding:16px 18px; height:auto; border-radius:18px; }
  .ccs-ios-summary small { display:block; line-height:1.45; font-size:12px; }
- .ccs-ios-count { display:flex; align-items:baseline; flex-wrap:wrap; gap:8px; font-size:36px; line-height:1.12; margin:12px 0; }
+ .ccs-ios-count { display:flex; align-items:baseline; flex-wrap:wrap; gap:8px; font-size:34px; line-height:1.15; margin:10px 0; }
  .ccs-ios-count span { font-size:17px; line-height:1.35; }
  .ccs-ios-progress { margin:14px 0 8px; height:7px; }
  .ccs-ios-refresh-status,.ccs-ios-refresh-elapsed { color:#cce9dc !important; overflow-wrap:anywhere; }
@@ -492,6 +492,26 @@ button:focus-visible,a:focus-visible { outline:2px solid var(--accent) !importan
   :is([class*="st-key-ccs_card_details_actions_"],
       [data-testid="stLayoutWrapper"]:has([class*="st-key-ccs_card_details_actions_"]):not(:has(.ccs-card-disclosure))) {
   display:none !important;
+}
+
+
+/* Explicit in-flow spacing for Android Home; do not rely on native Markdown
+   wrapper gaps, which vary between Streamlit versions and WebViews. */
+.ccs-ios-summary-wrap { display:flow-root; min-width:0; padding:4px 0 10px; }
+.ccs-ios-summary-meta {
+  display:grid; gap:4px; min-width:0; padding:10px 2px 2px;
+  color:var(--settings-muted); font-size:12px; line-height:1.5;
+  overflow-wrap:anywhere;
+}
+.ccs-ios-summary-meta > div { min-width:0; }
+.ccs-ios-summary-meta .ccs-ios-saved-stamp { font-weight:600; color:var(--text); }
+.ccs-ios-status { color:var(--settings-muted); }
+@media(max-width:760px) {
+  .block-container:has(.ccs-ios-summary) { padding-top:2.25rem !important; }
+  .ccs-ios-summary-wrap { padding-top:5px; padding-bottom:12px; }
+  .ccs-ios-summary-meta { padding-top:12px; font-size:12px; line-height:1.55; }
+  .ccs-ios-summary-wrap .ccs-ios-summarygrid { margin-top:12px; padding-top:10px; }
+  .st-key-ccs_mobile_results .stMarkdown h3 { margin-bottom:4px !important; }
 }
 
 """

@@ -243,3 +243,15 @@ class MobileRefreshTests(unittest.TestCase):
         with patch("dhan_visual.market_session.session_day", return_value="2026-11-30"):
             current = ui.daily_auto_scope(access())
         self.assertTrue(ui.should_auto_start(previous, current, None))
+
+
+    def test_closed_summary_metadata_is_in_flow_and_escaped(self):
+        from dhan_visual.mobile_refresh_ui import render_saved_summary
+        with patch("dhan_visual.mobile_refresh_ui.st.markdown") as markup:
+            render_saved_summary(None, {}, status="Market closed",
+                                 metadata=("Last saved <cached>", "Refresh paused"))
+        html = markup.call_args.args[0]
+        self.assertIn('class="ccs-ios-summary-wrap"', html)
+        self.assertIn('class="ccs-ios-summary-meta"', html)
+        self.assertIn("Last saved &lt;cached&gt;", html)
+        self.assertLess(html.index("ccs-ios-summarygrid"), html.index("ccs-ios-summary-meta"))

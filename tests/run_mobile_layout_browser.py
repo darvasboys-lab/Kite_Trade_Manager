@@ -128,6 +128,19 @@ def open_case(browser, width, height, mode):
 def main():
     with sync_playwright() as p:
         browser=p.chromium.launch(headless=True,args=["--no-sandbox"])
+        for w in (320,360,390,430):
+            context,page=open_case(browser,w,844,"closed")
+            page.locator(".ccs-ios-summary-meta").wait_for()
+            spacing = page.evaluate("""() => {
+                const box = s => document.querySelector(s).getBoundingClientRect();
+                return [box(".ccs-ios-summary").top - box(".ccs-ios-status").bottom,
+                        box(".ccs-ios-summary-meta").top - box(".ccs-ios-summary").bottom,
+                        box(".ccs-ios-summary-meta > div").top - box(".ccs-ios-summary").bottom,
+                        box(".st-key-ccs_mobile_results").top - box(".ccs-ios-summary-meta").bottom];
+            }""")
+            assert spacing[0] >= 4 and spacing[1] >= 0 and spacing[2] >= 8 and spacing[3] >= 4, spacing
+            verify_theme(page,f"{w}-closed-home-spacing")
+            context.close()
         for w in (320,390,430):
             context,page=open_case(browser,w,844,"transition")
             cards=page.locator('[class*="st-key-ccs_ios_saved_card_"]')

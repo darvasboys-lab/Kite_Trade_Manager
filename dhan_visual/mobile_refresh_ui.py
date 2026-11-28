@@ -58,7 +58,7 @@ def daily_auto_scope(access):
     return (_scope(access, [], ""), market_session.session_day())
 
 
-def render_saved_summary(shown, filters, *, status=None, progress=None, elapsed=None):
+def render_saved_summary(shown, filters, *, status=None, progress=None, elapsed=None, metadata=()):
     """One summary for locked, loading and connected Home."""
     rows = (shown or {}).get("rows", [])
     vals = [r.get("5%+ OTM CE (%)") for r in rows]
@@ -75,14 +75,18 @@ def render_saved_summary(shown, filters, *, status=None, progress=None, elapsed=
         status = f"{progress}% · {status}"
     elapsed_html = (f'<small class="ccs-ios-refresh-elapsed">Elapsed: {elapsed // 60}m {elapsed % 60:02d}s</small>'
                     if elapsed is not None else "")
+    meta_html = ('<div class="ccs-ios-summary-meta">' + "".join(
+        f'<div class="{"ccs-ios-saved-stamp" if i == 0 else "ccs-ios-refresh-note"}">{escape(str(line))}</div>'
+        for i, line in enumerate(metadata)) + "</div>") if metadata else ""
     st.markdown(
-        '<div class="ccs-ios-summary"><small>OTM COVERED CALL SCANNER</small>'
+        '<div class="ccs-ios-summary-wrap"><div class="ccs-ios-summary"><small>OTM COVERED CALL SCANNER</small>'
         f'<div class="ccs-ios-count">{count} <span>opportunities</span></div>'
         f'<div class="ccs-ios-progress"><i style="width:{ratio}"></i></div>'
         f'<small class="ccs-ios-refresh-status">{escape(status)}</small>{elapsed_html}'
         '<div class="ccs-ios-summarygrid">'
         f'<div><small>Highest CE premium</small><strong>{best}</strong></div>'
-        f'<div><small>Contract limit</small><strong>₹{int(maximum)} lakh</strong></div></div></div>',
+        f'<div><small>Contract limit</small><strong>₹{int(maximum)} lakh</strong></div></div></div>'
+        + meta_html + "</div>",
         unsafe_allow_html=True)
 
 
@@ -244,13 +248,13 @@ def render_closed_home():
     from .selective_scan import render_ios_saved_shortlist
     stop_closed_refresh(st.session_state)
     saved = (load_workspace() or {}).get("snapshot")
-    render_saved_summary(saved, {}, status=market_session.CLOSED_MESSAGE)
     if saved:
         timestamp = datetime.fromisoformat(saved["saved_at"]).astimezone(IST)
-        st.caption(f"Last saved · {timestamp:%d %b %Y %H:%M IST} · {saved['filters']['expiry']}")
+        stamp = f"Last saved · {timestamp:%d %b %Y %H:%M IST} · {saved['filters']['expiry']}"
     else:
-        st.caption("No saved scan yet. Refresh will be available during the next market session.")
-    st.caption("Automatic refresh paused outside Mon–Fri, 09:00–15:30 IST.")
+        stamp = "No saved scan yet. Refresh will be available during the next market session."
+    render_saved_summary(saved, {}, status=market_session.CLOSED_MESSAGE,
+                         metadata=(stamp, "Refresh paused · Mon–Fri, 09:00–15:30 IST"))
     with st.container(key="ccs_mobile_results"):
         render_ios_saved_shortlist(saved)
     _closed_market_clock()
