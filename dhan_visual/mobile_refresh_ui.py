@@ -131,12 +131,12 @@ def refresh_panel(universe, shown, filters):
         st.rerun(scope="app")
         return
     job = st.session_state.get(JOB)
-    access = connected_fyers()
     if not job:
         render_saved_summary(shown, filters)
         if st.session_state.get(ERROR):
             st.warning(st.session_state[ERROR])
         return
+    access = connected_fyers()
     future = job["future"]
     if not access or job["key"] != _scope(access, [], job["filters"]["expiry"]):
         job["cancel"].set()
@@ -164,6 +164,11 @@ def refresh_panel(universe, shown, filters):
         msg = str(exc) if isinstance(exc,FyersDataError) else "Refresh incomplete or cancelled."
         st.session_state[ERROR] = msg + " Last saved results kept."
         st.session_state.pop(JOB,None)
+        st.rerun(scope="app")
+        return
+    # Leave the fast polling fragment as soon as a candidate is ready.
+    if not job.get("ready_shown"):
+        job["ready_shown"] = True
         st.rerun(scope="app")
         return
     # Every completed scan, including the first, awaits explicit acceptance.
@@ -206,7 +211,12 @@ def render_mobile_refresh(access, universe, filters, apply):
     else:
         shown = saved
     with st.container(key="ccs_mobile_refresh_panel"):
-        _poll_refresh_panel(universe, shown, filters)
+        job = st.session_state.get(JOB)
+        if job and not job["future"].done():
+            _poll_refresh_panel(universe, shown, filters)
+        else:
+            refresh_panel(universe, shown, filters)
+            _open_market_clock()
     with st.container(key="ccs_mobile_results"):
         if shown:
             timestamp = datetime.fromisoformat(shown["saved_at"]).astimezone(IST)
@@ -235,6 +245,13 @@ def stop_closed_refresh(state):
     if job:
         job["cancel"].set()
     state.pop(ERROR, None)
+
+
+@st.fragment(run_every="30s")
+def _open_market_clock():
+    # No redraw or broker access while waiting for the market close.
+    if not market_session.is_refresh_open():
+        st.rerun(scope="app")
 
 
 @st.fragment(run_every="30s")

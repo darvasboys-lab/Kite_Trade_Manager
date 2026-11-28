@@ -86,7 +86,7 @@ def collect(access, available, filters, key, cancel, report):
         began = time.monotonic()
         for symbol in candidates[start:start+s.BATCH]:
             check()
-            if s.next_option_batch(access, available, snap, limit=1) != 1:
+            if s.next_option_batch(access, available, snap, limit=1, ranked_candidates=(symbol,)) != 1:
                 check()
                 raise FyersDataError("Option-chain scan incomplete.")
             check()

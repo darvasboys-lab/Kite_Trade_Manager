@@ -255,3 +255,18 @@ class MobileRefreshTests(unittest.TestCase):
         self.assertIn('class="ccs-ios-summary-meta"', html)
         self.assertIn("Last saved &lt;cached&gt;", html)
         self.assertLess(html.index("ccs-ios-summarygrid"), html.index("ccs-ios-summary-meta"))
+
+
+    def test_mobile_worker_reuses_preselected_candidate_order(self):
+        from dhan_visual import selective_scan as s
+        from dhan_visual.dhan_market import DhanUnderlying
+        from dhan_visual.screener import Underlying
+        available = [DhanUnderlying(Underlying("TCS", "TCS", {"DEC-26":100}), 1)]
+        with patch("dhan_visual.fyers_readonly.fetch_cash_quotes", return_value={"TCS":quotes()["TCS"]}), \
+             patch("dhan_visual.selective_scan.resolve_expiry_timestamp", return_value=("123","2026-12-29")), \
+             patch("dhan_visual.selective_scan.fetch_chain", return_value=(call(),straddle())), \
+             patch("dhan_visual.selective_scan.fetch_daily_levels", return_value=levels()), \
+             patch.object(s, "contract_candidates", wraps=s.contract_candidates) as rank:
+            result = refresh.collect(access(), available, self.filters, "key", Event(), lambda *a:None)
+        self.assertTrue(result["complete"])
+        self.assertEqual(rank.call_count, 2)

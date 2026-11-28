@@ -4,16 +4,11 @@ The Search Stock screen uses a read-only local Dhan market-data connection; no t
 All market data and fills are user-adjustable hypothetical DEMO inputs.
 """
 import sys
-from decimal import Decimal
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import plotly.graph_objects as go
 import streamlit as st
-from dhan_visual.strategy import Position, plan, exposure_after_fills, current_closeout
-from dhan_visual.table_layout import dataframe_key
-from dhan_visual.payoff import current_expiry_payoff, expiry_breakevens, theoretical_today_payoff
 
 st.set_page_config(page_title="Covered Call Strategy Builder", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 # Presentation only: shared terminal palette and responsive native controls.
@@ -157,6 +152,11 @@ else:
         manage = st.container()
 
 if manage is not None:
+    from decimal import Decimal
+    import plotly.graph_objects as go
+    from dhan_visual.strategy import Position, plan, exposure_after_fills, current_closeout
+    from dhan_visual.table_layout import dataframe_key
+    from dhan_visual.payoff import current_expiry_payoff, expiry_breakevens, theoretical_today_payoff
     with manage:
         st.info(
             "DEMO ONLY: Example positions and prices are simulated. "

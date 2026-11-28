@@ -15,9 +15,7 @@ from .fyers_readonly import (
     FyersDataError, fetch_cash_quotes, fetch_chain, resolve_expiry_timestamp,
     fetch_daily_levels, fetch_r1_intraday_bars, fetch_futures_quotes,
 )
-from .otm_home import otm_home_dataframe, filter_home_contracts, attach_futures_columns
 from .screener import INDEX_SYMBOLS, choose_expiry, expiry_options
-from .screener_ui import _auto_universe
 from .technical_ui import attach_technical_columns
 from .r1_today import session_r1_cross
 from .tradingview_links import clickable_stock_frame, TRADINGVIEW_SYMBOL_DISPLAY, tradingview_chart_url
@@ -33,6 +31,29 @@ FUTURES_MAX_LAKH = 7
 R1_ALL = "Include all stocks"
 R1_ABOVE = "Above R1 only"
 R1_COLUMN = "> R1"
+
+
+
+# Import the legacy scanner stack only when a scan or catalogue is requested.
+# Cached-only Home uses neither of these paths.
+def otm_home_dataframe(*args, **kwargs):
+    from .otm_home import otm_home_dataframe as build
+    return build(*args, **kwargs)
+
+
+def filter_home_contracts(*args, **kwargs):
+    from .otm_home import filter_home_contracts as apply
+    return apply(*args, **kwargs)
+
+
+def attach_futures_columns(*args, **kwargs):
+    from .otm_home import attach_futures_columns as attach
+    return attach(*args, **kwargs)
+
+
+def _auto_universe():
+    from .screener_ui import _auto_universe as load
+    return load()
 
 
 def _stamp():
@@ -123,9 +144,10 @@ def load_shortlist_history(access, snapshot, symbols, *, today=None):
     return count
 
 
-def next_option_batch(access, available, snapshot, *, limit=BATCH):
+def next_option_batch(access, available, snapshot, *, limit=BATCH, ranked_candidates=None):
     """Only contract-qualified, previously unattempted names; no retry loop."""
-    candidates = contract_candidates(available, snapshot)["Stock"].tolist()
+    candidates = (contract_candidates(available, snapshot)["Stock"].tolist()
+                  if ranked_candidates is None else ranked_candidates)
     pending = [s for s in candidates if s not in snapshot["attempted"]][:max(0, min(BATCH, limit))]
     if not pending or snapshot["stopped"]:
         return 0
@@ -695,8 +717,8 @@ def render_ios_saved_shortlist(saved, *, disconnected=False, strategy_context=No
 
 def render_selective_home():
     from .workspace_ui import prepare_filters, save_scan_controls, remember_pref, render_historical_shortlist
-    from .stock_strategy_ui import ACTIVE, launch_strategy, render_stock_strategy
-    if st.session_state.get(ACTIVE):
+    if st.session_state.get("ccs_stock_strategy_active"):
+        from .stock_strategy_ui import render_stock_strategy
         render_stock_strategy()
         return
     from . import market_session
@@ -943,9 +965,11 @@ def render_selective_home():
         ce = selected_row["5%+ OTM CE (%)"]
         straddle = selected_row["ATM Straddle Total (₹)"]
         if b.button(f"CE {ce:.2f}% · Build", key="ccs_strategy_from_ce", use_container_width=True):
+            from .stock_strategy_ui import launch_strategy
             launch_strategy(chosen, entry, snapshot["expiry"], "Covered call")
         if c.button(f"Straddle ₹{straddle:.2f} · Build" if pd.notna(straddle) else "Straddle · Build",
                     key="ccs_strategy_from_straddle", disabled=pd.isna(straddle), use_container_width=True):
+            from .stock_strategy_ui import launch_strategy
             launch_strategy(chosen, entry, snapshot["expiry"], "Short straddle")
 
 
