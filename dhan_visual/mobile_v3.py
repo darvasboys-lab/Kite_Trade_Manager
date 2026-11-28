@@ -36,6 +36,21 @@ def script():
     return FileResponse(ASSETS / "app.js", media_type="application/javascript")
 
 
+@app.get("/manifest.webmanifest")
+def manifest():
+    return FileResponse(ASSETS / "manifest.webmanifest", media_type="application/manifest+json")
+
+
+@app.get("/icon.svg")
+def icon():
+    return FileResponse(ASSETS / "icon.svg", media_type="image/svg+xml")
+
+
+@app.get("/sw.js")
+def worker():
+    return FileResponse(ASSETS / "sw.js", media_type="application/javascript")
+
+
 @app.get("/api/home")
 def home():
     return core.home()

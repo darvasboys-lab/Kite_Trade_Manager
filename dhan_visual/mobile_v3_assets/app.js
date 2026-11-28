@@ -6,6 +6,12 @@ const money=v=>typeof v==="number"?"₹"+number(v):"—";
 const pct=v=>typeof v==="number"?number(v)+"%":"—";
 const get=async(path)=>{const r=await fetch(path,{cache:"no-store"});const d=await r.json();if(!r.ok)throw Error(typeof d.detail==="string"?d.detail:"Request unavailable");return d};
 let data=null,page="home",query="",limit=12,selected="",preset="Covered call",version=0;
+let pending=null,dismissed="",previous=null,cap=Infinity,floor=0,offline=false,checking=false;
+const storageKey="ccs-v3-accepted-snapshot";
+function stored(){try{return JSON.parse(localStorage.getItem(storageKey)||"null")}catch{return null}}
+function persist(){try{localStorage.setItem(storageKey,JSON.stringify({data,previous}))}catch{}}
+const stamp=x=>x?.snapshot?.saved_at||"";
+const newer=(a,b)=>Boolean(a?.snapshot?.complete&&Number.isFinite(Date.parse(stamp(a)))&&(!stamp(b)||Date.parse(stamp(a))>Date.parse(stamp(b))));
 const snapshot=()=>data?.snapshot;
 const rows=()=>[...(snapshot()?.rows||[])].sort((a,b)=>(b["5%+ OTM CE (%)"]??-1)-(a["5%+ OTM CE (%)"]??-1));
 const line=(k,v)=>'<div class="line"><span class="muted">'+esc(k)+'</span><b>'+esc(v)+'</b></div>';
@@ -15,9 +21,23 @@ const sheet=document.getElementById("stockSheet"), sheetContent=document.getElem
 let layout=localStorage.getItem("ccs-v3-layout")==="compact"?"compact":"cards";
 const exact=v=>typeof v==="number"&&Number.isFinite(v)?v.toLocaleString("en-IN",{maximumFractionDigits:8}):"—";
 const contract=v=>typeof v==="number"?"₹"+(v/100000).toFixed(2)+"L":"—";
+function change(r){
+ const p=previous?.snapshot;
+ if(!p||p.filters?.expiry!==snapshot()?.filters?.expiry)return "";
+ const old=p.rows.find(x=>x.Stock===r.Stock);
+ const a=r["5%+ OTM CE (%)"],b=old?.["5%+ OTM CE (%)"];
+ // Compare like-for-like strikes and lot sizes only.
+ if(!old||r["CE strike"]==null||old["CE strike"]!==r["CE strike"]||old["Lot size"]!==r["Lot size"]||!Number.isFinite(a)||!Number.isFinite(b))return "";
+ const diff=a-b;return Math.abs(diff)<.005?"Unchanged":(diff>0?"↑ ":"↓ ")+number(Math.abs(diff))+" pp";
+}
+function premiumBar(r){
+ const best=rows()[0]?.["5%+ OTM CE (%)"],v=r["5%+ OTM CE (%)"];
+ if(!Number.isFinite(best)||best<=0||!Number.isFinite(v))return "";
+ return '<progress class="premiumBar" aria-label="CE premium relative to highest saved premium" max="'+best+'" value="'+Math.max(0,v)+'"></progress>';
+}
 function card(r){
  const s=r.Stock, expiry=snapshot()?.filters?.expiry||"";
- return '<button type="button" class="stock minimalCard" data-details="'+esc(s)+'" aria-haspopup="dialog"><div class="stockHead"><div><strong>'+esc(s)+'</strong><br><small>'+esc(r["CE strike"]==null?"—":exact(r["CE strike"])+" CE")+(expiry?" · "+esc(expiry):"")+'</small></div><span class="price">'+money(r["CMP (₹)"])+'</span></div><div class="tiles"><div class="tile"><small>5% OTM CE</small><strong>'+pct(r["5%+ OTM CE (%)"])+'</strong></div><div class="tile atm"><small>ATM STRADDLE</small><strong>'+pct(r["Straddle (%)"])+'</strong></div></div><div class="row muted"><small>Lot '+exact(r["Lot size"])+'</small><small>'+contract(r["Contract size (₹)"])+' contract</small></div></button>';
+ return '<button type="button" class="stock minimalCard" data-details="'+esc(s)+'" aria-haspopup="dialog"><div class="stockHead"><div><strong>'+esc(s)+'</strong><br><small>'+esc(r["CE strike"]==null?"—":exact(r["CE strike"])+" CE")+(expiry?" · "+esc(expiry):"")+'</small></div><span class="price">'+money(r["CMP (₹)"])+'</span></div><div class="tiles"><div class="tile"><small>5% OTM CE</small><strong>'+pct(r["5%+ OTM CE (%)"])+'</strong>'+premiumBar(r)+(change(r)?'<small class="premiumChange">'+esc(change(r))+'</small>':'')+'</div><div class="tile atm"><small>ATM STRADDLE</small><strong>'+pct(r["Straddle (%)"])+'</strong></div></div><div class="row muted"><small>Lot '+exact(r["Lot size"])+'</small><small>'+contract(r["Contract size (₹)"])+' contract</small></div></button>';
 }
 function compactRow(r){return '<button type="button" class="compactRow" data-details="'+esc(r.Stock)+'" aria-haspopup="dialog"><span><b>'+esc(r.Stock)+'</b><small>'+money(r["CMP (₹)"])+'</small></span><strong class="ceValue">'+pct(r["5%+ OTM CE (%)"])+'</strong><strong class="atmValue">'+pct(r["Straddle (%)"])+'</strong></button>'}
 function openSheet(symbol){
@@ -33,7 +53,7 @@ sheet.addEventListener("close",()=>document.body.classList.remove("sheetOpen"));
 sheet.addEventListener("click",e=>{if(e.target===sheet){const b=sheet.getBoundingClientRect();if(e.clientY<b.top||e.clientY>b.bottom||e.clientX<b.left||e.clientX>b.right)sheet.close()}});
 sheetContent.addEventListener("click",e=>{const b=e.target.closest("[data-stock]");if(b){selected=b.dataset.stock;preset=b.dataset.preset;sheet.close();render("strategy")}});
 function filterCards(){
- const list=rows().filter(r=>r.Stock.includes(query.trim().toUpperCase())), cards=document.getElementById("cards");
+ const list=rows().filter(r=>r.Stock.includes(query.trim().toUpperCase())&&(cap===Infinity||(Number.isFinite(r["Contract size (₹)"])&&r["Contract size (₹)"]<cap*100000))&&(floor===0||(Number.isFinite(r["5%+ OTM CE (%)"])&&r["5%+ OTM CE (%)"]>floor))), cards=document.getElementById("cards");
  cards.className=layout==="compact"?"compactList":"";
  cards.innerHTML=list.length?(layout==="compact"?'<div class="compactHeading"><span>STOCK</span><span>CE 5%</span><span>ATM</span></div>'+list.slice(0,limit).map(compactRow).join(""):list.slice(0,limit).map(card).join("")):'<div class="panel muted">No matching saved stocks.</div>';
  document.getElementById("more").hidden=list.length<=limit;
@@ -41,14 +61,44 @@ function filterCards(){
  document.getElementById("layout").textContent=layout==="compact"?"Cards":"Compact";
  document.getElementById("layout").setAttribute("aria-pressed",String(layout==="compact"));
 }
-function home(){const s=snapshot(), rs=rows(), best=rs.find(r=>typeof r["5%+ OTM CE (%)"]==="number");view.innerHTML='<section class="hero"><small>OTM COVERED CALL SCANNER</small><div class="count">'+rs.length+' <span>opportunities</span></div><div class="state">'+(data.market_open?"Market open · cached preview only":"Market closed · showing last saved data")+'</div><div class="tiles"><div><small>Highest CE premium</small><strong>'+pct(best?.["5%+ OTM CE (%)"])+'</strong></div><div><small>Contract limit</small><strong>'+(s?"₹"+esc(s.filters.maximum)+" lakh":"—")+'</strong></div></div></section><div class="meta">'+esc(s?"Last saved · "+s.saved_at+" · "+s.filters.expiry:"No saved scan yet. Run and accept a scan in V2.")+'<br>Read-only V3 · no market-data requests'+(s&&!s.complete?" · completeness unverified":"")+'</div>'+(data.error?'<p class="error">'+esc(data.error)+'</p>':"")+'<div class="row"><h2>Opportunities</h2><button id="reload">Reload saved data</button></div><small>Sorted by 5% OTM CE premium · highest first</small><div class="searchBar"><input id="search" type="search" placeholder="Search stock" aria-label="Search stock"><button id="layout" type="button" aria-label="Toggle compact stock view">Compact</button></div><small id="shown"></small><div id="cards"></div><button id="more">Show more stocks</button>';document.getElementById("search").value=query;document.getElementById("search").oninput=e=>{query=e.target.value;limit=12;filterCards()};document.getElementById("more").onclick=()=>{limit+=12;filterCards()};document.getElementById("reload").onclick=load;document.getElementById("layout").onclick=()=>{layout=layout==="cards"?"compact":"cards";localStorage.setItem("ccs-v3-layout",layout);filterCards()};filterCards()}
+function filtersHTML(){
+ const max=Number(snapshot()?.filters?.maximum)||7;
+ return '<details class="quickFilters"><summary>Quick filters · saved results only</summary><small>Maximum contract value</small><div class="chips">'+[Infinity,4,5,6,7,8,10].map(n=>'<button type="button" data-cap="'+n+'" aria-pressed="'+(cap===n)+'">'+(n===Infinity?"All saved":"₹"+n+"L")+'</button>').join("")+'</div><small>Minimum CE premium</small><div class="chips">'+[0,2,3,4,5].map(n=>'<button type="button" data-floor="'+n+'" aria-pressed="'+(floor===n)+'">'+(n===0?"All":n+"%+")+'</button>').join("")+'</div><small>Cannot add stocks outside the accepted scan (₹'+max+'L limit).</small></details>';
+}
+function home(){const s=snapshot(), rs=rows(), best=rs.find(r=>typeof r["5%+ OTM CE (%)"]==="number");view.innerHTML='<section class="hero"><small>OTM COVERED CALL SCANNER</small><div class="count">'+rs.length+' <span>opportunities</span></div><div class="state">'+(data.market_open?"Market open · cached preview only":"Market closed · showing last saved data")+'</div><div class="tiles"><div><small>Highest CE premium</small><strong>'+pct(best?.["5%+ OTM CE (%)"])+'</strong></div><div><small>Contract limit</small><strong>'+(s?"₹"+esc(s.filters.maximum)+" lakh":"—")+'</strong></div></div></section><div class="meta">'+esc(s?"Last saved · "+s.saved_at+" · "+s.filters.expiry:"No saved scan yet. Run and accept a scan in V2.")+'<br>Read-only V3 · no market-data requests'+(s&&!s.complete?" · completeness unverified":"")+'</div>'+(data.error?'<p class="error">'+esc(data.error)+'</p>':"")+'<div class="row"><h2>Opportunities</h2><button id="reload">Reload saved data</button></div><small>Sorted by 5% OTM CE premium · highest first</small><div class="searchBar"><input id="search" type="search" placeholder="Search stock" aria-label="Search stock"><button id="layout" type="button" aria-label="Toggle compact stock view">Compact</button></div>'+filtersHTML()+'<small id="shown"></small><div id="cards"></div><button id="more">Show more stocks</button>';document.getElementById("search").value=query;document.getElementById("search").oninput=e=>{query=e.target.value;limit=12;filterCards()};document.getElementById("more").onclick=()=>{limit+=12;filterCards()};document.getElementById("reload").onclick=()=>{dismissed="";notice();load()};document.getElementById("layout").onclick=()=>{layout=layout==="cards"?"compact":"cards";localStorage.setItem("ccs-v3-layout",layout);filterCards()};filterCards()}
 function screener(){view.innerHTML='<h2>Market Screener</h2><p class="muted">Saved shortlist · no new market requests</p><div class="panel tablewrap"><table><thead><tr><th>Stock</th><th>CMP</th><th>CE 5%</th><th>R1</th></tr></thead><tbody>'+rows().map(r=>'<tr><td><button data-stock="'+esc(r.Stock)+'">'+esc(r.Stock)+'</button></td><td>'+money(r["CMP (₹)"])+'</td><td>'+pct(r["5%+ OTM CE (%)"])+'</td><td>'+esc(r["> R1"])+'</td></tr>').join("")+'</tbody></table></div>'}
 function strategy(){let list=rows();if(!list.some(r=>r.Stock===selected))selected=list[0]?.Stock||"";view.innerHTML='<h2>Strategy Builder</h2><p class="muted">Hypothetical payoff using actual saved quotes · no trades</p><div class="panel"><label for="stock">Stock</label><select id="stock">'+list.map(r=>'<option '+(r.Stock===selected?"selected":"")+'>'+esc(r.Stock)+'</option>').join("")+'</select><label for="preset">Preset</label><select id="preset">'+["Covered call","Short straddle"].map(p=>'<option '+(p===preset?"selected":"")+'>'+p+'</option>').join("")+'</select><button id="calculate">Calculate payoff</button></div><div id="payoff"></div>';document.getElementById("stock").onchange=e=>selected=e.target.value;document.getElementById("preset").onchange=e=>preset=e.target.value;document.getElementById("calculate").onclick=calculate;if(selected)calculate()}
 async function calculate(){const node=document.getElementById("payoff");node.textContent="Calculating…";try{const d=await get("/api/payoff?"+new URLSearchParams({symbol:selected,preset}));if(!node.isConnected)return;let xs=d.points.map(p=>p[0]),ys=d.points.map(p=>p[1]),min=Math.min(0,...ys),max=Math.max(0,...ys);let x=v=>30+270*(v-xs[0])/(xs.at(-1)-xs[0]||1),y=v=>175-150*(v-min)/(max-min||1);let path=d.points.map(p=>x(p[0]).toFixed(2)+","+y(p[1]).toFixed(2)).join(" ");node.innerHTML='<div class="panel"><h3>Expiry payoff · '+esc(d.expiry)+'</h3><svg viewBox="0 0 320 205" role="img" aria-label="Calculated expiry payoff chart"><path d="M30 15V175H300" stroke="currentColor" fill="none"/><path d="M30 '+y(0)+'H300" stroke="currentColor" opacity=".45"/><polyline points="'+path+'" fill="none" stroke="#409d76" stroke-width="3"/><text x="5" y="12" fill="currentColor" font-size="10">P&amp;L</text><text x="125" y="196" fill="currentColor" font-size="11">Price at expiry</text></svg>'+line("Maximum profit",typeof d.summary.max_profit==="number"?money(d.summary.max_profit):d.summary.max_profit)+line("Maximum loss",typeof d.summary.max_loss==="number"?money(d.summary.max_loss):d.summary.max_loss)+line("Breakevens",d.summary.breakevens.map(money).join(" / "))+line("Strike",money(d.strike))+line("Lot",d.lot)+'</div>'}catch(e){node.textContent=e.message}}
 function trades(){view.innerHTML='<h2>Manage Trade</h2><p class="muted">Existing accumulation calculator · hypothetical inputs</p><form id="stageForm" class="panel"><label>First purchase price</label><input name="avg" type="number" step=".01" min=".01" value="1000" required><label>Owned shares</label><input name="shares" type="number" min="1" value="100" required><label>Call strike</label><input name="strike" type="number" step=".01" value="1100" required><label>Option lot</label><input name="lot" type="number" min="1" value="500" required><label>Premium received (total ₹)</label><input name="premium" type="number" step=".01" min="0" value="5000" required><label>Automatic stages</label><select name="batches"><option>3</option><option>4</option></select><button>Calculate stages</button></form><div id="stages"></div>';document.getElementById("stageForm").onsubmit=async e=>{e.preventDefault();const node=document.getElementById("stages");try{const d=await get("/api/stages?"+new URLSearchParams(new FormData(e.target)));node.innerHTML='<div class="panel">'+d.stages.map(s=>line("Stage "+s.index,money(s.trigger)+" · "+s.shares+" shares")).join("")+'</div>'}catch(err){node.textContent=err.message}}}
 function settings(){view.innerHTML='<h2>Settings</h2><div class="panel">'+line("Frontend","V3 · cached preview")+line("FYERS live authorization","Use V2")+line("Market-data requests","0 from V3")+line("Background scans","Disabled")+line("Saved workspace","Read-only")+'<p class="notice">V2 remains the full-featured application on port 8502. V3 never modifies credentials or saved data.</p><a href="http://127.0.0.1:8502/">Open V2 (if running)</a></div>'}
 function render(name){if(!data)return;page=name;document.querySelectorAll("nav button").forEach(b=>{if(b.dataset.page===page)b.setAttribute("aria-current","page");else b.removeAttribute("aria-current")});({home,screener,strategy,trades,settings})[page]();window.scrollTo(0,0)}
-async function load(){try{data=await get("/api/home");status.textContent="FYERS · "+(data.market_open?"Cached preview":"Refresh paused")+" · V3";render(page)}catch(e){status.textContent="Saved data unavailable";view.textContent=e.message}}
+function showStatus(){status.textContent=offline?"Offline · saved data · V3":"FYERS · "+(data?.market_open?"Cached preview":"Refresh paused")+" · V3"}
+function notice(){document.getElementById("freshNotice").hidden=!pending||dismissed===stamp(pending)}
+async function load(){
+ if(checking)return;checking=true;
+ try{
+   const next=await get("/api/home");offline=false;
+   if(!data||(!data.snapshot&&next.snapshot)){data=next;persist();render(page)}
+   else if(newer(next,data)){pending=next;notice()}
+   else {data.market_open=next.market_open;if(page==="home"&&!sheet.open)home()}
+   showStatus();
+ }catch(e){offline=true;showStatus();if(!data)view.textContent="No offline snapshot available. Start the local CCS server."}
+ finally{checking=false}
+}
+document.getElementById("acceptFresh").onclick=()=>{
+ if(!pending)return;previous=data;data=pending;pending=null;dismissed="";persist();notice();showStatus();if(sheet.open)sheet.close();render(page)
+};
+document.getElementById("dismissFresh").onclick=()=>{dismissed=stamp(pending);notice()};
+async function checkSaved(){
+ if(document.hidden||checking)return;checking=true;
+ try{const next=await get("/api/home");offline=false;if(newer(next,data)){pending=next;notice()}if(data)data.market_open=next.market_open;showStatus()}
+ catch{offline=true;showStatus()}finally{checking=false}
+}
+// One local read on return to foreground; no broker traffic or offline polling.
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)checkSaved()});
+window.addEventListener("focus",checkSaved);
+const saved=stored();if(saved?.data?.snapshot){data=saved.data;previous=saved.previous||null;offline=true;showStatus();render("home")}
+if("serviceWorker" in navigator)navigator.serviceWorker.register("/sw.js").catch(()=>{});
 document.querySelector("nav").onclick=e=>{const b=e.target.closest("[data-page]");if(b)render(b.dataset.page)};
-view.onclick=e=>{const d=e.target.closest("[data-details]");if(d){openSheet(d.dataset.details);return}const b=e.target.closest("[data-stock]");if(b){selected=b.dataset.stock;preset=b.dataset.preset||"Covered call";render("strategy")}};
+view.onclick=e=>{const c=e.target.closest("[data-cap],[data-floor]");if(c){if(c.dataset.cap!==undefined)cap=Number(c.dataset.cap);else floor=Number(c.dataset.floor);limit=12;view.querySelectorAll("[data-cap],[data-floor]").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.cap!==undefined?Number(b.dataset.cap)===cap:Number(b.dataset.floor)===floor)));filterCards();return}const d=e.target.closest("[data-details]");if(d){openSheet(d.dataset.details);return}const b=e.target.closest("[data-stock]");if(b){selected=b.dataset.stock;preset=b.dataset.preset||"Covered call";render("strategy")}};
 load();

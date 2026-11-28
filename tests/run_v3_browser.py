@@ -28,7 +28,7 @@ def main():
                 assert sheet.get_by_text("₹1,052.50", exact=True).count() == 0
                 assert sheet.get_by_text("₹1,052.5", exact=True).is_visible()
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-                assert page.evaluate("""() => {
+                page.wait_for_function("""() => {
                     const el = document.querySelector('#stockSheet');
                     const b=el.getBoundingClientRect();
                     return b.x>=0 && b.right<=innerWidth+1 && b.bottom<=innerHeight+1;
@@ -56,6 +56,13 @@ def main():
                 assert page.locator(".minimalCard").count()==1
                 page.locator("#search").fill("")
                 page.screenshot(path=str(OUT / f"{width}-{theme}-cards.png"))
+            page.locator(".quickFilters summary").click()
+            page.locator('[data-floor="3"]').click()
+            assert page.locator(".minimalCard").count()==0
+            page.locator('[data-floor="0"]').click()
+            assert page.locator(".minimalCard").count()==2
+            assert page.locator(".premiumBar").count()==2
+            page.locator(".quickFilters summary").click()
             card.click()
             page.locator("#sheetContent").get_by_role("button", name="Covered call").click()
             page.locator("#payoff svg").wait_for()
