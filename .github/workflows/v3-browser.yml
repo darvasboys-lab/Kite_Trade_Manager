@@ -1,0 +1,35 @@
+name: CCS V3 browser layout
+on:
+  push:
+    branches: [feature/ccs-mobile-v3-performance]
+  workflow_dispatch:
+jobs:
+  v3-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: |
+          python -m pip install -r requirements-mobile-v3.txt playwright
+          python -m playwright install --with-deps chromium
+      - name: Offline test and browser
+        run: |
+          export CCS_DATA_DIR="$RUNNER_TEMP/ccs-v3-fixture"
+          python -m unittest discover -s tests -p 'test_mobile_v3.py'
+          python -c 'import runpy; runpy.run_path("tests/v3_browser_fixture.py")'
+          python -m dhan_visual.mobile_v3 > v3-server.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8503/api/home; then break; fi
+            sleep 1
+          done
+          python tests/run_v3_browser.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v3-layout-artifacts
+          path: |
+            v3-layout-artifacts/
+            v3-server.log
