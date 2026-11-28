@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 from .ce_eod_remote import IST
 from .mobile_refresh import JOB, start
+from . import market_session
 from .mobile_cards import sort_ce5_rows
 from .workspace_ui import load_workspace, save_change
 from .fyers_ui import connected_fyers, _scope
@@ -50,7 +51,11 @@ def startup_filters(expiries):
 
 
 def should_auto_start(previous_scope, token_scope, job, apply=False):
-    return not job and (apply or previous_scope != token_scope)
+    return market_session.is_refresh_open() and not job and (apply or previous_scope != token_scope)
+
+
+def daily_auto_scope(access):
+    return (_scope(access, [], ""), market_session.session_day())
 
 
 def render_saved_summary(shown, filters, *, status=None, progress=None, elapsed=None):
@@ -101,6 +106,8 @@ def publish_candidate(candidate, universe, *, initial=False):
 
 def begin(access, universe, filters):
     from .selective_scan import _universe_rows
+    if not market_session.is_refresh_open():
+        return
     old = st.session_state.get(JOB)
     if old:
         st.session_state[ERROR] = "Finish, accept or discard the current refresh first."
@@ -116,6 +123,9 @@ def begin(access, universe, filters):
 
 
 def refresh_panel(universe, shown, filters):
+    if not market_session.is_refresh_open():
+        st.rerun(scope="app")
+        return
     job = st.session_state.get(JOB)
     access = connected_fyers()
     if not job:
@@ -178,8 +188,8 @@ def render_mobile_refresh(access, universe, filters, apply):
     active = _snapshot(access)
     if active and not active.get("complete"):
         active = None
-    # Only once per connected session/authorization, never on a timed rerun.
-    token_scope = _scope(access, [], "")
+    # Once per exchange day and authorization; closed hours never consume this marker.
+    token_scope = daily_auto_scope(access)
     if should_auto_start(st.session_state.get(AUTO), token_scope, st.session_state.get(JOB), apply):
         st.session_state[AUTO] = token_scope
         begin(access, universe, filters)
@@ -192,10 +202,7 @@ def render_mobile_refresh(access, universe, filters, apply):
     else:
         shown = saved
     with st.container(key="ccs_mobile_refresh_panel"):
-        if st.session_state.get(JOB):
-            _poll_refresh_panel(universe, shown, filters)
-        else:
-            refresh_panel(universe, shown, filters)
+        _poll_refresh_panel(universe, shown, filters)
     with st.container(key="ccs_mobile_results"):
         if shown:
             timestamp = datetime.fromisoformat(shown["saved_at"]).astimezone(IST)
@@ -209,10 +216,41 @@ def render_mobile_refresh(access, universe, filters, apply):
             if active:
                 st.caption(f"{len(active['cash'])} stock prices loaded · {len(active['attempted'])} option chains checked · {len(frame)} matches")
         job = st.session_state.get(JOB)
-        if not job and st.button("Retry refresh" if st.session_state.get(ERROR) else "Refresh data", key="ccs_mobile_refresh", use_container_width=True):
+        if market_session.is_refresh_open() and not job and st.button("Retry refresh" if st.session_state.get(ERROR) else "Refresh data", key="ccs_mobile_refresh", use_container_width=True):
             st.session_state[AUTO] = token_scope
             begin(access,universe,filters)
             st.rerun()
         context = (({item.entry.symbol:item.entry for item in available},
                     active["expiry"],active["key"],active["scan_day"]) if active else None)
         render_ios_saved_shortlist(shown, strategy_context=context)
+
+
+def stop_closed_refresh(state):
+    """Cancel unaccepted work without modifying the persisted snapshot."""
+    job = state.pop(JOB, None)
+    if job:
+        job["cancel"].set()
+    state.pop(ERROR, None)
+
+
+@st.fragment(run_every="30s")
+def _closed_market_clock():
+    # Local time check only. Re-enter the ordinary Home path at the next open.
+    if market_session.is_refresh_open():
+        st.rerun(scope="app")
+
+
+def render_closed_home():
+    from .selective_scan import render_ios_saved_shortlist
+    stop_closed_refresh(st.session_state)
+    saved = (load_workspace() or {}).get("snapshot")
+    render_saved_summary(saved, {}, status=market_session.CLOSED_MESSAGE)
+    if saved:
+        timestamp = datetime.fromisoformat(saved["saved_at"]).astimezone(IST)
+        st.caption(f"Last saved · {timestamp:%d %b %Y %H:%M IST} · {saved['filters']['expiry']}")
+    else:
+        st.caption("No saved scan yet. Refresh will be available during the next market session.")
+    st.caption("Automatic refresh paused outside Mon–Fri, 09:00–15:30 IST.")
+    with st.container(key="ccs_mobile_results"):
+        render_ios_saved_shortlist(saved)
+    _closed_market_clock()

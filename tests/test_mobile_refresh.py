@@ -16,6 +16,9 @@ from types import SimpleNamespace
 
 class MobileRefreshTests(unittest.TestCase):
     def setUp(self):
+        gate = patch("dhan_visual.market_session.is_refresh_open", return_value=True)
+        gate.start()
+        self.addCleanup(gate.stop)
         self.filters = dict(expiry="DEC-26", maximum=7, minimum=2, r1_filter="Include all stocks")
 
     def test_incomplete_cannot_publish(self):
@@ -182,3 +185,60 @@ class MobileRefreshTests(unittest.TestCase):
         snap.update(complete=True, completed_at="2026-11-27T15:00:00+05:30")
         payload = payload_for(snap, qualified_rows(example(), snap))
         self.assertEqual(validate({"version":1,"snapshot":payload})["snapshot"]["filters"]["minimum"],0)
+
+
+    def test_exchange_hours_boundaries_weekends_and_utc(self):
+        from datetime import timezone
+        from dhan_visual.market_session import is_refresh_open
+        from dhan_visual.ce_eod_remote import IST
+        self.assertTrue(is_refresh_open(datetime(2026, 11, 27, 9, 0, tzinfo=IST)))
+        self.assertTrue(is_refresh_open(datetime(2026, 11, 27, 15, 29, 59, tzinfo=IST)))
+        self.assertFalse(is_refresh_open(datetime(2026, 11, 27, 15, 30, tzinfo=IST)))
+        self.assertFalse(is_refresh_open(datetime(2026, 11, 30, 8, 59, 59, tzinfo=IST)))
+        self.assertFalse(is_refresh_open(datetime(2026, 11, 28, 12, tzinfo=IST)))
+        self.assertFalse(is_refresh_open(datetime(2026, 11, 29, 12, tzinfo=IST)))
+        self.assertTrue(is_refresh_open(datetime(2026, 11, 30, 3, 30, tzinfo=timezone.utc)))
+        self.assertFalse(is_refresh_open(datetime(2026, 11, 24, 12, tzinfo=IST)))
+
+    def test_closed_gate_blocks_auto_manual_and_worker_requests(self):
+        from dhan_visual import mobile_refresh_ui as ui
+        available = [SimpleNamespace(entry=SimpleNamespace(symbol="TCS"))]
+        with patch("dhan_visual.market_session.is_refresh_open", return_value=False), \
+             patch("dhan_visual.fyers_readonly.fetch_cash_quotes") as cash, \
+             patch.object(ui, "start") as start:
+            self.assertFalse(ui.should_auto_start(None, "token", None, apply=True))
+            ui.begin(access(), available, self.filters)
+            start.assert_not_called()
+            with self.assertRaisesRegex(FyersDataError, "Market closed"):
+                refresh.collect(access(), available, self.filters, "key", Event(), lambda *a: None)
+            cash.assert_not_called()
+        with patch("dhan_visual.market_session.is_refresh_open", return_value=False):
+            self.assertIsNone(refresh.start(access(), available, self.filters, "key"))
+
+    def test_worker_stops_before_next_request_at_close(self):
+        available = [SimpleNamespace(entry=SimpleNamespace(symbol="TCS"))]
+        with patch("dhan_visual.market_session.is_refresh_open", side_effect=[True, True, False]), \
+             patch("dhan_visual.fyers_readonly.fetch_cash_quotes", return_value={"TCS":quotes()["TCS"]}) as cash, \
+             patch("dhan_visual.selective_scan.next_option_batch") as chain:
+            with self.assertRaisesRegex(FyersDataError, "Market closed"):
+                refresh.collect(access(), available, self.filters, "key", Event(), lambda *a: None)
+            cash.assert_called_once()
+            chain.assert_not_called()
+
+    def test_closed_cleanup_preserves_accepted_snapshot_and_cancels_worker(self):
+        from dhan_visual import mobile_refresh_ui as ui
+        stop = Event()
+        saved = {"rows":[{"Stock":"TCS"}]}
+        state = {ui.JOB:{"cancel":stop}, ui.ERROR:"old error", "saved":saved}
+        ui.stop_closed_refresh(state)
+        self.assertTrue(stop.is_set())
+        self.assertNotIn(ui.JOB, state)
+        self.assertIs(state["saved"], saved)
+
+    def test_new_exchange_day_allows_refresh_with_same_token(self):
+        from dhan_visual import mobile_refresh_ui as ui
+        with patch("dhan_visual.market_session.session_day", return_value="2026-11-27"):
+            previous = ui.daily_auto_scope(access())
+        with patch("dhan_visual.market_session.session_day", return_value="2026-11-30"):
+            current = ui.daily_auto_scope(access())
+        self.assertTrue(ui.should_auto_start(previous, current, None))

@@ -6,6 +6,7 @@ import time
 
 from .ce_eod_remote import IST
 from .fyers_readonly import FyersDataError
+from . import market_session
 
 POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ccs-refresh")
 LOCK = Lock()
@@ -53,6 +54,8 @@ def collect(access, available, filters, key, cancel, report):
     today = datetime.now(IST).date()
     snap["scan_day"] = today.isoformat()
     def check():
+        if not market_session.is_refresh_open():
+            raise FyersDataError("Market closed. Previous data retained.")
         if cancel.is_set() or not access.valid() or datetime.now(IST).date() != today:
             raise FyersDataError("Refresh cancelled or session expired. Previous data retained.")
         if snap["stopped"]:
@@ -120,6 +123,8 @@ def start(access, available, filters, key):
     """One process-wide worker, no duplicate queued scans."""
     global CURRENT
     with LOCK:
+        if not market_session.is_refresh_open():
+            return None
         if CURRENT is not None and not CURRENT.done():
             return None
         cancel = Event()

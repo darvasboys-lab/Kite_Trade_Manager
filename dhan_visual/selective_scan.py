@@ -699,6 +699,11 @@ def render_selective_home():
     if st.session_state.get(ACTIVE):
         render_stock_strategy()
         return
+    from . import market_session
+    if phone_layout() and not market_session.is_refresh_open():
+        from .mobile_refresh_ui import render_closed_home
+        render_closed_home()
+        return
     access = connected_fyers()
     if access:
         st.session_state.pop("ccs_home_fyers_unlock", None)

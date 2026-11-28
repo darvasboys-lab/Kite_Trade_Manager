@@ -21,7 +21,9 @@ from dhan_visual.fyers_ui import _scope
 from dhan_visual.screener import Underlying
 from dhan_visual.dhan_market import DhanUnderlying
 from dhan_visual.ce_eod_remote import IST
-from dhan_visual import workspace_store
+from dhan_visual import workspace_store, market_session
+# This disposable browser fixture runs independent of the real exchange clock.
+market_session.is_refresh_open = lambda now=None: st.query_params.get("layout_case", "accepted") != "closed"
 from test_selective_scan import access, quotes, call, straddle, levels
 
 if not os.environ.get("CCS_DATA_DIR"):
@@ -64,7 +66,7 @@ if not st.session_state.get("layout_fixture_initialized"):
                             ccs_workspace_initialized=True, ccs_dark_mode=False)
     if mode != "locked":
         st.session_state["_fyers_access"] = token
-        st.session_state[refresh.AUTO] = _scope(token, [], "")
+        st.session_state[refresh.AUTO] = refresh.daily_auto_scope(token)
     if mode == "accepted":
         st.session_state[scan.STATE] = snapshot
     if mode in ("loading","ready","transition"):
