@@ -6,6 +6,7 @@ from datetime import datetime
 import pandas as pd
 
 from dhan_visual import mobile_refresh as refresh
+from dhan_visual.market_session import is_refresh_open as actual_refresh_window
 from dhan_visual.mobile_refresh_ui import payload_for
 from dhan_visual.workspace_store import validate
 from dhan_visual.fyers_readonly import FyersDataError
@@ -189,7 +190,7 @@ class MobileRefreshTests(unittest.TestCase):
 
     def test_exchange_hours_boundaries_weekends_and_utc(self):
         from datetime import timezone
-        from dhan_visual.market_session import is_refresh_open
+        is_refresh_open = actual_refresh_window
         from dhan_visual.ce_eod_remote import IST
         self.assertTrue(is_refresh_open(datetime(2026, 11, 27, 9, 0, tzinfo=IST)))
         self.assertTrue(is_refresh_open(datetime(2026, 11, 27, 15, 29, 59, tzinfo=IST)))
