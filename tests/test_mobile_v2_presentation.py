@@ -88,7 +88,7 @@ class MobileV2PresentationTest(unittest.TestCase):
 
     def test_both_card_paths_use_disclosure_and_no_nested_expander(self):
         from pathlib import Path
-        source = (Path(__file__).resolve().parents[1] / "dhan_visual" / "selective_scan.py").read_text()
+        source = (Path(__file__).resolve().parents[1] / "dhan_visual" / "selective_scan.py").read_text(encoding="utf-8")
         for name, end in (("_display_mobile_cards", "futures_discount_frame"),
                           ("render_ios_saved_shortlist", "render_selective_home")):
             section = source.split("def " + name + "(", 1)[1].split("def " + end + "(", 1)[0]
