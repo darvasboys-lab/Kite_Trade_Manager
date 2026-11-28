@@ -21,7 +21,7 @@ from .screener_ui import _auto_universe
 from .technical_ui import attach_technical_columns
 from .r1_today import session_r1_cross
 from .tradingview_links import clickable_stock_frame, TRADINGVIEW_SYMBOL_DISPLAY, tradingview_chart_url
-from .mobile_cards import card_pages, card_value, phone_layout, sort_ce5_rows
+from .mobile_cards import card_pages, card_value, phone_layout, sort_ce5_rows, card_disclosure
 from .table_layout import dataframe_key, autofit_column_config, autofit_enabled, click_autofit
 
 BATCH = 35
@@ -329,6 +329,85 @@ def _display(frame, *, market=False, futures=False, strategy_context=None, force
                  **selection)
 
 
+def _mobile_card_face(row, symbol, *, home=False, strike="—"):
+    if home:
+        size = pd.to_numeric(row.get("Contract size (₹)"), errors="coerce")
+        size_text = f"₹{size / 100000:.2f}L" if pd.notna(size) else "—"
+        lot = card_value(row.get("Lot size"), "Lot size")
+        return (
+            f'<div class="ccs-ios-stockhead"><span class="ccs-ios-logo">{escape(symbol[:1])}</span>'
+            f'<div><b>{escape(symbol)}</b><small>{escape(strike)}</small></div>'
+            f'<strong>{escape(card_value(row.get("CMP (₹)"), "CMP (₹)"))}</strong></div>'
+            '<div class="ccs-ios-saved-tiles">'
+            f'<div><small>5% OTM CE</small><strong>{escape(card_value(row.get("5%+ OTM CE (%)"), "5%+ OTM CE (%)"))}</strong></div>'
+            f'<div><small>STRADDLE</small><strong>{escape(card_value(row.get("Straddle (%)"), "Straddle (%)"))}</strong></div></div>'
+            f'<div class="ccs-ios-foot"><span>{escape(size_text)}</span><span>Lot {escape(lot)}</span></div>'
+        )
+    primary = ("CMP (₹)", "Futures Price (₹)", "Futures vs CMP (%)",
+               "Contract size (₹)", "Lot size")
+    cells = [f'<div><small>{escape(col)}</small><strong>{escape(card_value(row[col], col))}</strong></div>'
+             for col in primary if col in row]
+    return (f'<div class="ccs-card-symbol">{escape(symbol)}</div>'
+            + '<div class="ccs-card-grid">' + ''.join(cells) + '</div>')
+
+
+def _mobile_card_fields(row, current=None, symbol=None):
+    fields = [(col, card_value(row[col], col)) for col in row.index if col != "Stock"]
+    if current is not None and symbol is not None:
+        levels = current["levels"].get(symbol)
+        price = pd.to_numeric(row.get("CMP (₹)"), errors="coerce")
+        if levels is None or pd.isna(price):
+            fields.append(("Technical indicators", "EMA history not yet verified"))
+        else:
+            technical = attach_technical_columns(
+                pd.DataFrame({"Symbol": [symbol], "Last price (₹)": [price]}),
+                current["levels"], stage=4)
+            for col in technical.columns:
+                if col not in ("Symbol", "Last price (₹)"):
+                    fields.append((col, str(technical.iloc[0][col]).replace("✅", "✓").replace("❌", "×")))
+        cross = current.get("crosses", {}).get(symbol)
+        fields.append(("R1 crossed today", str(cross.first_bar_time) if cross else "Not confirmed"))
+        quote = current["calls"].get(symbol)
+        atm = current["straddles"].get(symbol)
+        if quote is not None:
+            fields.extend([("Selected call", f"{quote.strike.normalize():f} CE"),
+                           ("Call premium", f"₹{quote.call_ltp:f}")])
+        if atm is not None:
+            fields.extend([("ATM strike", f"{atm.strike.normalize():f} CE + PE"),
+                           ("CE + PE premium", f"₹{atm.call_ltp + atm.put_ltp:f}")])
+    return fields
+
+
+def _card_snapshot_matches(current, strategy_context, symbol):
+    if not current or strategy_context is None:
+        return False
+    entries, expiry, snapshot_key, scan_day = strategy_context
+    return (current["key"] == snapshot_key and current["expiry"] == expiry
+            and current.get("scan_day") == scan_day and symbol in entries)
+
+
+def _mobile_card_actions(current, strategy_context, symbol, ident):
+    if not _card_snapshot_matches(current, strategy_context, symbol):
+        return
+    entries, expiry, _, _ = strategy_context
+    # Native controls only appear below the expanded card. Recheck the accepted
+    # snapshot on action; opening the disclosure itself never launches anything.
+    with st.container(key=f"ccs_card_details_actions_{ident}"):
+        for label, preset, quotes in (
+            ("Build covered call", "Covered call", current["calls"]),
+            ("Build ATM straddle", "Short straddle", current["straddles"]),
+        ):
+            if st.button(label, key=f"ccs_card_launch_{ident}_{preset}",
+                         disabled=symbol not in quotes, use_container_width=True):
+                fresh = _snapshot(connected_fyers())
+                if (_card_snapshot_matches(fresh, strategy_context, symbol)
+                        and symbol in fresh["calls" if preset == "Covered call" else "straddles"]):
+                    from .stock_strategy_ui import launch_strategy
+                    launch_strategy(symbol, entries[symbol], expiry, preset)
+                else:
+                    st.warning("Scan changed. Select a current opportunity.")
+
+
 def _display_mobile_cards(frame, kind, strategy_context=None):
     """Render compact existing snapshots; no new data requests or sorting."""
     if frame.empty:
@@ -345,94 +424,20 @@ def _display_mobile_cards(frame, kind, strategy_context=None):
                             key=f"ccs_cards_page_{kind}")
         start, end = page * 8, min((page+1)*8,len(frame))
     st.caption(f"Showing {start + 1}–{end} of {len(frame)}")
-    for offset, (_, row) in enumerate(frame.iloc[start:end].iterrows()):
+    for _, row in frame.iloc[start:end].iterrows():
         symbol = str(row["Stock"])
-        ident = f"{kind}_{start + offset}"
+        ident = f"{kind}_{sha256(symbol.encode()).hexdigest()[:16]}"
         current = _snapshot(connected_fyers()) if strategy_context is not None else None
+        if not _card_snapshot_matches(current, strategy_context, symbol):
+            current = None
         quote = current["calls"].get(symbol) if current else None
-        atm = current["straddles"].get(symbol) if current else None
+        strike = f"{quote.strike.normalize():f} CE" if quote is not None else "—"
         with st.container(border=True, key=f"ccs_ios_card_{ident}"):
-            if kind == "home" and strategy_context is not None:
-                strike = f"{quote.strike.normalize():f} CE" if quote is not None else "—"
-                cmp = card_value(row.get("CMP (₹)"), "CMP (₹)")
-                st.markdown(
-                    f'<div class="ccs-ios-stockhead"><span class="ccs-ios-logo">{escape(symbol[:1])}</span>'
-                    f'<div><b>{escape(symbol)}</b><small>{escape(strike)}</small></div>'
-                    f'<strong>{escape(cmp)}</strong></div>', unsafe_allow_html=True)
-                entries, expiry, snapshot_key, scan_day = strategy_context
-                with st.container(key=f"ccs_ios_tiles_{ident}"):
-                    left, right = st.columns(2, gap="small")
-                    for col, side, label, preset, actual in (
-                        ("5%+ OTM CE (%)", left, "5% OTM CE", "Covered call", quote),
-                        ("Straddle (%)", right, "STRADDLE", "Short straddle", atm),
-                    ):
-                        with side:
-                            val = card_value(row.get(col), col)
-                            with st.popover(f"{label} · {val}", use_container_width=True, disabled=actual is None):
-                                st.write(f"Strike: {actual.strike.normalize():f}" if actual is not None else "Strike unavailable")
-                                if actual is not None:
-                                    if preset == "Covered call":
-                                        st.write(f"Call premium: ₹{actual.call_ltp:f}")
-                                    else:
-                                        st.write(f"CE + PE premium: ₹{actual.call_ltp + actual.put_ltp:f}")
-                                    st.caption(f"Expiry: {expiry} · Snapshot quote")
-                                if st.button("Open strategy builder", key=f"ccs_ios_launch_{ident}_{preset}",
-                                             disabled=actual is None or symbol not in entries, use_container_width=True):
-                                    fresh = _snapshot(connected_fyers())
-                                    if (fresh and fresh["key"] == snapshot_key and fresh["expiry"] == expiry
-                                            and fresh.get("scan_day") == scan_day):
-                                        from .stock_strategy_ui import launch_strategy
-                                        launch_strategy(symbol, entries[symbol], expiry, preset)
-                                    else:
-                                        st.warning("Scan changed. Select a current opportunity.")
-                size = pd.to_numeric(row.get("Contract size (₹)"), errors="coerce")
-                size_text = f"₹{size / 100000:.2f}L" if pd.notna(size) else "—"
-                lot = card_value(row.get("Lot size"), "Lot size")
-                st.markdown(f'<div class="ccs-ios-foot"><span>{escape(size_text)}</span><span>Lot {escape(lot)}</span></div>',
-                            unsafe_allow_html=True)
-                if st.button("Build strategy ↗", key=f"ccs_ios_build_{ident}",
-                             disabled=quote is None or symbol not in entries, use_container_width=True):
-                    fresh = _snapshot(connected_fyers())
-                    if (fresh and fresh["key"] == snapshot_key and fresh["expiry"] == expiry
-                            and fresh.get("scan_day") == scan_day):
-                        from .stock_strategy_ui import launch_strategy
-                        launch_strategy(symbol, entries[symbol], expiry, "Covered call")
-                    else:
-                        st.warning("Scan changed. Select a current opportunity.")
-            else:
-                st.markdown(f'<div class="ccs-card-symbol">{escape(symbol)}</div>', unsafe_allow_html=True)
-                primary = ("CMP (₹)", "Futures Price (₹)", "Futures vs CMP (%)",
-                           "Contract size (₹)", "Lot size")
-                cells = [f'<div><small>{escape(col)}</small><strong>{escape(card_value(row[col], col))}</strong></div>'
-                         for col in primary if col in row]
-                st.markdown('<div class="ccs-card-grid">' + ''.join(cells) + '</div>', unsafe_allow_html=True)
-            with st.expander("View details"):
-                for col in frame.columns:
-                    if col != "Stock":
-                        st.write(f"{col}: {card_value(row[col], col)}")
-                if kind == "home" and current is not None:
-                    levels = current["levels"].get(symbol)
-                    price = pd.to_numeric(row.get("CMP (₹)"), errors="coerce")
-                    st.markdown("**Technical indicators**")
-                    if levels is None or pd.isna(price):
-                        st.caption("EMA history not yet verified.")
-                    else:
-                        # Same cached technical values used by Market Screener.
-                        technical = attach_technical_columns(
-                            pd.DataFrame({"Symbol": [symbol], "Last price (₹)": [price]}),
-                            current["levels"], stage=4)
-                        for column in technical.columns:
-                            if column not in ("Symbol", "Last price (₹)"):
-                                value = str(technical.iloc[0][column]).replace("✅", "✓").replace("❌", "×")
-                                st.write(f"{column}: {value}")
-                    cross = current.get("crosses", {}).get(symbol)
-                    st.caption(f"R1 crossed today: {cross.first_bar_time}" if cross is not None
-                               else "R1 crossed today: not confirmed")
-                if quote is not None:
-                    st.write(f"Selected call: {quote.strike.normalize():f} CE")
-                if atm is not None:
-                    st.write(f"ATM strike: {atm.strike.normalize():f} CE + PE")
-                st.link_button("TradingView chart ↗", tradingview_chart_url(symbol))
+            face = _mobile_card_face(row, symbol, home=kind == "home" and strategy_context is not None, strike=strike)
+            fields = _mobile_card_fields(row, current if kind == "home" else None, symbol)
+            st.html(card_disclosure(face, fields, tradingview_chart_url(symbol)))
+            if kind == "home":
+                _mobile_card_actions(current, strategy_context, symbol, ident)
     if phone_layout() and kind == "home" and end < len(frame):
         if st.button("Show more stocks", key="ccs_home_more", use_container_width=True):
             st.session_state[limit_key] = limit + 12
@@ -674,50 +679,14 @@ def render_ios_saved_shortlist(saved, *, disconnected=False, strategy_context=No
             strike = card_value(row.get("CE strike"), "CE strike")
             if strike != "—":
                 strike = f"{float(row['CE strike']):g} CE"
-            size = pd.to_numeric(row.get("Contract size (₹)"), errors="coerce")
-            size_text = f"₹{size / 100000:.2f}L" if pd.notna(size) else "—"
-            lot = card_value(row.get("Lot size"), "Lot size")
-            st.markdown(
-                f'<div class="ccs-ios-stockhead"><span class="ccs-ios-logo">{escape(symbol[:1])}</span>'
-                f'<div><b>{escape(symbol)}</b><small>{escape(strike)}</small></div>'
-                f'<strong>{escape(card_value(row.get("CMP (₹)"), "CMP (₹)"))}</strong></div>'
-                '<div class="ccs-ios-saved-tiles">'
-                f'<div><small>5% OTM CE</small><strong>{escape(card_value(row.get("5%+ OTM CE (%)"), "5%+ OTM CE (%)"))}</strong></div>'
-                f'<div><small>STRADDLE</small><strong>{escape(card_value(row.get("Straddle (%)"), "Straddle (%)"))}</strong></div></div>'
-                f'<div class="ccs-ios-foot"><span>{escape(size_text)}</span><span>Lot {escape(lot)}</span></div>',
-                unsafe_allow_html=True)
-            with st.expander("View details"):
-                for col in frame.columns:
-                    if col != "Stock":
-                        st.write(f"{col}: {card_value(row[col], col)}")
-                current = _snapshot(connected_fyers()) if strategy_context is not None else None
-                if current is not None and strategy_context is not None:
-                    entries, expiry, snapshot_key, scan_day = strategy_context
-                    if (current["key"] == snapshot_key and current["expiry"] == expiry
-                            and current["scan_day"] == scan_day and symbol in entries):
-                        from .stock_strategy_ui import launch_strategy
-                        levels = current["levels"].get(symbol)
-                        price = pd.to_numeric(row.get("CMP (₹)"), errors="coerce")
-                        if levels is not None and pd.notna(price):
-                            st.markdown("**Technical indicators**")
-                            technical = attach_technical_columns(
-                                pd.DataFrame({"Symbol":[symbol], "Last price (₹)":[price]}),
-                                current["levels"], stage=4)
-                            for col in technical.columns:
-                                if col not in ("Symbol","Last price (₹)"):
-                                    value = str(technical.iloc[0][col]).replace("✅","✓").replace("❌","×")
-                                    st.write(f"{col}: {value}")
-                        cross = current.get("crosses",{}).get(symbol)
-                        st.caption(f"R1 crossed today: {cross.first_bar_time}" if cross else "R1 crossed today: not confirmed")
-                        if st.button("Build covered call", key=f"ccs_unified_ce_{ident}",
-                                     disabled=symbol not in current["calls"], use_container_width=True):
-                            launch_strategy(symbol, entries[symbol], expiry, "Covered call")
-                        if st.button("Build ATM straddle", key=f"ccs_unified_atm_{ident}",
-                                     disabled=symbol not in current["straddles"], use_container_width=True):
-                            launch_strategy(symbol, entries[symbol], expiry, "Short straddle")
-                else:
-                    st.caption("Saved quotes · accept a fresh scan to enable strategy actions.")
-                st.link_button("TradingView chart ↗", tradingview_chart_url(symbol))
+            current = _snapshot(connected_fyers()) if strategy_context is not None else None
+            if not _card_snapshot_matches(current, strategy_context, symbol):
+                current = None
+            face = _mobile_card_face(row, symbol, home=True, strike=strike)
+            fields = _mobile_card_fields(row, current, symbol)
+            note = "" if current is not None else "Saved quotes · accept a fresh scan to enable strategy actions."
+            st.html(card_disclosure(face, fields, tradingview_chart_url(symbol), note))
+            _mobile_card_actions(current, strategy_context, symbol, f"saved_{ident}")
     if limit < len(frame) and st.button("Show more stocks", key="ccs_saved_more", use_container_width=True):
         st.session_state["ccs_saved_card_limit"] = limit + 12
         st.rerun()
@@ -957,7 +926,7 @@ def render_selective_home():
     if snapshot["options_at"]:
         st.caption("Options requested " + snapshot["options_at"] + " · each stock checked once; cached quotes are not refreshed automatically.")
     save_scan_controls(snapshot,frame, complete=not work_pending and not snapshot['stopped'] and bool(snapshot['cash_at']))
-    st.caption("In Full table, click a CE or straddle cell to open Strategy Builder. In Mobile cards, use Build strategy below.")
+    st.caption("In Full table, click a CE or straddle cell to open Strategy Builder. In Mobile cards, tap a stock card to see details and strategy actions.")
     _display(frame, strategy_context=({item.entry.symbol: item.entry for item in available},
                                      snapshot["expiry"], snapshot["key"], snapshot.get("scan_day")))
     if not frame.empty:

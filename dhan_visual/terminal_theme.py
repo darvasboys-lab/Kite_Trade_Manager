@@ -463,6 +463,37 @@ button:focus-visible,a:focus-visible { outline:2px solid var(--accent) !importan
 .stApp .ccs-ios-summary small { color:#cce9dc !important; }
 .stApp [class*="st-key-ccs_ios_tiles_"] [data-testid="stColumn"]:nth-child(2) [data-testid="stPopover"] button { color:var(--blue) !important; }
 
+
+/* The stock summary is the only disclosure hit target: no extra button,
+   marker, box or reserved row. Native details preserves scroll on toggle. */
+.ccs-card-disclosure { width:100%; min-width:0; }
+.ccs-card-disclosure > summary {
+  display:block; list-style:none; cursor:pointer; border-radius:10px;
+  padding:2px; min-width:0; -webkit-tap-highlight-color:transparent;
+}
+.ccs-card-disclosure > summary::-webkit-details-marker { display:none; }
+.ccs-card-disclosure > summary::marker { content:""; }
+.ccs-card-disclosure > summary:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.ccs-card-disclosure > summary:active { background:var(--surface2); }
+.ccs-card-disclosure > summary > .ccs-ios-saved-tiles { margin:8px 0; }
+.ccs-card-disclosure > summary > .ccs-card-grid { margin-top:8px; }
+.ccs-card-detail-body {
+  margin-top:10px; border-top:1px solid var(--border); padding-top:9px;
+  display:grid; gap:7px; color:var(--text); min-width:0; font-size:13px;
+}
+.ccs-card-detail-body > div { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:8px; }
+.ccs-card-detail-body > div > span { color:var(--settings-muted); overflow-wrap:anywhere; }
+.ccs-card-detail-body > div > strong { text-align:right; color:var(--text); overflow-wrap:anywhere; }
+.ccs-card-detail-body > p { margin:0; color:var(--settings-muted); }
+.ccs-card-detail-body > a { color:var(--blue); padding:5px 0; }
+/* Native Streamlit strategy actions remain server-validated and are visible
+   only while their own card is open. Hide their layout wrapper as well. */
+:is([class*="st-key-ccs_ios_card_"],[class*="st-key-ccs_ios_saved_card_"]):not(:has(.ccs-card-disclosure[open]))
+  :is([class*="st-key-ccs_card_details_actions_"],
+      [data-testid="stLayoutWrapper"]:has([class*="st-key-ccs_card_details_actions_"]):not(:has(.ccs-card-disclosure))) {
+  display:none !important;
+}
+
 """
 
 

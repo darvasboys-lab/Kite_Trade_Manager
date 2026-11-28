@@ -1,5 +1,6 @@
 """Pure display helpers for existing CCS result snapshots."""
 import math
+from html import escape
 import pandas as pd
 
 
@@ -58,3 +59,23 @@ def phone_layout() -> bool:
         return is_phone_user_agent(st.context.headers.get("User-Agent", ""))
     except (AttributeError, RuntimeError):
         return False
+
+
+def card_disclosure(summary_html: str, fields, chart_url: str, note: str = "") -> str:
+    """Native browser disclosure: trusted summary markup, escaped data fields.
+
+    No script, navigation, iframe, widget event or market-data request is needed
+    to open or close a card. Interactive strategy controls follow the disclosure.
+    """
+    values = "".join(
+        f'<div><span>{escape(str(label))}</span><strong>{escape(str(value))}</strong></div>'
+        for label, value in fields
+    )
+    caption = f'<p>{escape(note)}</p>' if note else ""
+    return (
+        '<details class="ccs-card-disclosure"><summary>'
+        + summary_html + '</summary><div class="ccs-card-detail-body">'
+        + values + caption
+        + f'<a href="{escape(chart_url, quote=True)}" target="_blank" rel="noopener noreferrer">'
+        + 'TradingView chart ↗</a></div></details>'
+    )

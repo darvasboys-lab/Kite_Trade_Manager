@@ -63,3 +63,34 @@ class MobileV2PresentationTest(unittest.TestCase):
         old = pd.DataFrame({"Stock":["B","A"]})
         self.assertEqual(sort_ce5_rows(old)["Stock"].tolist(), ["A","B"])
         self.assertTrue(sort_ce5_rows(pd.DataFrame()).empty)
+
+    def test_card_disclosure_has_full_face_as_native_summary(self):
+        from html.parser import HTMLParser
+        from dhan_visual.mobile_cards import card_disclosure
+        class Tags(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.tags = []
+            def handle_starttag(self, tag, attrs):
+                self.tags.append(tag)
+        html = card_disclosure('<div class="ccs-ios-stockhead">TCS</div><div>3.25%</div>',
+                               [("Selected call", "4000 CE"), ("<label>", "<unsafe>")],
+                               "https://www.tradingview.com/chart/?symbol=NSE%3ATCS")
+        parser = Tags()
+        parser.feed(html)
+        self.assertEqual(parser.tags[:4], ["details", "summary", "div", "div"])
+        self.assertIn("3.25%</div></summary>", html)
+        self.assertIn("4000 CE", html)
+        self.assertIn("&lt;unsafe&gt;", html)
+        self.assertNotIn("<unsafe>", html)
+        self.assertNotIn("View details", html)
+        self.assertNotIn("<script", html)
+
+    def test_both_card_paths_use_disclosure_and_no_nested_expander(self):
+        from pathlib import Path
+        source = (Path(__file__).resolve().parents[1] / "dhan_visual" / "selective_scan.py").read_text()
+        for name, end in (("_display_mobile_cards", "futures_discount_frame"),
+                          ("render_ios_saved_shortlist", "render_selective_home")):
+            section = source.split("def " + name + "(", 1)[1].split("def " + end + "(", 1)[0]
+            self.assertIn("st.html(card_disclosure(", section)
+            self.assertNotIn('st.expander("View details")', section)
