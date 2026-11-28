@@ -1,0 +1,35 @@
+name: Mobile browser layout
+on:
+  push:
+    branches: [design/ccs-restored-mobile-v2]
+  workflow_dispatch:
+
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install app and browser
+        run: |
+          python -m pip install -r requirements-dhan-visual.txt playwright
+          python -m playwright install --with-deps chromium
+      - name: Launch offline fixture and run geometry checks
+        run: |
+          export CCS_DATA_DIR="$RUNNER_TEMP/ccs-layout-offline"
+          python -m streamlit run tests/browser_mobile_fixture.py --server.address 127.0.0.1 --server.port 8502 --server.headless true > layout-server.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8502/_stcore/health; then break; fi
+            sleep 1
+          done
+          python tests/run_mobile_layout_browser.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mobile-layout-screenshots-and-log
+          path: |
+            mobile-layout-artifacts/
+            layout-server.log

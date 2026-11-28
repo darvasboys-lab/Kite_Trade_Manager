@@ -1449,13 +1449,13 @@ class PayoffStudioStartupTests(unittest.TestCase):
              patch("dhan_visual.straddle_panel.scan_all_straddles") as scan:
             app.run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
-            self.assertTrue(app.session_state["ccs_dark_mode"])
-            app.button(key="ccs_theme_button").click().run()
-            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
             self.assertFalse(app.session_state["ccs_dark_mode"])
             app.button(key="ccs_theme_button").click().run()
             self.assertFalse(app.exception, [str(x.message) for x in app.exception])
             self.assertTrue(app.session_state["ccs_dark_mode"])
+            app.button(key="ccs_theme_button").click().run()
+            self.assertFalse(app.exception, [str(x.message) for x in app.exception])
+            self.assertFalse(app.session_state["ccs_dark_mode"])
             scan.assert_not_called()
 
     def test_no_manual_list_upload_or_50_stock_hard_cap(self):

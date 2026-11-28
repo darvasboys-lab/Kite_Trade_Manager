@@ -90,7 +90,7 @@ def applied_filters(snapshot):
     return {k:snapshot[k] for k in FILTER_KEYS}
 
 
-def save_scan_controls(snapshot,frame):
+def save_scan_controls(snapshot,frame, *, automatic=True, complete=True):
     data=load_workspace()
     if not data:
         return
@@ -100,12 +100,19 @@ def save_scan_controls(snapshot,frame):
         if st.button("Save preset",key="ccs_save_preset",disabled=not name.strip()):
             if save_change(lambda d:d["presets"].update({name.strip():f})):
                 st.success("Preset saved.")
-        payload=dict(saved_at=datetime.now(IST).isoformat(timespec="seconds"),filters=f,
-                     rows=json.loads(frame.to_json(orient="records")))
-        if st.button("Save shortlist snapshot",key="ccs_save_shortlist"):
+        rows=json.loads(frame.to_json(orient="records"))
+        for row in rows:
+            quote = snapshot.get("calls", {}).get(row.get("Stock"))
+            if quote is not None:
+                row["CE strike"] = float(quote.strike)
+        payload=dict(saved_at=datetime.now(IST).isoformat(timespec="seconds"),filters=f, rows=rows)
+        if snapshot.get("complete"):
+            from .mobile_refresh_ui import payload_for
+            payload = payload_for(snapshot,frame)
+        if st.button("Save shortlist snapshot",key="ccs_save_shortlist", disabled=not complete or bool(snapshot.get("auto_scan") or snapshot.get("stopped"))):
             if save_change(lambda d:d.update(snapshot=payload)):
                 st.success("Historical shortlist saved.")
-    if data["remember"]:
+    if automatic and complete and data["remember"] and not snapshot.get("auto_scan") and not snapshot.get("stopped"):
         signature=(snapshot.get("cash_at"),snapshot.get("options_at"),len(snapshot.get("levels",{})),str(f),len(frame))
         if st.session_state.get("ccs_saved_scan_signature")!=signature and snapshot.get("cash_at"):
             def apply(d):
@@ -119,7 +126,7 @@ def render_settings():
     st.markdown("### CCS Terminal v"+store.VERSION)
     data=load_workspace()
     if data is not None:
-        remember=st.checkbox("Remember preferences and save latest shortlist automatically",value=data["remember"],key="ccs_remember_workspace")
+        remember=st.checkbox("Remember preferences and desktop shortlist (mobile keeps accepted scans)",value=data["remember"],key="ccs_remember_workspace")
         if remember!=data["remember"]:
             save_change(lambda d:d.update(remember=remember))
         st.caption("Local storage: "+str(store.location())+" · no credentials")

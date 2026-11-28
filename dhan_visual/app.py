@@ -4,57 +4,49 @@ The Search Stock screen uses a read-only local Dhan market-data connection; no t
 All market data and fills are user-adjustable hypothetical DEMO inputs.
 """
 import sys
-from decimal import Decimal
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import plotly.graph_objects as go
 import streamlit as st
-from dhan_visual.strategy import Position, plan, exposure_after_fills, current_closeout
-from dhan_visual.table_layout import dataframe_key
-from dhan_visual.payoff import current_expiry_payoff, expiry_breakevens, theoretical_today_payoff
 
 st.set_page_config(page_title="Covered Call Strategy Builder", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 # Presentation only: shared terminal palette and responsive native controls.
 from dhan_visual.terminal_theme import apply_terminal_theme
+from dhan_visual.mobile_cards import phone_layout
 from dhan_visual.workspace_ui import initialize, remember_pref, render_settings
 initialize()
 if "ccs_dark_mode" not in st.session_state:
-    st.session_state["ccs_dark_mode"] = True
+    st.session_state["ccs_dark_mode"] = False
 apply_terminal_theme(st.session_state["ccs_dark_mode"])
+phone = phone_layout()
 
-st.markdown(
-    """<section class="ps-header" aria-label="Covered Call Strategy Builder workspace">
-      <div class="ps-topbar">
-        <div class="ps-brand"><div class="ps-mark">↗</div>
-          <h1>CCS Terminal <span>· Mobile ready</span></h1></div>
-        <div class="ps-chips">
-          <span class="ps-chip safe">● Market-data only</span>
-          <span class="ps-chip">Stock F&O</span>
-          <span class="ps-chip">Strategy demo</span>
-        </div>
-      </div>
-      <p class="ps-sub">NSE F&O workspace · Read-only market data · Strategy demo</p>
-    </section>""", unsafe_allow_html=True
-)
+st.markdown('<div class="ccs-ios-title">CCS Terminal</div>', unsafe_allow_html=True)
 
-# Keep the mode control readily accessible on desktop and iPhone.
-theme_space, theme_action = st.columns([6, 1.4])
-with theme_action:
+# Keep the original broker selector and theme action mounted on every rerun.
+from dhan_visual.broker_control import (render_single_broker_selector, initialize_broker_selection,
+                                        active_broker, PENDING_KEY, _pending_status)
+initialize_broker_selection()
+
+def render_theme_control():
     if st.button(
-        "☀ Light mode" if st.session_state["ccs_dark_mode"] else "☾ Dark mode",
+        "Light mode" if st.session_state["ccs_dark_mode"] else "Dark mode",
         key="ccs_theme_button", use_container_width=True,
-        help="Toggle the local appearance; market data and scanner rules are unchanged.",
+        help="Toggle appearance without changing market data or scanner rules.",
     ):
         st.session_state["ccs_dark_mode"] = not st.session_state["ccs_dark_mode"]
-        remember_pref("dark",st.session_state["ccs_dark_mode"])
+        remember_pref("dark", st.session_state["ccs_dark_mode"])
         st.rerun()
 
-# Explicit single-active-broker policy; all tabs below use the same mode.
-# Switching preserves saved Dhan/FYERS credentials without simultaneous logins.
-from dhan_visual.broker_control import render_single_broker_selector
-render_single_broker_selector()
+if phone:
+    # Keep connection switching and its completion alive across all pages.
+    if st.session_state.get(PENDING_KEY):
+        _pending_status()
+else:
+    theme_space, theme_action = st.columns([6, 1.4])
+    with theme_action:
+        render_theme_control()
+    render_single_broker_selector()
 from dhan_visual.fyers_ui import handle_fyers_local_return
 handle_fyers_local_return()
 
@@ -71,6 +63,12 @@ with st.sidebar:
 
 manage = None
 if legacy:
+    refresh = st.session_state.get("ccs_mobile_refresh_job") or {}
+    if refresh.get("cancel"):
+        refresh["cancel"].set()
+    if refresh.get("future") and not refresh["future"].done():
+        st.info("Finishing mobile refresh cancellation before opening legacy mode.")
+        st.stop()
     otm_home, search, manage, settings = st.tabs([
         "◎ OTM CE Home", "⌕ Market Screener", "▥ Manage Trade", "⚙ Settings",
     ])
@@ -86,26 +84,55 @@ if legacy:
         render_screener()
     
     with settings:
-        from dhan_visual.screener_ui import render_dhan_settings
-        render_dhan_settings()
-        render_settings()
+        with st.container(key="ccs_legacy_settings_panel"):
+            if phone:
+                render_single_broker_selector(show_pending=False)
+                render_theme_control()
+            from dhan_visual.screener_ui import render_dhan_settings
+            render_dhan_settings()
+            render_settings()
 else:
     from dhan_visual.selective_scan import render_selective_home, render_selective_market
     from dhan_visual.broker_control import broker_allowed
     from dhan_visual.fyers_ui import connected_fyers
     from dhan_visual.mobile_fyers_vault import exists as mobile_vault_exists
     from dhan_visual.fyers_readonly import read_app_from_vault
-    if (broker_allowed("FYERS")
+    if (not phone and broker_allowed("FYERS")
             and (read_app_from_vault() if sys.platform == "win32" else mobile_vault_exists())
             and not connected_fyers()
             and st.session_state.get("ccs_selective_page") != "⚙ Settings"):
         st.button("Unlock / renew FYERS", key="ccs_mobile_quick_login",
                   type="primary", use_container_width=True,
                   on_click=lambda: st.session_state.update(ccs_selective_page="⚙ Settings"))
-    page = st.radio(
-        "Workspace", ["◎ OTM CE Home", "⌕ Market Screener", "◇ Strategy Builder", "▥ Manage Trade", "⚙ Settings"],
-        horizontal=True, key="ccs_selective_page", label_visibility="collapsed",
-    )
+    pages = ["◎ OTM CE Home", "⌕ Market Screener", "◇ Strategy Builder", "▥ Manage Trade", "⚙ Settings"]
+    if phone:
+        # Authoritative page state is independent of native button widget keys.
+        if st.session_state.get("ccs_selective_page") not in pages:
+            st.session_state["ccs_selective_page"] = pages[0]
+        page = st.session_state["ccs_selective_page"]
+    else:
+        page = st.radio("Workspace", pages, horizontal=True,
+                        key="ccs_selective_page", label_visibility="collapsed")
+    if phone:
+        broker = active_broker()
+        if st.session_state.get(PENDING_KEY):
+            status = "Switching connection"
+            state = "pending"
+        elif broker == "FYERS" and page == "◎ OTM CE Home" and not st.session_state.get("ccs_stock_strategy_active"):
+            from dhan_visual.market_session import is_refresh_open
+            if not is_refresh_open():
+                status, state = "Refresh paused", "pending"
+            else:
+                status = "Session available" if connected_fyers() else "Connection required"
+                state = "ready" if status == "Session available" else "pending"
+        elif broker == "FYERS":
+            status = "Session available" if connected_fyers() else "Connection required"
+            state = "ready" if status == "Session available" else "pending"
+        else:
+            status = "Selected"
+            state = "pending"
+        st.markdown(f'<div class="ccs-ios-status"><span class="ccs-ios-dot {state}"></span>'
+                    f'{broker} · {status}</div>', unsafe_allow_html=True)
     if page == "◎ OTM CE Home":
         render_selective_home()
     elif page == "⌕ Market Screener":
@@ -114,13 +141,22 @@ else:
         from dhan_visual.stock_strategy_ui import render_independent_strategy
         render_independent_strategy()
     elif page == "⚙ Settings":
-        from dhan_visual.screener_ui import render_dhan_settings
-        render_dhan_settings()
-        render_settings()
+        with st.container(key="ccs_settings_panel"):
+            if phone:
+                render_single_broker_selector(show_pending=False)
+                render_theme_control()
+            from dhan_visual.screener_ui import render_dhan_settings
+            render_dhan_settings()
+            render_settings()
     else:
         manage = st.container()
 
 if manage is not None:
+    from decimal import Decimal
+    import plotly.graph_objects as go
+    from dhan_visual.strategy import Position, plan, exposure_after_fills, current_closeout
+    from dhan_visual.table_layout import dataframe_key
+    from dhan_visual.payoff import current_expiry_payoff, expiry_breakevens, theoretical_today_payoff
     with manage:
         st.info(
             "DEMO ONLY: Example positions and prices are simulated. "
@@ -303,3 +339,18 @@ if manage is not None:
             st.warning("The partially uncovered short-call exposure can have substantial downside and upside risk. The conditional profit cap only applies if all required shares actually fill. Profit target is an advisory; no closing order is ever sent.")
             st.caption("Before any future Dhan connection, reconcile original first-batch fills, options transaction credit, expiry/lot size, holdings and today's tradebook, mark-data freshness, account funds and service isolation from ResultBot.")
 
+
+# The phone dock uses genuine Streamlit buttons, never transformed radio labels.
+# Render after the selected content; CSS anchors only this named container.
+if phone and not legacy:
+    with st.container(key="ccs_ios_dock"):
+        dock = st.columns(5, gap="small")
+        for i, (target, label, icon) in enumerate(zip(
+            pages, ("Home", "Screener", "Strategy", "Trades", "Settings"),
+            (":material/home:", ":material/search:", ":material/show_chart:",
+             ":material/work_outline:", ":material/settings:"),
+        )):
+            dock[i].button(label, icon=icon, key=f"ccs_ios_nav_{i}",
+                           type="primary" if page == target else "secondary",
+                           use_container_width=True,
+                           on_click=lambda p=target: st.session_state.update(ccs_selective_page=p))

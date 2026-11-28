@@ -21,7 +21,7 @@ DHAN_JOB_KEYS = (
     "dhan_auto_auth_job", "dhan_auto_profile_job",
     "fno_dhan_job", "fno_dhan_funds_job", "fno_straddle_job",
 )
-FYERS_JOB_KEYS = ("fno_fyers_cash_job", "fno_fyers_chain_job")
+FYERS_JOB_KEYS = ("fno_fyers_cash_job", "fno_fyers_chain_job", "ccs_mobile_refresh_job")
 
 
 def active_broker() -> str:
@@ -55,7 +55,7 @@ def _request_cancel(name: str) -> None:
     keys = (
         ("fno_straddle_job",)
         if name == "Dhan"
-        else ("fno_fyers_chain_job", "fno_technical_job",
+        else ("fno_fyers_chain_job", "ccs_mobile_refresh_job", "fno_technical_job",
               "ccs_r1_today_job")
     )
     for key in keys:
@@ -123,7 +123,7 @@ def _pending_status():
     st.rerun(scope="app")
 
 
-def render_single_broker_selector() -> None:
+def initialize_broker_selection() -> None:
     # Prefer read-only FYERS for options when its app is already configured.
     # This is a LOCAL vault inspection, never an API call or FYERS login.
     # A broker the user explicitly selected during this browser session wins.
@@ -142,10 +142,15 @@ def render_single_broker_selector() -> None:
         if preferred == "FYERS":
             # Set both Home and Screener option sources *before* widgets exist.
             _apply_source_selection("FYERS")
-    st.session_state.setdefault(SELECTION_KEY, active_broker())
+
+
+def render_single_broker_selector(*, show_pending=True) -> None:
+    initialize_broker_selection()
+    st.session_state.setdefault(SELECTION_KEY, st.session_state.get(PENDING_KEY) or active_broker())
     # A pending switch updates ACTIVE_KEY, which is *not* widget-owned.
     # It can safely complete in a fragment rerun after previous jobs finish.
-    _pending_status()
+    if show_pending:
+        _pending_status()
     st.radio(
         "Active broker connection · only one at a time",
         OPTIONS,

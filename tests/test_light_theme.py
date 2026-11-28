@@ -20,15 +20,15 @@ class PayoffStudioTerminalThemeTests(unittest.TestCase):
 
     def test_chart_and_visuals_support_both_palettes(self):
         source = APP.read_text(encoding="utf-8")
-        # Charcoal is the approved default; light is reversible.
-        self.assertIn('st.session_state["ccs_dark_mode"] = True', source)
+        # Light is the approved default; dark is reversible.
+        self.assertIn('st.session_state["ccs_dark_mode"] = False', source)
         self.assertIn('template="plotly_dark" if st.session_state.get("ccs_dark_mode") else "plotly_white"', source)
         self.assertIn('paper_bgcolor="#171f2a" if st.session_state.get("ccs_dark_mode") else "#ffffff"', source)
         self.assertIn('plot_bgcolor="#171f2a" if st.session_state.get("ccs_dark_mode") else "#ffffff"', source)
         self.assertIn('key="ccs_theme_button"', source)
         self.assertIn('st.session_state["ccs_dark_mode"] = not st.session_state["ccs_dark_mode"]', source)
         theme = (ROOT / "dhan_visual" / "terminal_theme.py").read_text(encoding="utf-8")
-        for expected in ("#10151c", "#171e27", "#48c9a1", "#eef2f6", "#ffffff", "#08795b",
+        for expected in ("#101012", "#1c1c1e", "#51bc8b", "#f2f2f7", "#ffffff", "#27835c",
                          "stTabs [data-baseweb", "@media(max-width:760px)", "input:checked"):
             self.assertIn(expected, theme)
         self.assertIn('apply_terminal_theme(st.session_state["ccs_dark_mode"])', source)

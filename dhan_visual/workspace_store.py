@@ -27,7 +27,7 @@ def filters(data):
         raise ValueError("Invalid filters.")
     maximum, minimum, expiry, r1 = (data.get(k) for k in ("maximum","minimum","expiry","r1_filter"))
     if (type(maximum) is not int or maximum not in range(4,11)
-            or type(minimum) is not int or minimum not in range(2,9)
+            or type(minimum) is not int or minimum not in range(0,9)
             or not isinstance(expiry,str) or not MONTH.fullmatch(expiry)
             or r1 not in ("Include all stocks","Above R1 only")):
         raise ValueError("Invalid scan filters.")
@@ -87,7 +87,7 @@ def validate(raw):
         if not isinstance(stamp,str) or len(stamp)>80:
             raise ValueError("Invalid snapshot date.")
         datetime.fromisoformat(stamp)
-        columns={"Stock","CMP (₹)","Lot size","Contract size (₹)","5%+ OTM CE (%)","ATM Straddle Total (₹)","Straddle (%)","> R1"}
+        columns={"Stock","CMP (₹)","Lot size","Contract size (₹)","5%+ OTM CE (%)","ATM Straddle Total (₹)","Straddle (%)","> R1","CE strike","CE premium (₹)","ATM strike","ATM CE premium (₹)","ATM PE premium (₹)","EMA 200","EMA 50","EMA 20","EMA 10","Monthly R1"}
         rows=[]
         for row in snap["rows"]:
             if not isinstance(row,dict) or not isinstance(row.get("Stock"),str) or not SYMBOL.fullmatch(row["Stock"]):
@@ -108,6 +108,8 @@ def validate(raw):
                     raise ValueError("Invalid cached quote.")
             rows.append(clean)
         out["snapshot"]=dict(saved_at=stamp,filters=filters(snap["filters"]),rows=rows)
+        if snap.get("complete") is True:
+            out["snapshot"]["complete"] = True
     return out
 
 

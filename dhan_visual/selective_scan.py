@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from hashlib import sha256
+from html import escape
 from decimal import Decimal, InvalidOperation
 import time
 import pandas as pd
@@ -14,13 +15,11 @@ from .fyers_readonly import (
     FyersDataError, fetch_cash_quotes, fetch_chain, resolve_expiry_timestamp,
     fetch_daily_levels, fetch_r1_intraday_bars, fetch_futures_quotes,
 )
-from .otm_home import otm_home_dataframe, filter_home_contracts, attach_futures_columns
-from .screener import choose_expiry, expiry_options
-from .screener_ui import _auto_universe
+from .screener import INDEX_SYMBOLS, choose_expiry, expiry_options
 from .technical_ui import attach_technical_columns
 from .r1_today import session_r1_cross
 from .tradingview_links import clickable_stock_frame, TRADINGVIEW_SYMBOL_DISPLAY, tradingview_chart_url
-from .mobile_cards import card_pages, card_value
+from .mobile_cards import card_pages, card_value, phone_layout, sort_ce5_rows, card_disclosure
 from .table_layout import dataframe_key, autofit_column_config, autofit_enabled, click_autofit
 
 BATCH = 35
@@ -32,6 +31,29 @@ FUTURES_MAX_LAKH = 7
 R1_ALL = "Include all stocks"
 R1_ABOVE = "Above R1 only"
 R1_COLUMN = "> R1"
+
+
+
+# Import the legacy scanner stack only when a scan or catalogue is requested.
+# Cached-only Home uses neither of these paths.
+def otm_home_dataframe(*args, **kwargs):
+    from .otm_home import otm_home_dataframe as build
+    return build(*args, **kwargs)
+
+
+def filter_home_contracts(*args, **kwargs):
+    from .otm_home import filter_home_contracts as apply
+    return apply(*args, **kwargs)
+
+
+def attach_futures_columns(*args, **kwargs):
+    from .otm_home import attach_futures_columns as attach
+    return attach(*args, **kwargs)
+
+
+def _auto_universe():
+    from .screener_ui import _auto_universe as load
+    return load()
 
 
 def _stamp():
@@ -122,9 +144,10 @@ def load_shortlist_history(access, snapshot, symbols, *, today=None):
     return count
 
 
-def next_option_batch(access, available, snapshot, *, limit=BATCH):
+def next_option_batch(access, available, snapshot, *, limit=BATCH, ranked_candidates=None):
     """Only contract-qualified, previously unattempted names; no retry loop."""
-    candidates = contract_candidates(available, snapshot)["Stock"].tolist()
+    candidates = (contract_candidates(available, snapshot)["Stock"].tolist()
+                  if ranked_candidates is None else ranked_candidates)
     pending = [s for s in candidates if s not in snapshot["attempted"]][:max(0, min(BATCH, limit))]
     if not pending or snapshot["stopped"]:
         return 0
@@ -221,7 +244,8 @@ def _snapshot(access):
 
 
 def _universe_rows(universe, expiry):
-    return [item for item in universe if expiry in item.entry.lots]
+    return [item for item in universe
+            if item.entry.symbol not in INDEX_SYMBOLS and expiry in item.entry.lots]
 
 
 STRATEGY_COLUMNS = {
@@ -276,12 +300,21 @@ def _strategy_cell_callback(key, frame, entries, expiry, snapshot_key, scan_day)
         activate_strategy(symbol, entries[symbol], expiry, preset)
 
 
-def _display(frame, *, market=False, futures=False, strategy_context=None):
+def _display(frame, *, market=False, futures=False, strategy_context=None, forced_view=None):
     kind = "futures" if futures else "market" if market else "home"
-    view = st.radio("Results layout", ["Full table", "Mobile cards"], horizontal=True,
-                    key=f"ccs_results_layout_{kind}")
+    if forced_view is not None:
+        view = forced_view
+    elif phone_layout():
+        with st.expander("Display options"):
+            view = st.radio("Results layout", ["Full table", "Mobile cards"], horizontal=True,
+                            index=1, key=f"ccs_results_layout_{kind}")
+            if view == "Full table" and st.button("Auto-fit", key=f"ccs_mobile_fit_{kind}"):
+                click_autofit(st.session_state)
+    else:
+        view = st.radio("Results layout", ["Full table", "Mobile cards"], horizontal=True,
+                        index=0, key=f"ccs_results_layout_{kind}")
     if view == "Mobile cards":
-        _display_mobile_cards(frame, kind)
+        _display_mobile_cards(frame, kind, strategy_context=strategy_context)
         return
     config = {
         "CMP (₹)": st.column_config.NumberColumn("CMP (₹)", format="₹%.2f"),
@@ -318,34 +351,119 @@ def _display(frame, *, market=False, futures=False, strategy_context=None):
                  **selection)
 
 
-def _display_mobile_cards(frame, kind):
-    """Presentation only: page existing results without additional API calls."""
+def _mobile_card_face(row, symbol, *, home=False, strike="—"):
+    if home:
+        size = pd.to_numeric(row.get("Contract size (₹)"), errors="coerce")
+        size_text = f"₹{size / 100000:.2f}L" if pd.notna(size) else "—"
+        lot = card_value(row.get("Lot size"), "Lot size")
+        return (
+            f'<div class="ccs-ios-stockhead"><span class="ccs-ios-logo">{escape(symbol[:1])}</span>'
+            f'<div><b>{escape(symbol)}</b><small>{escape(strike)}</small></div>'
+            f'<strong>{escape(card_value(row.get("CMP (₹)"), "CMP (₹)"))}</strong></div>'
+            '<div class="ccs-ios-saved-tiles">'
+            f'<div><small>5% OTM CE</small><strong>{escape(card_value(row.get("5%+ OTM CE (%)"), "5%+ OTM CE (%)"))}</strong></div>'
+            f'<div><small>STRADDLE</small><strong>{escape(card_value(row.get("Straddle (%)"), "Straddle (%)"))}</strong></div></div>'
+            f'<div class="ccs-ios-foot"><span>{escape(size_text)}</span><span>Lot {escape(lot)}</span></div>'
+        )
+    primary = ("CMP (₹)", "Futures Price (₹)", "Futures vs CMP (%)",
+               "Contract size (₹)", "Lot size")
+    cells = [f'<div><small>{escape(col)}</small><strong>{escape(card_value(row[col], col))}</strong></div>'
+             for col in primary if col in row]
+    return (f'<div class="ccs-card-symbol">{escape(symbol)}</div>'
+            + '<div class="ccs-card-grid">' + ''.join(cells) + '</div>')
+
+
+def _mobile_card_fields(row, current=None, symbol=None):
+    fields = [(col, card_value(row[col], col)) for col in row.index if col != "Stock"]
+    if current is not None and symbol is not None:
+        levels = current["levels"].get(symbol)
+        price = pd.to_numeric(row.get("CMP (₹)"), errors="coerce")
+        if levels is None or pd.isna(price):
+            fields.append(("Technical indicators", "EMA history not yet verified"))
+        else:
+            technical = attach_technical_columns(
+                pd.DataFrame({"Symbol": [symbol], "Last price (₹)": [price]}),
+                current["levels"], stage=4)
+            for col in technical.columns:
+                if col not in ("Symbol", "Last price (₹)"):
+                    fields.append((col, str(technical.iloc[0][col]).replace("✅", "✓").replace("❌", "×")))
+        cross = current.get("crosses", {}).get(symbol)
+        fields.append(("R1 crossed today", str(cross.first_bar_time) if cross else "Not confirmed"))
+        quote = current["calls"].get(symbol)
+        atm = current["straddles"].get(symbol)
+        if quote is not None:
+            fields.extend([("Selected call", f"{quote.strike.normalize():f} CE"),
+                           ("Call premium", f"₹{quote.call_ltp:f}")])
+        if atm is not None:
+            fields.extend([("ATM strike", f"{atm.strike.normalize():f} CE + PE"),
+                           ("CE + PE premium", f"₹{atm.call_ltp + atm.put_ltp:f}")])
+    return fields
+
+
+def _card_snapshot_matches(current, strategy_context, symbol):
+    if not current or strategy_context is None:
+        return False
+    entries, expiry, snapshot_key, scan_day = strategy_context
+    return (current["key"] == snapshot_key and current["expiry"] == expiry
+            and current.get("scan_day") == scan_day and symbol in entries)
+
+
+def _mobile_card_actions(current, strategy_context, symbol, ident):
+    if not _card_snapshot_matches(current, strategy_context, symbol):
+        return
+    entries, expiry, _, _ = strategy_context
+    # Native controls only appear below the expanded card. Recheck the accepted
+    # snapshot on action; opening the disclosure itself never launches anything.
+    with st.container(key=f"ccs_card_details_actions_{ident}"):
+        for label, preset, quotes in (
+            ("Build covered call", "Covered call", current["calls"]),
+            ("Build ATM straddle", "Short straddle", current["straddles"]),
+        ):
+            if st.button(label, key=f"ccs_card_launch_{ident}_{preset}",
+                         disabled=symbol not in quotes, use_container_width=True):
+                fresh = _snapshot(connected_fyers())
+                if (_card_snapshot_matches(fresh, strategy_context, symbol)
+                        and symbol in fresh["calls" if preset == "Covered call" else "straddles"]):
+                    from .stock_strategy_ui import launch_strategy
+                    launch_strategy(symbol, entries[symbol], expiry, preset)
+                else:
+                    st.warning("Scan changed. Select a current opportunity.")
+
+
+def _display_mobile_cards(frame, kind, strategy_context=None):
+    """Render compact existing snapshots; no new data requests or sorting."""
     if frame.empty:
         st.info("No matching results yet.")
         return
-    pages = card_pages(len(frame))
-    page = st.selectbox("Result page", list(range(pages)),
-                        format_func=lambda i: f"{i + 1} / {pages}",
-                        key=f"ccs_cards_page_{kind}")
-    start = page * 8
-    st.caption(f"Showing {start + 1}–{min(start + 8, len(frame))} of {len(frame)} results. Original scan order.")
-    primary = ("CMP (₹)", "5%+ OTM CE (%)", "ATM Straddle Total (₹)",
-               "Straddle (%)", "Contract size (₹)", "Lot size",
-               "Futures Price (₹)", "Futures vs CMP (%)", R1_COLUMN)
-    for _, row in frame.iloc[start:start + 8].iterrows():
-        with st.container(border=True):
-            st.markdown("**" + str(row["Stock"]) + "**")
-            st.link_button("TradingView chart", tradingview_chart_url(row["Stock"]))
-            for col in primary:
-                if col in row:
-                    st.text(f"{col}: {card_value(row[col], col)}")
-            extra = [col for col in frame.columns if col != "Stock" and col not in primary]
-            if extra:
-                with st.expander("All additional indicators / details"):
-                    for col in extra:
-                        st.text(f"{col}: {card_value(row[col], col)}")
-    if kind == "home":
-        st.caption("Choose a stock in Build strategy below to open its covered call or straddle. Full table retains direct cell shortcuts.")
+    if phone_layout() and kind == "home":
+        limit_key = "ccs_home_card_limit"
+        limit = max(12, int(st.session_state.get(limit_key,12)))
+        start, end = 0, min(limit,len(frame))
+    else:
+        pages = card_pages(len(frame))
+        page = st.selectbox("Result page", list(range(pages)),
+                            format_func=lambda i: f"{i + 1} / {pages}",
+                            key=f"ccs_cards_page_{kind}")
+        start, end = page * 8, min((page+1)*8,len(frame))
+    st.caption(f"Showing {start + 1}–{end} of {len(frame)}")
+    for _, row in frame.iloc[start:end].iterrows():
+        symbol = str(row["Stock"])
+        ident = f"{kind}_{sha256(symbol.encode()).hexdigest()[:16]}"
+        current = _snapshot(connected_fyers()) if strategy_context is not None else None
+        if not _card_snapshot_matches(current, strategy_context, symbol):
+            current = None
+        quote = current["calls"].get(symbol) if current else None
+        strike = f"{quote.strike.normalize():f} CE" if quote is not None else "—"
+        with st.container(border=True, key=f"ccs_ios_card_{ident}"):
+            face = _mobile_card_face(row, symbol, home=kind == "home" and strategy_context is not None, strike=strike)
+            fields = _mobile_card_fields(row, current if kind == "home" else None, symbol)
+            st.html(card_disclosure(face, fields, tradingview_chart_url(symbol)))
+            if kind == "home":
+                _mobile_card_actions(current, strategy_context, symbol, ident)
+    if phone_layout() and kind == "home" and end < len(frame):
+        if st.button("Show more stocks", key="ccs_home_more", use_container_width=True):
+            st.session_state[limit_key] = limit + 12
+            st.rerun()
 
 
 def futures_discount_frame(available, cash, futures, expiry):
@@ -417,55 +535,301 @@ def render_futures_discount_request(access, universe, expiry):
     st.session_state[FUTURES_STATE] = state
 
 
+
+def render_home_fyers_unlock():
+    """Daily mobile authorization stays on Home; Settings is only for setup."""
+    import sys
+    from .mobile_fyers_vault import MobileVault, VaultError, exists
+    from .fyers_ui import _local_callback_allowed
+    from .fyers_readonly import (authorization_url, exchange_code, new_state,
+                                parse_authorization_return)
+    from . import fyers_local_oauth as oauth
+
+    state = st.session_state
+    if sys.platform == "win32" or not (exists() or state.get("_fyers_mobile_vault")):
+        st.button("Set up FYERS" if sys.platform != "win32" else "Connection settings",
+                  key="ccs_ios_connect_settings", use_container_width=True,
+                  on_click=lambda: state.update(ccs_selective_page="⚙ Settings"))
+        return
+    if not state.get("ccs_home_fyers_unlock"):
+        st.button("Unlock FYERS", key="ccs_home_fyers_start", type="primary",
+                  use_container_width=True,
+                  on_click=lambda: state.update(ccs_home_fyers_unlock=True))
+        return
+
+    def finish(access, note):
+        state["_fyers_access"] = access
+        state["fno_fyers_select_on_next_run"] = True
+        state["_fyers_session_note"] = note
+        state.pop("ccs_home_fyers_unlock", None)
+        state.pop("ccs_home_manual_state", None)
+        oauth.cancel(state.pop("_fyers_local_state", None))
+        st.rerun()
+
+    if st.button("Cancel", key="ccs_home_fyers_cancel"):
+        state.pop("ccs_home_fyers_unlock", None)
+        state.pop("ccs_home_manual_state", None)
+        oauth.cancel(state.pop("_fyers_local_state", None))
+        st.rerun()
+
+    vault = state.get("_fyers_mobile_vault")
+    if vault is None:
+        with st.form("ccs_home_fyers_passphrase", clear_on_submit=True):
+            password = st.text_input("Vault passphrase", type="password",
+                                     autocomplete="current-password")
+            submitted = st.form_submit_button("Unlock", type="primary",
+                                              use_container_width=True)
+        st.caption("Use your phone password manager for fingerprint-assisted autofill if available.")
+        if submitted:
+            try:
+                vault = MobileVault.unlock(password)
+                state["_fyers_mobile_vault"] = vault
+                state.pop("_fyers_access", None)
+                state.pop("_fyers_session_note", None)
+                oauth.cancel(state.pop("_fyers_local_state", None))
+                for key in ("_fyers_pending_app", "_fyers_pending_secret", "_fyers_oauth_state",
+                            "fyers_local_app_id", "fyers_local_app_secret", "ccs_home_manual_state"):
+                    state.pop(key, None)
+            except VaultError as exc:
+                st.error(str(exc))
+                return
+            access = vault.access()
+            if access:
+                finish(access, "Unexpired token restored from encrypted mobile vault.")
+            st.rerun()
+        return
+
+    access = vault.access()
+    if access:
+        finish(access, "Unexpired token restored from encrypted mobile vault.")
+    credentials = vault.credentials()
+    local = _local_callback_allowed()
+    if local:
+        try:
+            pending, url = oauth.prepare(credentials, vault, state.get("_fyers_local_state"))
+            state["_fyers_local_state"] = pending
+            st.link_button("Authorize FYERS", url, type="primary", use_container_width=True)
+            st.caption("Complete FYERS sign-in. Its local redirect opens CCS Home automatically.")
+        except FyersDataError as exc:
+            st.warning(str(exc))
+    with st.expander("Manual authorization fallback", expanded=not local):
+        if not local:
+            st.caption("Automatic return requires CCS at its configured local callback address.")
+        manual = state.get("ccs_home_manual_state")
+        if not manual:
+            manual = new_state()
+            state["ccs_home_manual_state"] = manual
+        st.link_button("Open FYERS login", authorization_url(credentials[0], manual),
+                       use_container_width=True)
+        with st.form("ccs_home_fyers_return", clear_on_submit=True):
+            redirected = st.text_input("Paste full FYERS redirect URL", type="password",
+                                       autocomplete="off")
+            connect = st.form_submit_button("Connect FYERS", type="primary",
+                                            use_container_width=True)
+        if connect:
+            try:
+                code = parse_authorization_return(redirected, manual)
+                state.pop("ccs_home_manual_state", None)
+                access = exchange_code(credentials[0], credentials[1], code)
+                if "TCS" not in fetch_cash_quotes(access, ["TCS"]):
+                    raise FyersDataError("FYERS market-data verification failed. Sign in again.")
+                try:
+                    vault.save_access(access, credentials[1])
+                    note = "FYERS verified and saved."
+                except (VaultError, FyersDataError):
+                    note = "FYERS verified for this session; secure storage unavailable."
+                finish(access, note)
+            except FyersDataError as exc:
+                st.error(str(exc))
+
+
+def render_ios_disconnected_home():
+    """Local-only empty state; saved rows never become live strategy inputs."""
+    from .workspace_ui import load_workspace
+    from .broker_control import active_broker, PENDING_KEY
+    data = load_workspace() or {}
+    saved = data.get("snapshot")
+    filters = (saved or {}).get("filters") or data.get("preferences", {}).get("filters") or {}
+    from .mobile_refresh_ui import render_saved_summary
+    render_saved_summary(saved, filters, status="Cached data · Unlock FYERS to refresh" if saved is not None else "Awaiting first connection")
+    with st.container(border=True, key="ccs_ios_connect"):
+        if st.session_state.get(PENDING_KEY):
+            st.markdown("**Switching connection**")
+            st.caption("Waiting for previous requests to finish.")
+        else:
+            st.markdown("**Connect FYERS**")
+            st.caption("Renew your daily session" if active_broker() == "FYERS" else "Select FYERS in Settings")
+        if active_broker() == "FYERS" and not st.session_state.get(PENDING_KEY):
+            render_home_fyers_unlock()
+        else:
+            st.button("Connection settings", key="ccs_ios_connect_settings",
+                      use_container_width=True, disabled=bool(st.session_state.get(PENDING_KEY)),
+                      on_click=lambda: st.session_state.update(ccs_selective_page="⚙ Settings"))
+    render_ios_saved_shortlist(saved, disconnected=True)
+
+
+def render_ios_saved_shortlist(saved, *, disconnected=False, strategy_context=None):
+    """Use the identical mobile card tree for cached and newly accepted data."""
+    st.markdown("### Opportunities")
+    if saved is None:
+        message = "Connect FYERS to load opportunities" if disconnected else "Waiting for the first complete scan"
+        st.markdown(f'<div class="ccs-ios-empty">{message}</div>', unsafe_allow_html=True)
+        return
+    rows = saved.get("rows", [])
+    if not rows:
+        st.caption("No opportunities match the accepted filters.")
+        return
+    frame = sort_ce5_rows(pd.DataFrame(rows))
+    st.caption("Sorted by 5% OTM CE premium · highest first")
+    if strategy_context is not None:
+        with st.expander("Display options"):
+            view = st.radio("Results layout", ["Full table", "Mobile cards"], index=1,
+                            key="ccs_unified_home_layout")
+        if view == "Full table":
+            entries, expiry, snapshot_key, scan_day = strategy_context
+            current = _snapshot(connected_fyers())
+            if current and current["key"] == snapshot_key and current["scan_day"] == scan_day:
+                # Keep the original interactive table, but only by explicit selection.
+                _display(frame, strategy_context=strategy_context, forced_view="Full table")
+            return
+    limit = max(12, int(st.session_state.get("ccs_saved_card_limit",12)))
+    st.caption(f"Showing 1–{min(limit,len(frame))} of {len(frame)}")
+    for _, row in frame.iloc[:limit].iterrows():
+        symbol = str(row["Stock"])
+        ident = sha256(symbol.encode()).hexdigest()[:16]
+        with st.container(border=True, key=f"ccs_ios_saved_card_{ident}"):
+            strike = card_value(row.get("CE strike"), "CE strike")
+            if strike != "—":
+                strike = f"{float(row['CE strike']):g} CE"
+            current = _snapshot(connected_fyers()) if strategy_context is not None else None
+            if not _card_snapshot_matches(current, strategy_context, symbol):
+                current = None
+            face = _mobile_card_face(row, symbol, home=True, strike=strike)
+            fields = _mobile_card_fields(row, current, symbol)
+            note = "" if current is not None else "Saved quotes · accept a fresh scan to enable strategy actions."
+            st.html(card_disclosure(face, fields, tradingview_chart_url(symbol), note))
+            _mobile_card_actions(current, strategy_context, symbol, f"saved_{ident}")
+    if limit < len(frame) and st.button("Show more stocks", key="ccs_saved_more", use_container_width=True):
+        st.session_state["ccs_saved_card_limit"] = limit + 12
+        st.rerun()
+    st.download_button("Download shortlist CSV", frame.to_csv(index=False), "ccs-shortlist.csv", key="ccs_ios_saved_csv")
+
+
 def render_selective_home():
     from .workspace_ui import prepare_filters, save_scan_controls, remember_pref, render_historical_shortlist
-    from .stock_strategy_ui import ACTIVE, launch_strategy, render_stock_strategy
-    if st.session_state.get(ACTIVE):
+    if st.session_state.get("ccs_stock_strategy_active"):
+        from .stock_strategy_ui import render_stock_strategy
         render_stock_strategy()
         return
-    st.markdown("### OTM Covered Call")
-    st.caption("Select filters first. Nothing is fetched from FYERS or Yahoo until you apply a scan.")
-    render_historical_shortlist()
+    from . import market_session
+    if phone_layout() and not market_session.is_refresh_open():
+        from .mobile_refresh_ui import render_closed_home
+        render_closed_home()
+        return
     access = connected_fyers()
+    if access:
+        st.session_state.pop("ccs_home_fyers_unlock", None)
+        st.session_state.pop("ccs_home_manual_state", None)
+    if phone_layout() and not access:
+        render_ios_disconnected_home()
+        return
+    if not phone_layout():
+        st.markdown("### OTM Covered Call")
+        st.caption("Select filters first. Nothing is fetched from FYERS or Yahoo until you apply a scan.")
+    if not phone_layout():
+        render_historical_shortlist()
     if not access:
         st.info("Connect and select FYERS in Settings to use the data-saving scan.")
         return
     universe = _auto_universe()
     if not universe:
+        if phone_layout():
+            from .workspace_ui import load_workspace
+            from .mobile_refresh_ui import render_saved_summary
+            cached = (load_workspace() or {}).get("snapshot")
+            render_saved_summary(cached, {}, status="Cached data · Waiting for stock universe")
+            with st.container(key="ccs_mobile_results"):
+                render_ios_saved_shortlist(cached)
         return
     entries = [item.entry for item in universe]
     expiries = expiry_options(entries)
     if not expiries:
+        if phone_layout():
+            from .workspace_ui import load_workspace
+            from .mobile_refresh_ui import render_saved_summary
+            cached = (load_workspace() or {}).get("snapshot")
+            render_saved_summary(cached, {}, status="Cached data · Waiting for verified expiry")
+            render_ios_saved_shortlist(cached)
         st.warning("No verified NSE expiry is available.")
         return
     snapshot = _snapshot(access)
     default_expiry = snapshot["expiry"] if snapshot and snapshot["expiry"] in expiries else choose_expiry(entries)
+    if phone_layout():
+        from .workspace_ui import load_workspace, FILTER_KEYS
+        from .mobile_refresh_ui import startup_filters
+        saved = (load_workspace() or {}).get("snapshot")
+        defaults = startup_filters(expiries)
+        # Fresh Home sessions always begin with the requested default scan.
+        # Saved snapshots are display data, not startup filter instructions.
+        if not st.session_state.get("ccs_mobile_defaults_initialized"):
+            for field, widget in FILTER_KEYS.items():
+                st.session_state[widget] = defaults[field]
+            st.session_state["ccs_mobile_defaults_initialized"] = True
+        elif st.session_state.get(FILTER_KEYS["expiry"]) not in expiries:
+            st.session_state[FILTER_KEYS["expiry"]] = defaults["expiry"]
+        default_expiry = defaults["expiry"]
     prepare_filters(expiries)
-    with st.form("selective_scan_filters"):
-        st.markdown("#### Quick Scan")
-        left, right = st.columns(2)
-        expiry = left.radio("Option month", expiries,
-                          index=expiries.index(default_expiry), horizontal=True,
-                          key="selective_expiry_choice")
-        maximum = right.radio("Contract size below", list(range(4, 11)),
-                           index=(snapshot["maximum"]-4 if snapshot else 3),
-                           format_func=lambda value: f"₹{value}L", horizontal=True,
-                           key="selective_contract_choice")
-        minimum = left.radio("5%+ OTM CE premium above", [2, 3, 4, 5, 6, 7, 8],
-                           index=(snapshot["minimum"]-2 if snapshot else 0),
-                           format_func=lambda value: f"{value}%", horizontal=True,
-                           key="selective_premium_choice")
-        r1_filter = right.radio("Monthly R1 filter", [R1_ALL, R1_ABOVE],
-                             index=int(bool(snapshot and snapshot.get("r1_filter") == R1_ABOVE)),
-                             horizontal=True, key="selective_r1_choice",
-                             help="Above R1 only excludes both below/equal R1 and unknown R1. "
-                                  "History is requested only after contract and CE filters.")
-        note, action, future_action = st.columns([2, 1, 1])
-        note.caption("Read-only · no market-data requests before Start scan.")
-        apply = action.form_submit_button("Apply filters / Start scan", type="primary",
-                                         use_container_width=True)
-        show_futures = future_action.form_submit_button("Show futures · < ₹7L", use_container_width=True)
+    if phone_layout():
+        # Native, single-column form; no desktop radio groups squeezed into a phone.
+        with st.expander("Filters · change scan settings", expanded=False):
+            with st.form("selective_scan_filters", border=False):
+                expiry = st.selectbox("Option expiry", expiries, key="selective_expiry_choice")
+                maximum = st.selectbox("Maximum contract size", list(range(4,11)),
+                                       format_func=lambda value: f"Below ₹{value} lakh",
+                                       key="selective_contract_choice")
+                minimum = st.selectbox("Minimum CE premium (% of CMP)", list(range(9)),
+                                       format_func=lambda value: f"Above {value}%" if value else "Any quoted premium",
+                                       key="selective_premium_choice")
+                r1_filter = st.selectbox("Monthly R1 filter", [R1_ALL, R1_ABOVE],
+                                         key="selective_r1_choice")
+                st.caption("Call strike ≥ 5% above CMP. Startup refresh is automatic.")
+                apply = st.form_submit_button("Apply filters / Start scan", type="primary", use_container_width=True)
+                show_futures = st.form_submit_button("Show futures · < ₹7L", use_container_width=True)
+    else:
+        with st.container():
+            with st.form("selective_scan_filters"):
+                st.markdown("#### Quick Scan")
+                left, right = st.columns(2)
+                expiry = left.radio("Option month", expiries,
+                                  index=expiries.index(default_expiry), horizontal=True,
+                                  key="selective_expiry_choice")
+                maximum = right.radio("Contract size below", list(range(4, 11)),
+                                   index=(snapshot["maximum"]-4 if snapshot else 3),
+                                   format_func=lambda value: f"₹{value}L", horizontal=True,
+                                   key="selective_contract_choice")
+                premium_choices = list(range(9))
+                minimum = left.radio("Minimum CE premium (% of CMP)", premium_choices,
+                                   index=(snapshot["minimum"] if snapshot else 2),
+                                   format_func=lambda value: f"{value}%" if value else "Any quoted premium",
+                                   horizontal=True, key="selective_premium_choice",
+                                   help="Independent of strike selection. The CE strike is always at least 5% above CMP.")
+                r1_filter = right.radio("Monthly R1 filter", [R1_ALL, R1_ABOVE],
+                                     index=int(bool(snapshot and snapshot.get("r1_filter") == R1_ABOVE)),
+                                     horizontal=True, key="selective_r1_choice",
+                                     help="Above R1 only excludes both below/equal R1 and unknown R1. "
+                                          "History is requested only after contract and CE filters.")
+                note, action, future_action = st.columns([2, 1, 1])
+                note.caption("No market-data requests before Start scan.")
+                apply = action.form_submit_button("Apply filters / Start scan", type="primary",
+                                                 use_container_width=True)
+                show_futures = future_action.form_submit_button("Show futures · < ₹7L", use_container_width=True)
     if show_futures:
+        if phone_layout():
+            from .mobile_refresh import JOB
+            job = st.session_state.get(JOB)
+            if job and not job["future"].done():
+                st.warning("Cancel or finish the background refresh before requesting futures.")
+                return
         if snapshot:
             snapshot["auto_scan"] = False
         render_futures_discount_request(access, universe, expiry)
@@ -473,6 +837,11 @@ def render_selective_home():
         st.session_state.pop(FUTURES_STATE, None)
     elif st.session_state.get(FUTURES_STATE):
         render_futures_discount(access, universe, expiry)
+        return
+    if phone_layout():
+        from .mobile_refresh_ui import render_mobile_refresh
+        render_mobile_refresh(access, universe,
+                              dict(expiry=expiry, maximum=maximum, minimum=minimum, r1_filter=r1_filter), apply)
         return
     if apply:
         key = _scope(access, [], expiry)
@@ -500,6 +869,17 @@ def render_selective_home():
             with st.spinner("Checking eligible option chains and shortlisted R1…"):
                 run_automatic_batch(access, available, snapshot)
     if not snapshot:
+        if phone_layout():
+            from .workspace_ui import load_workspace
+            data = load_workspace() or {}
+            st.markdown(
+                '<div class="ccs-ios-summary"><small>OTM COVERED CALL SCANNER</small>'
+                '<div class="ccs-ios-count">— <span>opportunities</span></div>'
+                '<div class="ccs-ios-progress"></div><small>Ready to scan</small>'
+                '<div class="ccs-ios-summarygrid"><div><small>Highest CE premium</small><strong>—</strong></div>'
+                f'<div><small>Contract limit</small><strong>₹{int(maximum)} lakh</strong></div></div></div>',
+                unsafe_allow_html=True)
+            render_ios_saved_shortlist(data.get("snapshot"))
         return
     _ensure_history_day(snapshot, datetime.now(IST).date())
     available = _universe_rows(universe, snapshot["expiry"])
@@ -507,14 +887,31 @@ def render_selective_home():
     pending = set(candidates["Stock"]) - snapshot["attempted"]
     checked = len(set(candidates["Stock"]) & snapshot["attempted"])
     frame = qualified_rows(available, snapshot)
-    a, b, c, d = st.columns(4)
-    a.metric("Cash quotes", len(snapshot["cash"]))
-    b.metric("Contract-qualified", len(candidates))
-    c.metric("Option chains checked", f"{checked} / {len(candidates)}")
-    d.metric("Qualifying opportunities", len(frame))
+    if phone_layout():
+        best = pd.to_numeric(frame["5%+ OTM CE (%)"], errors="coerce").max()
+        best_text = f"{best:.2f}%" if pd.notna(best) else "—"
+        ratio = checked / len(candidates) if len(candidates) else 0
+        st.markdown(
+            '<div class="ccs-ios-summary"><small>OTM COVERED CALL SCANNER</small>'
+            f'<div class="ccs-ios-count">{len(frame)} <span>opportunities</span></div>'
+            f'<div class="ccs-ios-progress"><i style="width:{ratio:.2%}"></i></div>'
+            f'<small>{checked} / {len(candidates)} option chains checked</small>'
+            '<div class="ccs-ios-summarygrid">'
+            f'<div><small>Highest CE premium</small><strong>{best_text}</strong></div>'
+            f'<div><small>Contract limit</small><strong>₹{int(snapshot["maximum"])} lakh</strong></div>'
+            '</div></div>', unsafe_allow_html=True)
+        with st.expander("Scan statistics"):
+            st.write(f'Cash quotes: {len(snapshot["cash"])} · Contract-qualified: {len(candidates)}')
+    else:
+        a, b, c, d = st.columns(4)
+        a.metric("Cash quotes", len(snapshot["cash"]))
+        b.metric("Contract-qualified", len(candidates))
+        c.metric("Option chains checked", f"{checked} / {len(candidates)}")
+        d.metric("Qualifying opportunities", len(frame))
     st.caption(f"Applied: below ₹{snapshot['maximum']} lakh · CE > {snapshot['minimum']}% · {snapshot['expiry']} · {snapshot.get('r1_filter', R1_ALL)} · CMP snapshot {snapshot['cash_at'] or 'not loaded'}")
-    st.progress(checked / len(candidates) if len(candidates) else 0.0,
-                text=f"{checked} of {len(candidates)} option chains checked")
+    if not phone_layout():
+        st.progress(checked / len(candidates) if len(candidates) else 0.0,
+                    text=f"{checked} of {len(candidates)} option chains checked")
     x, y = st.columns(2)
     work_pending = automatic_work_pending(available, snapshot)
     today = datetime.now(IST).date().isoformat()
@@ -555,8 +952,8 @@ def render_selective_home():
         st.caption("Partial scan: more matches may exist in the unscanned stocks. Automatic batches run only on Home while active.")
     if snapshot["options_at"]:
         st.caption("Options requested " + snapshot["options_at"] + " · each stock checked once; cached quotes are not refreshed automatically.")
-    save_scan_controls(snapshot,frame)
-    st.caption("In Full table, click a CE or straddle cell to open Strategy Builder. In Mobile cards, use Build strategy below.")
+    save_scan_controls(snapshot,frame, complete=not work_pending and not snapshot['stopped'] and bool(snapshot['cash_at']))
+    st.caption("In Full table, click a CE or straddle cell to open Strategy Builder. In Mobile cards, tap a stock card to see details and strategy actions.")
     _display(frame, strategy_context=({item.entry.symbol: item.entry for item in available},
                                      snapshot["expiry"], snapshot["key"], snapshot.get("scan_day")))
     if not frame.empty:
@@ -568,9 +965,11 @@ def render_selective_home():
         ce = selected_row["5%+ OTM CE (%)"]
         straddle = selected_row["ATM Straddle Total (₹)"]
         if b.button(f"CE {ce:.2f}% · Build", key="ccs_strategy_from_ce", use_container_width=True):
+            from .stock_strategy_ui import launch_strategy
             launch_strategy(chosen, entry, snapshot["expiry"], "Covered call")
         if c.button(f"Straddle ₹{straddle:.2f} · Build" if pd.notna(straddle) else "Straddle · Build",
                     key="ccs_strategy_from_straddle", disabled=pd.isna(straddle), use_container_width=True):
+            from .stock_strategy_ui import launch_strategy
             launch_strategy(chosen, entry, snapshot["expiry"], "Short straddle")
 
 
